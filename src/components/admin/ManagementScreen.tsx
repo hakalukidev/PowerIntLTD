@@ -160,7 +160,7 @@ const configs: Record<Section, {
     tableTitle: 'Setting Modules',
     chartTitle: 'System Health',
     rows: [
-      { key: '1', name: 'Business Profile', type: 'General', status: 'Configured', amount: 'Muaz Technology', updated: 'Today' },
+      { key: '1', name: 'Business Profile', type: 'General', status: 'Configured', amount: 'Power International BD', updated: 'Today' },
       { key: '2', name: 'Notification Rules', type: 'System', status: 'Active', amount: '8 Rules', updated: 'Today' },
       { key: '3', name: 'User Access', type: 'Security', status: 'Reviewed', amount: '3 Roles', updated: 'Yesterday' },
     ],

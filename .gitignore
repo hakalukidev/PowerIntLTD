@@ -1,0 +1,212 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+yarn.lock
+pnpm-lock.yaml
+
+# testing
+/coverage
+/.nyc_output
+
+# next.js
+/.next/
+/out/
+/build
+/dist
+
+# production
+/build
+/dist
+
+# misc
+.DS_Store
+*.pem
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# local env files
+.env
+.env*.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# vercel
+.vercel
+.vercel.json
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+.agents/
+.codex/
+*.iml
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Firebase
+.firebase/
+firebase-debug.log*
+.firebaserc
+*.firebaserc
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+.cache/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+.next/
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Optional: If using Sentry
+.sentryclirc
+.sentry/
+
+# Optional: If using Turborepo
+.turbo
+
+# Optional: If using Tailwind CSS
+tailwind.css
+*.tailwind.css
+
+# Optional: If using Prisma
+prisma/*.db
+prisma/*.sqlite
+prisma/*.sqlite-journal
+
+# Optional: If using Docker
+docker-compose.override.yml
+*.dockerignore
+Dockerfile.*
+.docker/
+
+# Optional: If using ESLint
+.eslintcache
+
+# Optional: If using Prettier
+.prettiercache
+
+# Optional: If using Swagger/OpenAPI
+swagger.json
+openapi.json
+
+# Optional: If using Storybook
+storybook-static/
+*.storybook
+
+# Optional: If using Playwright
+playwright-report/
+test-results/
+
+# Optional: If using Cypress
+cypress/videos/
+cypress/screenshots/
+cypress/downloads/
+
+# Optional: If using Jest
+jest.config.js
+jest.setup.js
+*.jest.config.js
+
+# Optional: If using Webpack
+webpack-stats.json
+
+# Optional: If using Babel
+babel.config.js
+.babelrc
+
+# Optional: If using PostCSS
+postcss.config.js
+
+# Optional: If using ESLint and Prettier together
+.eslintrc.js
+.prettierrc.js
+
+# Optional: If using Husky
+.husky/
+
+# Optional: If using Commitlint
+commitlint.config.js
+
+# Optional: If using Lint-staged
+.lintstagedrc.js
+
+# Optional: If using npm or yarn workspaces
+.yarn/
+.yarnrc
+.yarnrc.yml
+.npmrc
+.pnpmrc
+
+# Optional: If using Git hooks
+.git/hooks/
+
+# Optional: If using GitHub Actions
+.github/workflows/*.yml
+.github/workflows/*.yaml
+
+# Optional: If using Codecov
+codecov.yml
+.codecov.yml
+
+# Optional: If using Netlify
+.netlify/
+
+# Optional: If using Heroku
+.heroku/
+
+# Optional: If using Vercel
+.vercel/
+
+# Optional: If using AWS
+.aws/
+
+# Optional: If using Google Cloud
+.gcloud/
+
+# Optional: If using Azure
+.azure/
+functions/

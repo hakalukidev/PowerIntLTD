@@ -1,0 +1,30 @@
+// firestore.rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // User roles: admin, manager, employee
+    
+    function isAdmin() {
+      return request.auth != null && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isManager() {
+      return request.auth != null && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'manager'];
+    }
+    
+    // Tasks: Employees can view only their tasks
+    match /tasks/{taskId} {
+      allow read: if request.auth != null && 
+        (isManager() || resource.data.assignedTo == request.auth.uid);
+      allow write: if isManager();
+    }
+    
+    // Inventory: Only admin can modify
+    match /inventory/{itemId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+  }
+}

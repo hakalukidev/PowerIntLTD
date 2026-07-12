@@ -1,0 +1,105 @@
+@config "../../tailwind.config.js";
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --muted: 210 30% 94%;
+    --muted-foreground: 215 16% 47%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --border: 214 28% 88%;
+    --input: 214 28% 88%;
+    --primary: 217 91% 56%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --accent: 196 80% 94%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 74% 52%;
+    --destructive-foreground: 210 40% 98%;
+    --ring: 217 91% 56%;
+    --radius: 1rem;
+    --chart-1: 217 91% 56%;
+    --chart-2: 155 70% 42%;
+    --chart-3: 18 88% 58%;
+    --chart-4: 267 83% 65%;
+    --chart-5: 45 93% 58%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-primary: 217 91% 56%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 214 100% 97%;
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 214 32% 91%;
+    --sidebar-ring: 217 91% 56%;
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 96%;
+    --muted: 217 32% 16%;
+    --muted-foreground: 215 20% 70%;
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 96%;
+    --card: 222 47% 10%;
+    --card-foreground: 210 40% 96%;
+    --border: 217 24% 20%;
+    --input: 217 24% 20%;
+    --primary: 213 94% 68%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 32% 16%;
+    --secondary-foreground: 210 40% 96%;
+    --accent: 217 32% 18%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 72% 57%;
+    --destructive-foreground: 210 40% 96%;
+    --ring: 213 94% 68%;
+    --chart-1: 213 94% 68%;
+    --chart-2: 160 84% 39%;
+    --chart-3: 24 95% 62%;
+    --chart-4: 269 97% 75%;
+    --chart-5: 48 96% 61%;
+    --sidebar-background: 222 47% 10%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 213 94% 68%;
+    --sidebar-primary-foreground: 222 47% 11%;
+    --sidebar-accent: 217 32% 16%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 217 24% 20%;
+    --sidebar-ring: 213 94% 68%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply h-full scroll-smooth;
+  }
+
+  body {
+    @apply min-h-full bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at top, hsl(var(--primary) / 0.14), transparent 32%),
+      linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted) / 0.45));
+  }
+}
+
+@layer utilities {
+  .surface-grid {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.3) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.3) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .text-faint {
+    color: hsl(var(--muted-foreground));
+  }
+}
+
+

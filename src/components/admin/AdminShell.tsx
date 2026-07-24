@@ -4,6 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Banknote,
   Bell,
   Boxes,
   CheckCheck,
@@ -18,7 +19,9 @@ import {
   PanelLeftOpen,
   ShieldCheck,
   ShoppingCart,
+  Target,
   Truck,
+  UserRound,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -123,6 +126,32 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/reports',
         icon: FileSpreadsheet,
         permission: 'view_reports',
+      },
+    ],
+  },
+  {
+    title: 'HR & Payroll',
+    items: [
+      {
+        label: 'Employee Management',
+        description: 'Profiles, joining date, and probation/confirmation status',
+        href: '/admin/employees',
+        icon: UserRound,
+        permission: 'view_employees',
+      },
+      {
+        label: 'Sales & Target',
+        description: 'Monthly unit/amount targets, achievement, and commission',
+        href: '/admin/sales-target',
+        icon: Target,
+        permission: 'view_employees',
+      },
+      {
+        label: 'Salary & Commission',
+        description: 'Base salary, commission, hold status, and payment history',
+        href: '/admin/salary',
+        icon: Banknote,
+        permission: 'view_employees',
       },
     ],
   },

@@ -1,4 +1,14 @@
 import type { ERPData } from '@/lib/erp/types'
+import {
+  computeCommission,
+  currentMonthKey,
+  DEFAULT_COMMISSION_PER_UNIT,
+  DEFAULT_MONTHLY_AMOUNT_TARGET,
+  DEFAULT_MONTHLY_UNIT_TARGET,
+  DEFAULT_PROBATION_MONTHS,
+  getSalaryHoldStatus,
+  getTargetAchievement,
+} from '@/lib/erp/utils'
 
 function isoNow() {
   return new Date().toISOString()
@@ -7,6 +17,12 @@ function isoNow() {
 function shiftDays(days: number) {
   const value = new Date()
   value.setDate(value.getDate() + days)
+  return value.toISOString()
+}
+
+function shiftMonths(months: number) {
+  const value = new Date()
+  value.setMonth(value.getMonth() + months)
   return value.toISOString()
 }
 
@@ -45,6 +61,16 @@ export function createDefaultERPData(): ERPData {
         label: 'View finance',
         description: 'See payment, due, profit, and expense related numbers.',
       },
+      view_employees: {
+        id: 'view_employees',
+        label: 'View employees',
+        description: 'See employee profiles, monthly targets, and salary/commission status.',
+      },
+      manage_employees: {
+        id: 'manage_employees',
+        label: 'Manage employees',
+        description: 'Create/edit employees, set targets, record sales, and process salary payments.',
+      },
     },
     roles: {
       admin: {
@@ -58,6 +84,8 @@ export function createDefaultERPData(): ERPData {
           'manage_orders',
           'view_reports',
           'view_finance',
+          'view_employees',
+          'manage_employees',
         ],
       },
       store_manager: {
@@ -75,19 +103,19 @@ export function createDefaultERPData(): ERPData {
         id: 'sales_person',
         name: 'Sales Person',
         description: 'Creates orders and follows customer delivery.',
-        permissions: ['view_dashboard', 'view_products', 'manage_orders', 'view_reports'],
+        permissions: ['view_dashboard', 'view_products', 'manage_orders', 'view_reports', 'view_employees'],
       },
       accountant: {
         id: 'accountant',
         name: 'Accountant',
         description: 'Tracks revenue, dues, and margin.',
-        permissions: ['view_dashboard', 'view_reports', 'view_finance'],
+        permissions: ['view_dashboard', 'view_reports', 'view_finance', 'view_employees', 'manage_employees'],
       },
       viewer: {
         id: 'viewer',
         name: 'Viewer',
         description: 'Read-only workspace access.',
-        permissions: ['view_dashboard', 'view_products', 'view_reports'],
+        permissions: ['view_dashboard', 'view_products', 'view_reports', 'view_employees'],
       },
     },
     users: {
@@ -592,6 +620,149 @@ export function createDefaultERPData(): ERPData {
       },
     },
     investors: {},
+    employees: (() => {
+      const employees = {
+        emp_sabbir: {
+          id: 'emp_sabbir',
+          name: 'Sabbir Ahmed',
+          address: 'Mirpur, Dhaka',
+          phone: '+8801700000003',
+          designation: 'Sales Executive',
+          joiningDate: shiftMonths(-8),
+          probationMonths: DEFAULT_PROBATION_MONTHS,
+          employmentStatus: 'active' as const,
+          baseSalary: 18000,
+          monthlyUnitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+          monthlyAmountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          userId: 'u_sales',
+          notes: 'Confirmed employee, handles Dhaka retail accounts.',
+          createdAt: shiftMonths(-8),
+          updatedAt: shiftDays(-1),
+        },
+        emp_nabila: {
+          id: 'emp_nabila',
+          name: 'Nabila Islam',
+          address: 'Banani, Dhaka',
+          phone: '+8801700000004',
+          designation: 'Sales Officer',
+          joiningDate: shiftDays(-35),
+          probationMonths: DEFAULT_PROBATION_MONTHS,
+          employmentStatus: 'active' as const,
+          baseSalary: 15000,
+          monthlyUnitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+          monthlyAmountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          notes: 'Still on probation, ends in about three weeks.',
+          createdAt: shiftDays(-35),
+          updatedAt: shiftDays(-1),
+        },
+      }
+
+      return employees
+    })(),
+    salesTargets: (() => {
+      const month = currentMonthKey()
+      const targets = {
+        target_sabbir_current: {
+          id: 'target_sabbir_current',
+          employeeId: 'emp_sabbir',
+          employeeName: 'Sabbir Ahmed',
+          month,
+          unitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+          amountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          unitsSold: 260,
+          amountSold: 3540000,
+          createdAt: shiftDays(-18),
+          updatedAt: shiftDays(-1),
+        },
+        target_nabila_current: {
+          id: 'target_nabila_current',
+          employeeId: 'emp_nabila',
+          employeeName: 'Nabila Islam',
+          month,
+          unitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+          amountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          unitsSold: 90,
+          amountSold: 1150000,
+          createdAt: shiftDays(-18),
+          updatedAt: shiftDays(-2),
+        },
+      }
+
+      return targets
+    })(),
+    salaries: (() => {
+      const month = currentMonthKey()
+      const sabbirAchievement = getTargetAchievement({
+        unitsSold: 260,
+        unitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+        amountSold: 3540000,
+        amountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+      })
+      const nabilaAchievement = getTargetAchievement({
+        unitsSold: 90,
+        unitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
+        amountSold: 1150000,
+        amountTarget: DEFAULT_MONTHLY_AMOUNT_TARGET,
+      })
+      const sabbirCommission = computeCommission(260, DEFAULT_COMMISSION_PER_UNIT)
+      const nabilaCommission = computeCommission(90, DEFAULT_COMMISSION_PER_UNIT)
+
+      const salaries = {
+        salary_sabbir_current: {
+          id: 'salary_sabbir_current',
+          employeeId: 'emp_sabbir',
+          employeeName: 'Sabbir Ahmed',
+          month,
+          baseSalary: 18000,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          unitsSold: 260,
+          commissionAmount: sabbirCommission,
+          achievementPercent: sabbirAchievement.achievementPercent,
+          holdStatus: getSalaryHoldStatus(sabbirAchievement.achievementPercent),
+          grossPayable: 18000 + sabbirCommission,
+          paidAmount: 10000,
+          dueAmount: 18000 + sabbirCommission - 10000,
+          paymentStatus: 'partial' as const,
+          payments: [
+            {
+              id: 'pay_sabbir_1',
+              amount: 10000,
+              method: 'bank',
+              note: 'Mid-month advance',
+              paidBy: 'Nabila Islam',
+              paidAt: shiftDays(-5),
+            },
+          ],
+          createdAt: shiftDays(-18),
+          updatedAt: shiftDays(-5),
+        },
+        salary_nabila_current: {
+          id: 'salary_nabila_current',
+          employeeId: 'emp_nabila',
+          employeeName: 'Nabila Islam',
+          month,
+          baseSalary: 15000,
+          commissionPerUnit: DEFAULT_COMMISSION_PER_UNIT,
+          unitsSold: 90,
+          commissionAmount: nabilaCommission,
+          achievementPercent: nabilaAchievement.achievementPercent,
+          holdStatus: getSalaryHoldStatus(nabilaAchievement.achievementPercent),
+          grossPayable: 15000 + nabilaCommission,
+          paidAmount: 0,
+          dueAmount: 15000 + nabilaCommission,
+          paymentStatus: 'unpaid' as const,
+          payments: [],
+          createdAt: shiftDays(-18),
+          updatedAt: shiftDays(-18),
+        },
+      }
+
+      return salaries
+    })(),
     sellers: {
       sel_kamal: {
         id: 'sel_kamal',

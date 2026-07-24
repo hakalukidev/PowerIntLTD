@@ -1,9 +1,13 @@
 import type {
   ActivityRecord,
+  EmployeeRecord,
+  EmploymentStatus,
   ERPData,
   NotificationRecord,
   OrderRecord,
   ProductRecord,
+  SalaryHoldStatus,
+  SalesTargetRecord,
   UserRecord,
 } from '@/lib/erp/types'
 
@@ -375,4 +379,100 @@ export function activitySummary(activity: ActivityRecord) {
 
 export function getReadableOrderState(order: OrderRecord) {
   return order.status.replace('-', ' ')
+}
+
+// ---- Employee / Sales Target / Salary helpers ----
+
+export const DEFAULT_PROBATION_MONTHS = 2
+export const DEFAULT_MONTHLY_UNIT_TARGET = 300
+export const DEFAULT_MONTHLY_AMOUNT_TARGET = 4_100_000
+export const DEFAULT_COMMISSION_PER_UNIT = 30
+export const TARGET_ACHIEVEMENT_HOLD_THRESHOLD = 80
+
+export function currentMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+export function formatMonthLabel(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  if (!year || !monthNumber) return month
+  return new Intl.DateTimeFormat('en-BD', { month: 'long', year: 'numeric' }).format(
+    new Date(year, monthNumber - 1, 1)
+  )
+}
+
+export function getRecentMonthKeys(count = 6, now = new Date()) {
+  return Array.from({ length: count }).map((_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - (count - 1 - index), 1)
+    return currentMonthKey(date)
+  })
+}
+
+export function addMonthsToDate(date: Date, months: number) {
+  const result = new Date(date)
+  result.setMonth(result.getMonth() + months)
+  return result
+}
+
+export type ProbationStatus = {
+  confirmationStatus: 'probation' | 'confirmed'
+  probationEndDate: Date
+  daysRemaining: number
+}
+
+/** Confirmation status is always derived from joining date + probation length — never stored, so it auto-flips the moment probation ends. */
+export function getProbationStatus(employee: Pick<EmployeeRecord, 'joiningDate' | 'probationMonths'>, now = new Date()): ProbationStatus {
+  const joiningDate = new Date(employee.joiningDate)
+  const probationEndDate = addMonthsToDate(joiningDate, employee.probationMonths ?? DEFAULT_PROBATION_MONTHS)
+  const msRemaining = probationEndDate.getTime() - now.getTime()
+  const daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24))
+
+  return {
+    confirmationStatus: msRemaining <= 0 ? 'confirmed' : 'probation',
+    probationEndDate,
+    daysRemaining: Math.max(daysRemaining, 0),
+  }
+}
+
+export function employmentStatusLabel(status: EmploymentStatus) {
+  if (status === 'resigned') return 'Resigned'
+  if (status === 'terminated') return 'Terminated'
+  return 'Active'
+}
+
+/** Achievement counts the employee's better route to target, since the target is "300 units OR BDT 4,100,000". */
+export function getTargetAchievement(target: Pick<SalesTargetRecord, 'unitsSold' | 'unitTarget' | 'amountSold' | 'amountTarget'>) {
+  const unitProgress = target.unitTarget > 0 ? target.unitsSold / target.unitTarget : 0
+  const amountProgress = target.amountTarget > 0 ? target.amountSold / target.amountTarget : 0
+  const achievementRatio = Math.max(unitProgress, amountProgress)
+
+  return {
+    achievementPercent: Math.round(achievementRatio * 1000) / 10,
+    progressPercent: Math.min(Math.round(achievementRatio * 1000) / 10, 100),
+    unitProgressPercent: Math.min(Math.round(unitProgress * 1000) / 10, 100),
+    amountProgressPercent: Math.min(Math.round(amountProgress * 1000) / 10, 100),
+  }
+}
+
+export function getSalaryHoldStatus(achievementPercent: number): SalaryHoldStatus {
+  return achievementPercent >= TARGET_ACHIEVEMENT_HOLD_THRESHOLD ? 'released' : 'hold'
+}
+
+export function computeCommission(unitsSold: number, commissionPerUnit: number) {
+  return Math.max(unitsSold, 0) * Math.max(commissionPerUnit, 0)
+}
+
+export function computeSalaryFigures(
+  employee: Pick<EmployeeRecord, 'baseSalary' | 'commissionPerUnit'>,
+  target: Pick<SalesTargetRecord, 'unitsSold' | 'unitTarget' | 'amountSold' | 'amountTarget'> | null
+) {
+  const unitsSold = target?.unitsSold ?? 0
+  const { achievementPercent } = target
+    ? getTargetAchievement(target)
+    : { achievementPercent: 0 }
+  const commissionAmount = computeCommission(unitsSold, employee.commissionPerUnit)
+  const holdStatus = getSalaryHoldStatus(achievementPercent)
+  const grossPayable = employee.baseSalary + commissionAmount
+
+  return { unitsSold, achievementPercent, commissionAmount, holdStatus, grossPayable }
 }

@@ -16,6 +16,8 @@ import type {
   CourierRecord,
   CustomerInput,
   CustomerRecord,
+  EmployeeInput,
+  EmployeeRecord,
   ERPData,
   ExpenseInput,
   InvestorInput,
@@ -24,6 +26,11 @@ import type {
   ProductInput,
   ProductRecord,
   PurchaseInput,
+  RecordSaleInput,
+  SalaryPaymentEntry,
+  SalaryPaymentInput,
+  SalaryRecord,
+  SalesTargetRecord,
   SellerInput,
   SellerTransactionInput,
   SupplierInput,
@@ -35,9 +42,16 @@ import type {
   WarehouseInput,
 } from '@/lib/erp/types'
 import {
+  computeSalaryFigures,
   createId,
+  currentMonthKey,
+  DEFAULT_COMMISSION_PER_UNIT,
+  DEFAULT_MONTHLY_AMOUNT_TARGET,
+  DEFAULT_MONTHLY_UNIT_TARGET,
+  DEFAULT_PROBATION_MONTHS,
   getPermissions,
   getProductStatus,
+  getTargetAchievement,
   hasPermission as hasPermissionCheck,
   toArray,
 } from '@/lib/erp/utils'
@@ -84,6 +98,10 @@ type ERPContextValue = {
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
+  saveEmployee: (input: EmployeeInput, employeeId?: string) => Promise<string>
+  deleteEmployee: (employeeId: string) => Promise<void>
+  recordSale: (input: RecordSaleInput) => Promise<void>
+  saveSalaryPayment: (input: SalaryPaymentInput) => Promise<void>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -219,6 +237,9 @@ function normalizeERPData(data: ERPData | null): ERPData {
     sellerTransactions: source.sellerTransactions ?? {},
     couriers: source.couriers ?? {},
     investors: source.investors ?? {},
+    employees: source.employees ?? {},
+    salesTargets: source.salesTargets ?? {},
+    salaries: source.salaries ?? {},
     settings: {
       ...DEFAULT_ERP_DATA.settings,
       ...source.settings,
@@ -1400,6 +1421,267 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
   }
 
+  async function saveEmployee(input: EmployeeInput, employeeId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Employee name is required.')
+    }
+
+    const phone = input.phone.trim()
+    if (!phone) {
+      throw new Error('Employee phone number is required.')
+    }
+
+    const designation = input.designation.trim()
+    if (!designation) {
+      throw new Error('Designation is required.')
+    }
+
+    if (!input.joiningDate) {
+      throw new Error('Joining date is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existingEmployee = employeeId ? data.employees[employeeId] : null
+    const id = existingEmployee?.id ?? createId('employee')
+    const now = new Date().toISOString()
+    const employee: EmployeeRecord = {
+      id,
+      name,
+      address: input.address?.trim() ?? existingEmployee?.address ?? '',
+      phone,
+      designation,
+      joiningDate: input.joiningDate,
+      probationMonths: Math.max(
+        input.probationMonths ?? existingEmployee?.probationMonths ?? DEFAULT_PROBATION_MONTHS,
+        0
+      ),
+      employmentStatus: input.employmentStatus ?? existingEmployee?.employmentStatus ?? 'active',
+      baseSalary: Math.max(input.baseSalary ?? existingEmployee?.baseSalary ?? 0, 0),
+      monthlyUnitTarget: Math.max(
+        input.monthlyUnitTarget ?? existingEmployee?.monthlyUnitTarget ?? DEFAULT_MONTHLY_UNIT_TARGET,
+        0
+      ),
+      monthlyAmountTarget: Math.max(
+        input.monthlyAmountTarget ?? existingEmployee?.monthlyAmountTarget ?? DEFAULT_MONTHLY_AMOUNT_TARGET,
+        0
+      ),
+      commissionPerUnit: Math.max(
+        input.commissionPerUnit ?? existingEmployee?.commissionPerUnit ?? DEFAULT_COMMISSION_PER_UNIT,
+        0
+      ),
+      userId: input.userId?.trim() || existingEmployee?.userId || '',
+      notes: input.notes?.trim() ?? existingEmployee?.notes ?? '',
+      createdAt: existingEmployee?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/employees'), { [id]: employee })
+    await writeActivity(
+      existingEmployee ? 'employee_updated' : 'employee_created',
+      'employees',
+      existingEmployee
+        ? `Updated ${employee.name}'s employee profile.`
+        : `Added employee ${employee.name} (${employee.designation}).`
+    )
+
+    if (!existingEmployee) {
+      await writeNotification(
+        'New employee added',
+        `${employee.name} joined as ${employee.designation}. Probation ends after ${employee.probationMonths} month(s).`,
+        'info',
+        ['admin']
+      )
+    }
+
+    return id
+  }
+
+  async function deleteEmployee(employeeId: string) {
+    if (!data) {
+      return
+    }
+
+    const employee = data.employees[employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    const hasTargets = Object.values(data.salesTargets).some((target) => target.employeeId === employeeId)
+    const hasSalaries = Object.values(data.salaries).some((salary) => salary.employeeId === employeeId)
+    if (hasTargets || hasSalaries) {
+      throw new Error('Employees with sales or salary history cannot be deleted.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`employees/${employeeId}`]: null })
+    await writeActivity('employee_deleted', 'employees', `Removed employee ${employee.name}.`)
+  }
+
+  /** Upserts the month's target totals, then re-syncs that month's salary record so commission/hold status always reflect the latest sales. */
+  async function recordSale(input: RecordSaleInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const employee = data.employees[input.employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    const units = Math.max(input.units ?? 0, 0)
+    const amount = Math.max(input.amount ?? 0, 0)
+    if (units <= 0 && amount <= 0) {
+      throw new Error('Enter units sold or a sales amount greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const month = input.month?.trim() || currentMonthKey()
+    const existingTarget = Object.values(data.salesTargets).find(
+      (target) => target.employeeId === input.employeeId && target.month === month
+    )
+    const now = new Date().toISOString()
+
+    const target: SalesTargetRecord = {
+      id: existingTarget?.id ?? createId('target'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month,
+      unitTarget: existingTarget?.unitTarget ?? employee.monthlyUnitTarget,
+      amountTarget: existingTarget?.amountTarget ?? employee.monthlyAmountTarget,
+      commissionPerUnit: existingTarget?.commissionPerUnit ?? employee.commissionPerUnit,
+      unitsSold: Math.max(existingTarget?.unitsSold ?? 0, 0) + units,
+      amountSold: Math.max(existingTarget?.amountSold ?? 0, 0) + amount,
+      createdAt: existingTarget?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    const previousAchievement = existingTarget ? getTargetAchievement(existingTarget).achievementPercent : 0
+    const nextAchievement = getTargetAchievement(target)
+
+    const existingSalary = Object.values(data.salaries).find(
+      (salary) => salary.employeeId === employee.id && salary.month === month
+    )
+    const figures = computeSalaryFigures(employee, target)
+    const paidAmount = existingSalary?.paidAmount ?? 0
+    const dueAmount = Math.max(figures.grossPayable - paidAmount, 0)
+
+    const salary: SalaryRecord = {
+      id: existingSalary?.id ?? createId('salary'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month,
+      baseSalary: employee.baseSalary,
+      commissionPerUnit: employee.commissionPerUnit,
+      unitsSold: figures.unitsSold,
+      commissionAmount: figures.commissionAmount,
+      achievementPercent: figures.achievementPercent,
+      holdStatus: figures.holdStatus,
+      grossPayable: figures.grossPayable,
+      paidAmount,
+      dueAmount,
+      paymentStatus: dueAmount <= 0 ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid',
+      payments: existingSalary?.payments ?? [],
+      createdAt: existingSalary?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp'), {
+      [`salesTargets/${target.id}`]: target,
+      [`salaries/${salary.id}`]: salary,
+    })
+
+    await writeActivity(
+      'sale_recorded',
+      'sales_target',
+      `Recorded ${units} unit(s) / ${amount} BDT sales for ${employee.name} (${month}).`
+    )
+
+    if (nextAchievement.achievementPercent >= 80 && previousAchievement < 80) {
+      await writeNotification(
+        'Target achieved',
+        `${employee.name} crossed 80% of the ${month} target — salary hold released.`,
+        'info',
+        ['admin', 'accountant']
+      )
+    }
+  }
+
+  /** Creates the month's salary record on first payment (using live target figures) and appends to its payment history. */
+  async function saveSalaryPayment(input: SalaryPaymentInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const employee = data.employees[input.employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    if (input.amount <= 0) {
+      throw new Error('Payment amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const month = input.month.trim() || currentMonthKey()
+    const existingSalary = Object.values(data.salaries).find(
+      (salary) => salary.employeeId === employee.id && salary.month === month
+    )
+    const existingTarget = Object.values(data.salesTargets).find(
+      (target) => target.employeeId === employee.id && target.month === month
+    )
+    const now = new Date().toISOString()
+    const figures = computeSalaryFigures(employee, existingTarget ?? null)
+
+    const priorPaid = existingSalary?.paidAmount ?? 0
+    const grossPayable = existingSalary?.grossPayable ?? figures.grossPayable
+    const paymentAmount = input.amount
+    const nextPaid = priorPaid + paymentAmount
+    const nextDue = Math.max(grossPayable - nextPaid, 0)
+
+    const paymentEntry: SalaryPaymentEntry = {
+      id: createId('salary_payment'),
+      amount: paymentAmount,
+      method: input.method?.trim() || 'cash',
+      note: input.note?.trim() ?? '',
+      paidBy: currentUser.name,
+      paidAt: now,
+    }
+
+    const salary: SalaryRecord = {
+      id: existingSalary?.id ?? createId('salary'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month,
+      baseSalary: employee.baseSalary,
+      commissionPerUnit: employee.commissionPerUnit,
+      unitsSold: existingSalary?.unitsSold ?? figures.unitsSold,
+      commissionAmount: existingSalary?.commissionAmount ?? figures.commissionAmount,
+      achievementPercent: existingSalary?.achievementPercent ?? figures.achievementPercent,
+      holdStatus: existingSalary?.holdStatus ?? figures.holdStatus,
+      grossPayable,
+      paidAmount: nextPaid,
+      dueAmount: nextDue,
+      paymentStatus: nextDue <= 0 ? 'paid' : nextPaid > 0 ? 'partial' : 'unpaid',
+      payments: [...(existingSalary?.payments ?? []), paymentEntry],
+      createdAt: existingSalary?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp'), { [`salaries/${salary.id}`]: salary })
+    await writeActivity('salary_paid', 'salary', `Paid ${paymentAmount} BDT to ${employee.name} for ${month}.`)
+    await writeNotification(
+      'Salary payment recorded',
+      `${employee.name} was paid ${paymentAmount} BDT for ${month} by ${currentUser?.name ?? 'Admin'}.`,
+      'info',
+      ['admin', 'accountant']
+    )
+  }
+
   function switchUser(userId: string) {
     setCurrentUserId(userId)
     persistCurrentUserId(userId)
@@ -1445,6 +1727,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveCourier,
       updateCourierStatus,
       deleteCourier,
+      saveEmployee,
+      deleteEmployee,
+      recordSale,
+      saveSalaryPayment,
     }),
     [currentPermissions, currentUser, data, error, loading, users]
   )

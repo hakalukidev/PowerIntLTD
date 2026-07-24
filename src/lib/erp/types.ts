@@ -252,6 +252,9 @@ export type ERPData = {
   sellerTransactions: Record<string, SellerTransactionRecord>
   couriers: Record<string, CourierRecord>
   investors: Record<string, InvestorRecord>
+  employees: Record<string, EmployeeRecord>
+  salesTargets: Record<string, SalesTargetRecord>
+  salaries: Record<string, SalaryRecord>
   settings: SettingsRecord
   meta: {
     seededAt: string
@@ -412,4 +415,109 @@ export type UserInput = {
   password: string
   roleId: string
   title: string
+}
+
+// ---- Employee Management ----
+
+export type EmploymentStatus = 'active' | 'resigned' | 'terminated'
+
+export type EmployeeRecord = {
+  id: string
+  name: string
+  address: string
+  phone: string
+  designation: string
+  joiningDate: string
+  probationMonths: number
+  employmentStatus: EmploymentStatus
+  baseSalary: number
+  monthlyUnitTarget: number
+  monthlyAmountTarget: number
+  commissionPerUnit: number
+  userId?: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type EmployeeInput = {
+  name: string
+  address?: string
+  phone: string
+  designation: string
+  joiningDate: string
+  probationMonths?: number
+  employmentStatus?: EmploymentStatus
+  baseSalary?: number
+  monthlyUnitTarget?: number
+  monthlyAmountTarget?: number
+  commissionPerUnit?: number
+  userId?: string
+  notes?: string
+}
+
+// ---- Sales & Target Management ----
+
+export type SalesTargetRecord = {
+  id: string
+  employeeId: string
+  employeeName: string
+  month: string
+  unitTarget: number
+  amountTarget: number
+  commissionPerUnit: number
+  unitsSold: number
+  amountSold: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type RecordSaleInput = {
+  employeeId: string
+  month?: string
+  units: number
+  amount: number
+  note?: string
+}
+
+// ---- Salary & Commission ----
+
+export type SalaryHoldStatus = 'hold' | 'released'
+export type SalaryPaymentStatus = 'unpaid' | 'partial' | 'paid'
+
+export type SalaryPaymentEntry = {
+  id: string
+  amount: number
+  method: string
+  note: string
+  paidBy: string
+  paidAt: string
+}
+
+export type SalaryRecord = {
+  id: string
+  employeeId: string
+  employeeName: string
+  month: string
+  baseSalary: number
+  commissionPerUnit: number
+  unitsSold: number
+  commissionAmount: number
+  achievementPercent: number
+  holdStatus: SalaryHoldStatus
+  grossPayable: number
+  paidAmount: number
+  dueAmount: number
+  paymentStatus: SalaryPaymentStatus
+  payments: SalaryPaymentEntry[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type SalaryPaymentInput = {
+  employeeId: string
+  month: string
+  amount: number
+  method?: string
+  note?: string
 }

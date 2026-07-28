@@ -293,7 +293,7 @@ export function StockOverviewScreen() {
   const [pendingImageDeleteId, setPendingImageDeleteId] = useState<string | null>(null)
 
   const deferredSearch = useDeferredValue(search)
-  const canManageInventory = hasPermission('manage_products')
+  const canManageInventory = hasPermission('inventory.edit')
   const currency = data?.settings.currency ?? 'BDT'
 
   const filteredProducts = useMemo(() => {

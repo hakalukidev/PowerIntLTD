@@ -44,7 +44,7 @@ function paymentStatusTone(status: SalaryPaymentStatus) {
 
 export default function SalaryPage() {
   const { data, saveSalaryPayment, hasPermission } = useERP()
-  const canManage = hasPermission('manage_employees')
+  const canManage = hasPermission('salary.edit')
   const currency = data?.settings.currency
 
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])

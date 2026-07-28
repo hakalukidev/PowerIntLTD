@@ -23,10 +23,13 @@ import type {
   InvestorInput,
   OrderInput,
   OrderRecord,
+  PermissionDefinition,
   ProductInput,
   ProductRecord,
   PurchaseInput,
   RecordSaleInput,
+  RoleInput,
+  RoleRecord,
   SalaryPaymentEntry,
   SalaryPaymentInput,
   SalaryRecord,
@@ -72,6 +75,9 @@ type ERPContextValue = {
   createUser: (input: UserInput) => Promise<void>
   updateUser: (userId: string, input: UserInput) => Promise<void>
   deleteUser: (userId: string) => Promise<void>
+  createRole: (input: RoleInput) => Promise<void>
+  updateRole: (roleId: string, input: RoleInput) => Promise<void>
+  deleteRole: (roleId: string, reassignRoleId?: string) => Promise<void>
   hasPermission: (permission: string) => boolean
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
@@ -130,6 +136,49 @@ function mergeRecordMap<T extends { id: string }>(defaults: Record<string, T>, c
   }
 
   return merged
+}
+
+// Roles saved before the permission catalog was split into per-module view/edit/delete
+// grants still store these coarse ids. Expand them to their closest granular equivalents
+// so existing roles keep the access they had instead of losing it silently.
+const LEGACY_PERMISSION_MAP: Record<string, string[]> = {
+  view_dashboard: ['dashboard.view'],
+  view_products: ['inventory.view'],
+  manage_products: ['inventory.view', 'inventory.edit'],
+  manage_orders: ['sales.view', 'sales.edit', 'couriers.view', 'couriers.edit'],
+  view_reports: ['reports.view', 'customers.view'],
+  view_finance: ['suppliers.view', 'finance.view', 'sellers.view'],
+  view_employees: ['employees.view', 'sales_target.view', 'salary.view'],
+  manage_employees: [
+    'employees.view',
+    'employees.edit',
+    'sales_target.view',
+    'sales_target.edit',
+    'salary.view',
+    'salary.edit',
+  ],
+}
+
+function normalizeRoleMap(roles: Record<string, RoleRecord>, catalog: Record<string, PermissionDefinition>) {
+  return Object.fromEntries(
+    Object.entries(roles).map(([id, role]) => {
+      if (id === 'admin') {
+        return [id, { ...role, permissions: Object.keys(catalog) }]
+      }
+
+      const resolved = new Set<string>()
+      for (const permission of role.permissions) {
+        const migrated = LEGACY_PERMISSION_MAP[permission]
+        if (migrated) {
+          migrated.forEach((next) => resolved.add(next))
+        } else if (catalog[permission]) {
+          resolved.add(permission)
+        }
+      }
+
+      return [id, { ...role, permissions: Array.from(resolved) }]
+    })
+  )
 }
 
 function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
@@ -221,7 +270,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
 
   return {
     permissions: DEFAULT_ERP_DATA.permissions,
-    roles: mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles),
+    roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles), DEFAULT_ERP_DATA.permissions),
     users: source.users ?? {},
     warehouses: source.warehouses ?? {},
     suppliers: normalizeSupplierMap(source.suppliers),
@@ -1005,8 +1054,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before creating users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can create new users.')
+    if (!hasPermissionCheck(data, currentUser, 'users.edit')) {
+      throw new Error('You do not have permission to create users.')
     }
 
     const normalizedLoginId = normalizeLookup(input.loginId)
@@ -1055,8 +1104,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before updating users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can update users.')
+    if (!hasPermissionCheck(data, currentUser, 'users.edit')) {
+      throw new Error('You do not have permission to update users.')
     }
 
     const existing = data.users[userId]
@@ -1106,8 +1155,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before deleting users.')
     }
 
-    if (currentUser.roleId !== 'admin') {
-      throw new Error('Only admin users can delete users.')
+    if (!hasPermissionCheck(data, currentUser, 'users.delete')) {
+      throw new Error('You do not have permission to delete users.')
     }
 
     if (userId === currentUser.id) {
@@ -1124,6 +1173,127 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`users/${userId}`]: null,
     })
     await writeActivity('user_deleted', 'admin', `Deleted user ${existing.name}.`)
+  }
+
+  async function createRole(input: RoleInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before creating roles.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'roles.edit')) {
+      throw new Error('You do not have permission to create roles.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Role name is required.')
+    }
+
+    const nameExists = Object.values(data.roles).some(
+      (role) => role.name.trim().toLowerCase() === name.toLowerCase()
+    )
+    if (nameExists) {
+      throw new Error('A role with that name already exists.')
+    }
+
+    const validPermissionIds = new Set(Object.keys(data.permissions))
+    const permissions = input.permissions.filter((permission) => validPermissionIds.has(permission))
+
+    const db = getDatabaseOrThrow()
+    const id = createId('role')
+    const role: RoleRecord = {
+      id,
+      name,
+      description: input.description?.trim() ?? '',
+      permissions,
+    }
+
+    await update(ref(db, 'erp/roles'), { [id]: role })
+    await writeActivity('role_created', 'admin', `Created role ${role.name} with ${permissions.length} permission(s).`)
+  }
+
+  async function updateRole(roleId: string, input: RoleInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before updating roles.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'roles.edit')) {
+      throw new Error('You do not have permission to update roles.')
+    }
+
+    const existing = data.roles[roleId]
+    if (!existing) {
+      throw new Error('Role not found.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Role name is required.')
+    }
+
+    const nameExists = Object.values(data.roles).some(
+      (role) => role.id !== roleId && role.name.trim().toLowerCase() === name.toLowerCase()
+    )
+    if (nameExists) {
+      throw new Error('A role with that name already exists.')
+    }
+
+    const validPermissionIds = new Set(Object.keys(data.permissions))
+    const permissions = input.permissions.filter((permission) => validPermissionIds.has(permission))
+
+    const db = getDatabaseOrThrow()
+    const updatedRole: RoleRecord = {
+      ...existing,
+      name,
+      description: input.description?.trim() ?? '',
+      permissions,
+    }
+
+    await update(ref(db, `erp/roles/${roleId}`), updatedRole)
+    await writeActivity('role_updated', 'admin', `Updated role ${updatedRole.name}.`)
+  }
+
+  async function deleteRole(roleId: string, reassignRoleId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before deleting roles.')
+    }
+
+    if (!hasPermissionCheck(data, currentUser, 'roles.delete')) {
+      throw new Error('You do not have permission to delete roles.')
+    }
+
+    if (roleId === 'admin') {
+      throw new Error('The Admin role cannot be deleted.')
+    }
+
+    const existing = data.roles[roleId]
+    if (!existing) {
+      throw new Error('Role not found.')
+    }
+
+    const assignedUsers = Object.values(data.users).filter((user) => user.roleId === roleId)
+    if (assignedUsers.length > 0) {
+      if (!reassignRoleId || reassignRoleId === roleId || !data.roles[reassignRoleId]) {
+        throw new Error(
+          `Choose a role to move the ${assignedUsers.length} user(s) currently assigned to ${existing.name} to.`
+        )
+      }
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, unknown> = { [`roles/${roleId}`]: null }
+    for (const user of assignedUsers) {
+      updates[`users/${user.id}/roleId`] = reassignRoleId
+    }
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      'role_deleted',
+      'admin',
+      assignedUsers.length > 0
+        ? `Deleted role ${existing.name} and moved ${assignedUsers.length} user(s) to ${data.roles[reassignRoleId!]?.name}.`
+        : `Deleted role ${existing.name}.`
+    )
   }
 
   async function updateTaskStatus(taskId: string, status: TaskRecord['status']) {
@@ -1701,6 +1871,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createUser,
       updateUser,
       deleteUser,
+      createRole,
+      updateRole,
+      deleteRole,
       hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
       saveProduct,
       deleteProduct,

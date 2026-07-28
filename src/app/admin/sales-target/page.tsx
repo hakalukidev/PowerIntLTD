@@ -34,7 +34,7 @@ import { cn } from '@/lib/utils'
 
 export default function SalesTargetPage() {
   const { data, recordSale, hasPermission } = useERP()
-  const canManage = hasPermission('manage_employees')
+  const canManage = hasPermission('sales_target.edit')
   const currency = data?.settings.currency
 
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])

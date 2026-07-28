@@ -96,7 +96,7 @@ function employmentToneClass(status: EmploymentStatus) {
 
 export default function EmployeesPage() {
   const { data, saveEmployee, deleteEmployee, hasPermission } = useERP()
-  const canManage = hasPermission('manage_employees')
+  const canManage = hasPermission('employees.edit')
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])
   const currency = data?.settings.currency
 

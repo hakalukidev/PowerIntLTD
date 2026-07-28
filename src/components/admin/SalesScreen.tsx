@@ -466,7 +466,7 @@ export function SalesScreen() {
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 Export data
               </Button>
-              {hasPermission('manage_orders') ? (
+              {hasPermission('sales.edit') ? (
                 <Button className="rounded-xl" onClick={() => setNewSaleOpen(true)}>
                   <Plus className="mr-2 h-4 w-4" />
                   New sale
@@ -578,7 +578,7 @@ export function SalesScreen() {
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        {hasPermission('manage_orders') ? (
+                        {hasPermission('sales.edit') ? (
                           <Select value={order.status} onValueChange={(value) => void updateOrderStatus(order.id, value as typeof order.status)}>
                             <SelectTrigger className="w-40">
                               <SelectValue />

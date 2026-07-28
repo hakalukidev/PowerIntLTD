@@ -1,4 +1,4 @@
-import type { ERPData } from '@/lib/erp/types'
+import type { ERPData, PermissionDefinition } from '@/lib/erp/types'
 import {
   computeCommission,
   currentMonthKey,
@@ -26,96 +26,126 @@ function shiftMonths(months: number) {
   return value.toISOString()
 }
 
+type ModuleActionConfig = {
+  category: string
+  noun: string
+  actions?: Array<'view' | 'edit' | 'delete'>
+}
+
+function moduleActions(prefix: string, config: ModuleActionConfig): PermissionDefinition[] {
+  const actions = config.actions ?? ['view', 'edit', 'delete']
+  const labels: Record<'view' | 'edit' | 'delete', (noun: string) => string> = {
+    view: (noun) => `View ${noun}`,
+    edit: (noun) => `Create & edit ${noun}`,
+    delete: (noun) => `Delete ${noun}`,
+  }
+  const descriptions: Record<'view' | 'edit' | 'delete', (noun: string) => string> = {
+    view: (noun) => `See ${noun} records and details.`,
+    edit: (noun) => `Add new and update existing ${noun} records.`,
+    delete: (noun) => `Remove ${noun} records permanently.`,
+  }
+
+  return actions.map((action) => ({
+    id: `${prefix}.${action}`,
+    label: labels[action](config.noun),
+    description: descriptions[action](config.noun),
+    category: config.category,
+    action,
+  }))
+}
+
+function buildPermissionCatalog(): Record<string, PermissionDefinition> {
+  const groups: Array<[string, ModuleActionConfig]> = [
+    ['dashboard', { category: 'Dashboard', noun: 'the dashboard', actions: ['view'] }],
+    ['sales', { category: 'Sales Management', noun: 'sales orders and billing' }],
+    ['inventory', { category: 'Inventory Management', noun: 'products and stock' }],
+    ['suppliers', { category: 'Supplier Management', noun: 'suppliers and imports' }],
+    ['customers', { category: 'Customer Management', noun: 'customers (CRM)' }],
+    ['sellers', { category: 'Seller Management', noun: 'seller ledger entries' }],
+    ['couriers', { category: 'Courier Management', noun: 'courier shipments' }],
+    ['finance', { category: 'Finance Management', noun: 'accounting and finance records' }],
+    ['reports', { category: 'Reports', noun: 'reports', actions: ['view'] }],
+    ['employees', { category: 'Employee Management', noun: 'employee profiles' }],
+    ['sales_target', { category: 'Sales & Target Management', noun: 'sales targets', actions: ['view', 'edit'] }],
+    ['salary', { category: 'Salary & Commission', noun: 'salary and commission payouts', actions: ['view', 'edit'] }],
+    ['users', { category: 'User & Role Management', noun: 'users' }],
+    ['roles', { category: 'User & Role Management', noun: 'roles and permissions' }],
+  ]
+
+  const catalog: Record<string, PermissionDefinition> = {}
+  for (const [prefix, config] of groups) {
+    for (const permission of moduleActions(prefix, config)) {
+      catalog[permission.id] = permission
+    }
+  }
+  return catalog
+}
+
+const PERMISSION_CATALOG = buildPermissionCatalog()
+
+function permissionIds(...prefixes: string[]) {
+  return Object.keys(PERMISSION_CATALOG).filter((id) => prefixes.some((prefix) => id.startsWith(`${prefix}.`)))
+}
+
 export function createDefaultERPData(): ERPData {
   const seededAt = isoNow()
 
   return {
-    permissions: {
-      view_dashboard: {
-        id: 'view_dashboard',
-        label: 'View dashboard',
-        description: 'See daily ERP analytics and operational highlights.',
-      },
-      view_products: {
-        id: 'view_products',
-        label: 'View inventory',
-        description: 'Read product, warehouse, and supplier stock information.',
-      },
-      manage_products: {
-        id: 'manage_products',
-        label: 'Manage inventory',
-        description: 'Create products and record warehouse purchases.',
-      },
-      manage_orders: {
-        id: 'manage_orders',
-        label: 'Manage orders',
-        description: 'Create sales orders and update fulfillment state.',
-      },
-      view_reports: {
-        id: 'view_reports',
-        label: 'View reports',
-        description: 'Access sales, stock, and user performance reports.',
-      },
-      view_finance: {
-        id: 'view_finance',
-        label: 'View finance',
-        description: 'See payment, due, profit, and expense related numbers.',
-      },
-      view_employees: {
-        id: 'view_employees',
-        label: 'View employees',
-        description: 'See employee profiles, monthly targets, and salary/commission status.',
-      },
-      manage_employees: {
-        id: 'manage_employees',
-        label: 'Manage employees',
-        description: 'Create/edit employees, set targets, record sales, and process salary payments.',
-      },
-    },
+    permissions: PERMISSION_CATALOG,
     roles: {
       admin: {
         id: 'admin',
         name: 'Admin',
-        description: 'Full ERP access.',
-        permissions: [
-          'view_dashboard',
-          'view_products',
-          'manage_products',
-          'manage_orders',
-          'view_reports',
-          'view_finance',
-          'view_employees',
-          'manage_employees',
-        ],
+        description: 'Full ERP access, including user and role administration.',
+        permissions: Object.keys(PERMISSION_CATALOG),
       },
       store_manager: {
         id: 'store_manager',
         name: 'Store Manager',
         description: 'Handles stock, warehouse, and replenishment operations.',
         permissions: [
-          'view_dashboard',
-          'view_products',
-          'manage_products',
-          'view_reports',
+          ...permissionIds('dashboard'),
+          ...permissionIds('inventory'),
+          ...permissionIds('suppliers'),
+          ...permissionIds('reports'),
         ],
       },
       sales_person: {
         id: 'sales_person',
         name: 'Sales Person',
         description: 'Creates orders and follows customer delivery.',
-        permissions: ['view_dashboard', 'view_products', 'manage_orders', 'view_reports', 'view_employees'],
+        permissions: [
+          ...permissionIds('dashboard'),
+          'inventory.view',
+          ...permissionIds('sales'),
+          ...permissionIds('customers'),
+          ...permissionIds('reports'),
+          'employees.view',
+        ],
       },
       accountant: {
         id: 'accountant',
         name: 'Accountant',
         description: 'Tracks revenue, dues, and margin.',
-        permissions: ['view_dashboard', 'view_reports', 'view_finance', 'view_employees', 'manage_employees'],
+        permissions: [
+          ...permissionIds('dashboard'),
+          ...permissionIds('reports'),
+          ...permissionIds('finance'),
+          'employees.view',
+          ...permissionIds('sales_target'),
+          ...permissionIds('salary'),
+        ],
       },
       viewer: {
         id: 'viewer',
         name: 'Viewer',
         description: 'Read-only workspace access.',
-        permissions: ['view_dashboard', 'view_products', 'view_reports', 'view_employees'],
+        permissions: [
+          'dashboard.view',
+          'inventory.view',
+          'reports.view',
+          'employees.view',
+        ],
       },
     },
     users: {

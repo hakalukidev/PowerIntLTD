@@ -31,7 +31,7 @@ const initialForm = {
 }
 
 export function UserManagementPanel() {
-  const { data, currentUser, createUser, updateUser, deleteUser } = useERP()
+  const { data, currentUser, createUser, updateUser, deleteUser, hasPermission } = useERP()
   const [form, setForm] = useState(initialForm)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -43,7 +43,9 @@ export function UserManagementPanel() {
 
   const roles = useMemo(() => Object.values(data?.roles ?? {}), [data?.roles])
   const users = useMemo(() => Object.values(data?.users ?? {}), [data?.users])
-  const isAdmin = currentUser?.roleId === 'admin'
+  const canView = hasPermission('users.view')
+  const canManage = hasPermission('users.edit')
+  const canDelete = hasPermission('users.delete')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -115,15 +117,15 @@ export function UserManagementPanel() {
     }
   }
 
-  if (!isAdmin) {
+  if (!canView) {
     return (
       <Card className="border-border/70 shadow-sm">
         <CardHeader>
           <CardTitle>User access</CardTitle>
-          <CardDescription>Only admin can create users and assign roles.</CardDescription>
+          <CardDescription>You don&apos;t have permission to view users.</CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Log in with the admin account to manage team access.
+          Contact an administrator if you need access to user management.
         </CardContent>
       </Card>
     )
@@ -141,6 +143,7 @@ export function UserManagementPanel() {
           <CardDescription>Login ID and role map for the team already stored in Firebase.</CardDescription>
         </div>
 
+        {canManage ? (
         <Dialog open={open} onOpenChange={handleOpenChange}>
           <DialogTrigger asChild>
             <Button className="rounded-xl" onClick={handleAddClick}>
@@ -263,6 +266,7 @@ export function UserManagementPanel() {
             </form>
           </DialogContent>
         </Dialog>
+        ) : null}
       </CardHeader>
       <CardContent>
         {message ? <p className="mb-4 text-sm text-emerald-600 dark:text-emerald-400">{message}</p> : null}
@@ -294,28 +298,32 @@ export function UserManagementPanel() {
                       <TableCell>{data?.roles[user.roleId]?.name ?? user.roleId}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 rounded-lg"
-                            onClick={() => handleEditClick(user)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                            <span className="sr-only">Edit {user.name}</span>
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 rounded-lg text-rose-600 hover:text-rose-600 dark:text-rose-400"
-                            disabled={user.id === currentUser?.id}
-                            onClick={() => {
-                              setDeleteError(null)
-                              setDeletingUser(user)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            <span className="sr-only">Delete {user.name}</span>
-                          </Button>
+                          {canManage ? (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 rounded-lg"
+                              onClick={() => handleEditClick(user)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                              <span className="sr-only">Edit {user.name}</span>
+                            </Button>
+                          ) : null}
+                          {canDelete ? (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 rounded-lg text-rose-600 hover:text-rose-600 dark:text-rose-400"
+                              disabled={user.id === currentUser?.id}
+                              onClick={() => {
+                                setDeleteError(null)
+                                setDeletingUser(user)
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              <span className="sr-only">Delete {user.name}</span>
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>

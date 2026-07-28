@@ -2,12 +2,20 @@ export type PermissionDefinition = {
   id: string
   label: string
   description: string
+  category: string
+  action: 'view' | 'edit' | 'delete'
 }
 
 export type RoleRecord = {
   id: string
   name: string
   description: string
+  permissions: string[]
+}
+
+export type RoleInput = {
+  name: string
+  description?: string
   permissions: string[]
 }
 

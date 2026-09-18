@@ -6,7 +6,28 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils/index"
 
-const Select = SelectPrimitive.Root
+const Select = ({
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>) => (
+  <SelectPrimitive.Root
+    onOpenChange={(open) => {
+      onOpenChange?.(open)
+      if (!open) {
+        // Radix's dismissable-layer sets document.body.style.pointerEvents
+        // to "none" while this (modal) layer is open. When the Select is
+        // nested inside a Dialog, the two layers can race on close and
+        // leave body permanently stuck with pointer-events: none, making
+        // the still-open Dialog appear unclickable. Reset it a tick after
+        // Radix's own cleanup runs.
+        window.setTimeout(() => {
+          document.body.style.pointerEvents = ""
+        }, 0)
+      }
+    }}
+    {...props}
+  />
+)
 
 const SelectGroup = SelectPrimitive.Group
 

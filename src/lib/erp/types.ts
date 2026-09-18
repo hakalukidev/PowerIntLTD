@@ -63,13 +63,26 @@ export type CustomerRecord = {
   name: string
   company: string
   phone: string
+  email: string
   location: string
   due: number
-  supportStatus: 'none' | 'needed' | 'in-progress' | 'resolved'
-  supportNote: string
-  isPremium: boolean
   leadSource?: 'facebook' | 'local-marketing'
   reminderCustomer?: boolean
+  nid: string
+  tradeLicenseNo: string
+  nomineeName: string
+  nomineeNid: string
+  thana: string
+  district: string
+  chequeNumber: string
+  bankName: string
+  branchName: string
+  nidCopyUrl: string
+  nidCopyPublicId: string
+  tradeLicenseCopyUrl: string
+  tradeLicenseCopyPublicId: string
+  passportPhotoUrl: string
+  passportPhotoPublicId: string
   createdAt: string
   updatedAt: string
 }
@@ -225,6 +238,19 @@ export type SellerTransactionRecord = {
   createdAt: string
 }
 
+export type CreditLedgerEntryRecord = {
+  id: string
+  customerId: string
+  customerName: string
+  date: string
+  particulars: string
+  qty: number
+  unitPrice: number
+  debit: number
+  credit: number
+  createdAt: string
+}
+
 export type CourierStatus = 'in-transit' | 'delivered' | 'returned' | 'cod-collected'
 
 export type CourierRecord = {
@@ -258,6 +284,7 @@ export type ERPData = {
   expenses: Record<string, ExpenseRecord>
   sellers: Record<string, SellerRecord>
   sellerTransactions: Record<string, SellerTransactionRecord>
+  creditLedgerEntries: Record<string, CreditLedgerEntryRecord>
   couriers: Record<string, CourierRecord>
   investors: Record<string, InvestorRecord>
   employees: Record<string, EmployeeRecord>
@@ -311,13 +338,26 @@ export type CustomerInput = {
   name: string
   company?: string
   phone: string
+  email?: string
   location?: string
   due?: number
-  supportStatus?: CustomerRecord['supportStatus']
-  supportNote?: string
-  isPremium?: boolean
   leadSource?: CustomerRecord['leadSource']
   reminderCustomer?: boolean
+  nid?: string
+  tradeLicenseNo?: string
+  nomineeName?: string
+  nomineeNid?: string
+  thana?: string
+  district?: string
+  chequeNumber?: string
+  bankName?: string
+  branchName?: string
+  nidCopyUrl?: string
+  nidCopyPublicId?: string
+  tradeLicenseCopyUrl?: string
+  tradeLicenseCopyPublicId?: string
+  passportPhotoUrl?: string
+  passportPhotoPublicId?: string
 }
 
 export type SupplierInput = {
@@ -394,6 +434,16 @@ export type SellerTransactionInput = {
   goodsBroughtDescription?: string
   iReceiveAmount?: number
   theyReceiveAmount?: number
+}
+
+export type CreditLedgerEntryInput = {
+  customerId: string
+  date?: string
+  particulars: string
+  qty?: number
+  unitPrice?: number
+  debit?: number
+  credit?: number
 }
 
 export type CourierInput = {

@@ -14,6 +14,7 @@ import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
   CourierInput,
   CourierRecord,
+  CreditLedgerEntryInput,
   CustomerInput,
   CustomerRecord,
   EmployeeInput,
@@ -101,6 +102,8 @@ type ERPContextValue = {
   deleteSeller: (sellerId: string) => Promise<void>
   recordSellerTransaction: (input: SellerTransactionInput) => Promise<void>
   deleteSellerTransaction: (transactionId: string) => Promise<void>
+  recordCreditLedgerEntry: (input: CreditLedgerEntryInput) => Promise<void>
+  deleteCreditLedgerEntry: (entryId: string) => Promise<void>
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
@@ -188,10 +191,24 @@ function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
     ...customer,
     company: customer.company || 'Retail',
     phone: customer.phone || '',
+    email: customer.email || '',
     location: customer.location || '',
     due: Number(customer.due ?? 0),
-    supportStatus: customer.supportStatus ?? 'none',
-    supportNote: customer.supportNote || '',
+    nid: customer.nid || '',
+    tradeLicenseNo: customer.tradeLicenseNo || '',
+    nomineeName: customer.nomineeName || '',
+    nomineeNid: customer.nomineeNid || '',
+    thana: customer.thana || '',
+    district: customer.district || '',
+    chequeNumber: customer.chequeNumber || '',
+    bankName: customer.bankName || '',
+    branchName: customer.branchName || '',
+    nidCopyUrl: customer.nidCopyUrl || '',
+    nidCopyPublicId: customer.nidCopyPublicId || '',
+    tradeLicenseCopyUrl: customer.tradeLicenseCopyUrl || '',
+    tradeLicenseCopyPublicId: customer.tradeLicenseCopyPublicId || '',
+    passportPhotoUrl: customer.passportPhotoUrl || '',
+    passportPhotoPublicId: customer.passportPhotoPublicId || '',
     createdAt: customer.createdAt || now,
     updatedAt: customer.updatedAt || customer.createdAt || now,
   }
@@ -284,6 +301,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     expenses: source.expenses ?? {},
     sellers: source.sellers ?? {},
     sellerTransactions: source.sellerTransactions ?? {},
+    creditLedgerEntries: source.creditLedgerEntries ?? {},
     couriers: source.couriers ?? {},
     investors: source.investors ?? {},
     employees: source.employees ?? {},
@@ -363,13 +381,26 @@ function normalizeCustomerInput(input: CustomerInput) {
     name: input.name.trim(),
     company: input.company?.trim() || 'Retail',
     phone: input.phone.trim(),
+    email: input.email?.trim() ?? '',
     location: input.location?.trim() ?? '',
     due: Math.max(input.due ?? 0, 0),
-    supportStatus: input.supportStatus ?? 'none',
-    supportNote: input.supportNote?.trim() ?? '',
-    isPremium: input.isPremium ?? false,
     leadSource: input.leadSource ?? 'local-marketing',
     reminderCustomer: input.reminderCustomer ?? false,
+    nid: input.nid?.trim() ?? '',
+    tradeLicenseNo: input.tradeLicenseNo?.trim() ?? '',
+    nomineeName: input.nomineeName?.trim() ?? '',
+    nomineeNid: input.nomineeNid?.trim() ?? '',
+    thana: input.thana?.trim() ?? '',
+    district: input.district?.trim() ?? '',
+    chequeNumber: input.chequeNumber?.trim() ?? '',
+    bankName: input.bankName?.trim() ?? '',
+    branchName: input.branchName?.trim() ?? '',
+    nidCopyUrl: input.nidCopyUrl ?? '',
+    nidCopyPublicId: input.nidCopyPublicId ?? '',
+    tradeLicenseCopyUrl: input.tradeLicenseCopyUrl ?? '',
+    tradeLicenseCopyPublicId: input.tradeLicenseCopyPublicId ?? '',
+    passportPhotoUrl: input.passportPhotoUrl ?? '',
+    passportPhotoPublicId: input.passportPhotoPublicId ?? '',
   }
 }
 
@@ -699,9 +730,24 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const existingCustomer = customerId ? data.customers[customerId] : null
     const normalized = normalizeCustomerInput({
       ...input,
-      isPremium: input.isPremium ?? existingCustomer?.isPremium ?? false,
       leadSource: input.leadSource ?? existingCustomer?.leadSource ?? 'local-marketing',
       reminderCustomer: input.reminderCustomer ?? existingCustomer?.reminderCustomer ?? false,
+      email: input.email ?? existingCustomer?.email ?? '',
+      nid: input.nid ?? existingCustomer?.nid ?? '',
+      tradeLicenseNo: input.tradeLicenseNo ?? existingCustomer?.tradeLicenseNo ?? '',
+      nomineeName: input.nomineeName ?? existingCustomer?.nomineeName ?? '',
+      nomineeNid: input.nomineeNid ?? existingCustomer?.nomineeNid ?? '',
+      thana: input.thana ?? existingCustomer?.thana ?? '',
+      district: input.district ?? existingCustomer?.district ?? '',
+      chequeNumber: input.chequeNumber ?? existingCustomer?.chequeNumber ?? '',
+      bankName: input.bankName ?? existingCustomer?.bankName ?? '',
+      branchName: input.branchName ?? existingCustomer?.branchName ?? '',
+      nidCopyUrl: input.nidCopyUrl ?? existingCustomer?.nidCopyUrl ?? '',
+      nidCopyPublicId: input.nidCopyPublicId ?? existingCustomer?.nidCopyPublicId ?? '',
+      tradeLicenseCopyUrl: input.tradeLicenseCopyUrl ?? existingCustomer?.tradeLicenseCopyUrl ?? '',
+      tradeLicenseCopyPublicId: input.tradeLicenseCopyPublicId ?? existingCustomer?.tradeLicenseCopyPublicId ?? '',
+      passportPhotoUrl: input.passportPhotoUrl ?? existingCustomer?.passportPhotoUrl ?? '',
+      passportPhotoPublicId: input.passportPhotoPublicId ?? existingCustomer?.passportPhotoPublicId ?? '',
     })
 
     if (!normalized.name) {
@@ -1508,6 +1554,53 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  async function recordCreditLedgerEntry(input: CreditLedgerEntryInput) {
+    if (!data) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const entryId = createId('credit_entry')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/creditLedgerEntries'), {
+      [entryId]: {
+        id: entryId,
+        customerId: customer.id,
+        customerName: customer.name,
+        date: input.date?.trim() || now,
+        particulars: input.particulars.trim(),
+        qty: Math.max(input.qty ?? 0, 0),
+        unitPrice: Math.max(input.unitPrice ?? 0, 0),
+        debit: Math.max(input.debit ?? 0, 0),
+        credit: Math.max(input.credit ?? 0, 0),
+        createdAt: now,
+      },
+    })
+
+    await writeActivity('credit_entry_recorded', 'customers', `Recorded a credit sheet entry for ${customer.name}.`)
+  }
+
+  async function deleteCreditLedgerEntry(entryId: string) {
+    if (!data) {
+      return
+    }
+
+    const entry = data.creditLedgerEntries[entryId]
+    if (!entry) {
+      throw new Error('Ledger entry not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`creditLedgerEntries/${entryId}`]: null })
+    await writeActivity('credit_entry_deleted', 'customers', `Removed a credit sheet entry for ${entry.customerName}.`)
+  }
+
   async function saveCourier(input: CourierInput, courierId?: string) {
     if (!data) {
       return
@@ -1897,6 +1990,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteSeller,
       recordSellerTransaction,
       deleteSellerTransaction,
+      recordCreditLedgerEntry,
+      deleteCreditLedgerEntry,
       saveCourier,
       updateCourierStatus,
       deleteCourier,

@@ -33,6 +33,15 @@ export function formatDate(value: string) {
   }).format(new Date(value))
 }
 
+export function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
 export function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('en-BD', {
     dateStyle: 'medium',
@@ -320,8 +329,6 @@ function escapeCsv(value: string) {
   return value
 }
 
-export const PREMIUM_CUSTOMER_THRESHOLD = 200000
-
 export function computeCustomerTotals(data: ERPData | null) {
   const orders = toArray(data?.orders)
 
@@ -329,10 +336,6 @@ export function computeCustomerTotals(data: ERPData | null) {
     totals[order.customerId] = (totals[order.customerId] ?? 0) + order.total
     return totals
   }, {})
-}
-
-export function isPremiumCustomer(totalSpend: number, threshold = PREMIUM_CUSTOMER_THRESHOLD) {
-  return totalSpend >= threshold
 }
 
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {

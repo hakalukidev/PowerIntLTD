@@ -34,9 +34,11 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { formatCurrency, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
+import { uploadImageToCloudinary, deleteCloudinaryImage } from '@/lib/cloudinary'
 
 const SUPPLIER_NONE = '__none__'
 const currencyOptions = ['BDT', 'USD', 'CNY', 'EUR']
+const PRODUCT_IMAGE_FOLDER = process.env.NEXT_PUBLIC_CLOUDINARY_FOLDER || 'inventory'
 
 type ProductFormState = {
   name: string
@@ -69,11 +71,6 @@ type WarehouseFormState = {
 }
 
 type InventoryView = 'products' | 'warehouses' | 'low-stock' | 'purchases'
-
-type ProductImageUploadResult = {
-  imageUrl: string
-  imagePublicId: string
-}
 
 function createEmptyProductForm(warehouseId = ''): ProductFormState {
   return {
@@ -172,54 +169,6 @@ function statusBadgeClass(status: ReturnType<typeof getProductStatus>) {
 function statusLabel(status: ReturnType<typeof getProductStatus>) {
   return status.replace('-', ' ')
 }
-async function uploadProductImage(file: File): Promise<ProductImageUploadResult> {
-  const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME
-  const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET
-  const folder = process.env.NEXT_PUBLIC_CLOUDINARY_FOLDER || 'inventory'
-
-  if (!cloudName || !uploadPreset) {
-    throw new Error('Cloudinary upload configuration is missing.')
-  }
-
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('upload_preset', uploadPreset)
-  formData.append('folder', folder)
-
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-    method: 'POST',
-    body: formData,
-  })
-
-  if (!response.ok) {
-    throw new Error('Unable to upload product image.')
-  }
-
-  const result = (await response.json()) as { secure_url?: string; public_id?: string }
-  if (!result.secure_url || !result.public_id) {
-    throw new Error('Cloudinary did not return a valid image response.')
-  }
-
-  return {
-    imageUrl: result.secure_url,
-    imagePublicId: result.public_id,
-  }
-}
-
-async function deleteCloudinaryImage(publicId: string) {
-  const response = await fetch('/api/cloudinary/delete', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ publicId }),
-  })
-
-  if (!response.ok) {
-    throw new Error('Unable to delete product image.')
-  }
-}
-
 export function StockOverviewScreen() {
   const {
     data,
@@ -448,7 +397,7 @@ export function StockOverviewScreen() {
       let nextImagePublicId = productForm.imagePublicId
 
       if (productImageFile) {
-        const uploadResult = await uploadProductImage(productImageFile)
+        const uploadResult = await uploadImageToCloudinary(productImageFile, PRODUCT_IMAGE_FOLDER)
         nextImageUrl = uploadResult.imageUrl
         nextImagePublicId = uploadResult.imagePublicId
       }

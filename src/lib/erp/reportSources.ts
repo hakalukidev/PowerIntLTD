@@ -117,7 +117,7 @@ export const REPORT_SOURCES: ReportSource[] = [
   {
     id: 'customers',
     label: 'Customers',
-    description: 'Customer ledger with dues, support status, and premium flag.',
+    description: 'Customer ledger with dues and location.',
     rows: (data) =>
       toArray(data.customers).map((customer) => ({
         name: customer.name,
@@ -125,8 +125,6 @@ export const REPORT_SOURCES: ReportSource[] = [
         phone: customer.phone,
         location: customer.location,
         due: customer.due,
-        supportStatus: customer.supportStatus,
-        isPremium: customer.isPremium,
         createdAt: customer.createdAt,
       })),
     columns: [
@@ -135,8 +133,6 @@ export const REPORT_SOURCES: ReportSource[] = [
       col('phone', 'Phone', 'string', { searchable: true }),
       col('location', 'Location', 'string', { filterable: true }),
       col('due', 'Due', 'currency'),
-      col('supportStatus', 'Support Status', 'string', { filterable: true }),
-      col('isPremium', 'Premium', 'boolean', { filterable: true }),
       col('createdAt', 'Created', 'date', { isPrimaryDate: true }),
     ],
   },

@@ -8,6 +8,7 @@ import {
   Bell,
   Boxes,
   CheckCheck,
+  ClipboardList,
   FileSpreadsheet,
   Handshake,
   LayoutDashboard,
@@ -98,6 +99,13 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/customers',
         icon: Users,
         permission: 'customers.view',
+      },
+      {
+        label: 'Credit Sheet',
+        description: 'Dealer credit ledger, grouped by name and zone',
+        href: '/admin/credit-sheet',
+        icon: ClipboardList,
+        permission: 'credit_sheet.view',
       },
       {
         label: 'Seller List',

@@ -245,7 +245,7 @@ export function ReportScreen() {
           customer.name,
           customer.phone,
           String(customer.due),
-          customer.supportStatus,
+          customer.location || 'N/A',
         ]),
         ...products.map((product, index) => [
           'Stock',

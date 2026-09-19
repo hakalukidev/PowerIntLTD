@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { cert, getApps, initializeApp, type App } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { getDatabase } from 'firebase-admin/database'
@@ -38,5 +39,31 @@ export function getAdminAuth() {
 }
 
 export function getAdminDatabase() {
+=======
+import 'server-only'
+
+import { cert, getApps, initializeApp, applicationDefault, type App } from 'firebase-admin/app'
+import { getAuth } from 'firebase-admin/auth'
+import { getDatabase } from 'firebase-admin/database'
+
+function getAdminApp(): App {
+  const existing = getApps()[0]
+  if (existing) return existing
+
+  const rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY
+  const credential = rawKey ? cert(JSON.parse(rawKey)) : applicationDefault()
+
+  return initializeApp({
+    credential,
+    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  })
+}
+
+export function adminAuth() {
+  return getAuth(getAdminApp())
+}
+
+export function adminDatabase() {
+>>>>>>> 64d31e6 (update)
   return getDatabase(getAdminApp())
 }

@@ -210,3 +210,4 @@ codecov.yml
 # Optional: If using Azure
 .azure/
 functions/
+.env*

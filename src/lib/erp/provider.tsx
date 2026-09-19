@@ -59,7 +59,17 @@ import {
   hasPermission as hasPermissionCheck,
   toArray,
 } from '@/lib/erp/utils'
-import { database } from '@/lib/firebase/config'
+import {
+  inMemoryPersistence,
+  onAuthStateChanged,
+  onIdTokenChanged,
+  setPersistence,
+  signInWithEmailAndPassword,
+  signOut,
+  type User as FirebaseUser,
+} from 'firebase/auth'
+
+import { auth, database } from '@/lib/firebase/config'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -70,9 +80,8 @@ type ERPContextValue = {
   users: UserRecord[]
   currentUser: UserRecord | null
   currentPermissions: string[]
-  login: (identifier: string, password: string) => Promise<UserRecord>
-  logout: () => void
-  switchUser: (userId: string) => void
+  login: (email: string, password: string) => Promise<void>
+  logout: () => Promise<void>
   createUser: (input: UserInput) => Promise<void>
   updateUser: (userId: string, input: UserInput) => Promise<void>
   deleteUser: (userId: string) => Promise<void>
@@ -118,16 +127,6 @@ const CURRENT_USER_STORAGE_KEY = 'ims-current-user'
 
 function normalizeLookup(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
-}
-
-function normalizePhoneLookup(value: unknown) {
-  const digits = typeof value === 'string' || typeof value === 'number' ? String(value).replace(/\D/g, '') : ''
-
-  if (!digits) {
-    return ''
-  }
-
-  return digits.replace(/^(?:880|88|0)+/, '')
 }
 
 function mergeRecordMap<T extends { id: string }>(defaults: Record<string, T>, current?: Record<string, T> | null) {
@@ -318,25 +317,20 @@ function normalizeERPData(data: ERPData | null): ERPData {
   }
 }
 
-function getStoredCurrentUserId() {
+function clearLegacySession() {
   if (typeof window === 'undefined') {
-    return null
-  }
-
-  return window.localStorage.getItem(CURRENT_USER_STORAGE_KEY)
-}
-
-function persistCurrentUserId(userId: string | null) {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  if (userId) {
-    window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, userId)
     return
   }
 
   window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY)
+}
+
+function getAuthOrThrow() {
+  if (!auth) {
+    throw new Error('Firebase Authentication is only available in the browser.')
+  }
+
+  return auth
 }
 
 function getDatabaseOrThrow() {
@@ -428,9 +422,50 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<ERPData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => getStoredCurrentUserId())
+  const [authUser, setAuthUser] = useState<FirebaseUser | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const currentUserId = authUser?.uid ?? null
 
   useEffect(() => {
+    clearLegacySession()
+
+    if (!auth) {
+      setAuthReady(true)
+      return
+    }
+
+    // In-memory persistence keeps auto-login off: closing or reloading the tab
+    // drops the session and the user lands back on the sign-in screen.
+    void setPersistence(auth, inMemoryPersistence)
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user)
+      setAuthReady(true)
+    })
+
+    // Keeps `authUser` pointing at a token the database rules will still accept.
+    const unsubscribeToken = onIdTokenChanged(auth, (user) => setAuthUser(user))
+
+    return () => {
+      unsubscribeAuth()
+      unsubscribeToken()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authReady) {
+      return
+    }
+
+    if (!authUser) {
+      setData(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+
     let unsubscribe = () => undefined
 
     try {
@@ -454,7 +489,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     return () => unsubscribe()
-  }, [])
+  }, [authReady, authUser])
 
   const users = useMemo(() => {
     return [...toArray(data?.users)].sort((left, right) => left.name.localeCompare(right.name))
@@ -466,6 +501,27 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   )
 
   const currentPermissions = useMemo(() => getPermissions(data, currentUser), [currentUser, data])
+
+  // A Firebase account is not enough on its own: the matching ERP record has to
+  // exist and still be active, otherwise we drop the session immediately.
+  useEffect(() => {
+    if (!authUser || !data) {
+      return
+    }
+
+    const record = data.users[authUser.uid]
+
+    if (!record) {
+      setError('This account is not set up in the ERP. Ask an administrator to add you.')
+      void signOut(getAuthOrThrow())
+      return
+    }
+
+    if (record.status !== 'active') {
+      setError('This account is inactive.')
+      void signOut(getAuthOrThrow())
+    }
+  }, [authUser, data])
 
   useEffect(() => {
     if (!data) {
@@ -509,37 +565,51 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.orders])
 
-  async function login(identifier: string, password: string) {
-    if (!data) {
-      throw new Error('Authentication data is still loading.')
+  async function login(email: string, password: string) {
+    const normalizedEmail = normalizeLookup(email)
+
+    if (!normalizedEmail) {
+      throw new Error('Enter your email address.')
     }
 
-    const normalizedIdentifier = normalizeLookup(identifier)
-    const normalizedPhoneIdentifier = normalizePhoneLookup(identifier)
-    const authenticatedUser = users.find((entry) => {
-      const loginIdMatches = normalizeLookup(entry.loginId) === normalizedIdentifier
-      const phoneMatches = normalizePhoneLookup(entry.phone) === normalizedPhoneIdentifier
-
-      return (loginIdMatches || phoneMatches) && entry.password === password
-    })
-
-    if (!authenticatedUser) {
-      throw new Error('Invalid login ID, phone number, or password.')
+    try {
+      await signInWithEmailAndPassword(getAuthOrThrow(), normalizedEmail, password)
+    } catch {
+      // Firebase distinguishes "no such user" from "wrong password"; we do not,
+      // so an attacker cannot use the error to discover valid addresses.
+      throw new Error('Invalid email address or password.')
     }
-
-    if (authenticatedUser.status !== 'active') {
-      throw new Error('This account is inactive.')
-    }
-
-    setCurrentUserId(authenticatedUser.id)
-    persistCurrentUserId(authenticatedUser.id)
-
-    return authenticatedUser
   }
 
-  function logout() {
-    setCurrentUserId(null)
-    persistCurrentUserId(null)
+  async function logout() {
+    clearLegacySession()
+    await signOut(getAuthOrThrow())
+  }
+
+  /** Attaches the caller's ID token so the API route can authorize the request. */
+  async function callUserApi(method: 'POST' | 'PATCH' | 'DELETE', payload: Record<string, unknown>) {
+    const signedInUser = getAuthOrThrow().currentUser
+
+    if (!signedInUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const response = await fetch('/api/admin/users', {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await signedInUser.getIdToken()}`,
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const result = (await response.json().catch(() => null)) as { error?: string } | null
+
+    if (!response.ok) {
+      throw new Error(result?.error ?? 'Unable to save user.')
+    }
+
+    return result
   }
 
   async function writeActivity(action: string, module: string, message: string) {
@@ -1100,46 +1170,29 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before creating users.')
     }
 
+    // The API route re-checks this server-side; this is only for a fast, clear error.
     if (!hasPermissionCheck(data, currentUser, 'users.edit')) {
       throw new Error('You do not have permission to create users.')
     }
 
-    const normalizedLoginId = normalizeLookup(input.loginId)
-    const normalizedPhone = normalizePhoneLookup(input.phone)
-
-    const loginIdExists = users.some((user) => normalizeLookup(user.loginId) === normalizedLoginId)
-    if (loginIdExists) {
-      throw new Error('That login ID is already in use.')
-    }
-
-    const phoneExists = users.some((user) => normalizePhoneLookup(user.phone) === normalizedPhone)
-    if (phoneExists) {
-      throw new Error('That phone number is already in use.')
-    }
-
-    if (!data.roles[input.roleId]) {
-      throw new Error('Selected role does not exist.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const id = createId('user')
-    const user: UserRecord = {
-      id,
-      name: input.name.trim(),
-      loginId: normalizedLoginId,
-      email: `${normalizedLoginId}@local`,
-      phone: normalizedPhone,
+    await callUserApi('POST', {
+      name: input.name,
+      loginId: input.loginId,
+      email: input.email,
+      phone: input.phone,
       password: input.password,
       roleId: input.roleId,
-      title: input.title.trim(),
-      status: 'active',
-    }
+      title: input.title,
+    })
 
-    await update(ref(db, 'erp/users'), { [id]: user })
-    await writeActivity('user_created', 'admin', `Created user ${user.name} with ${data.roles[user.roleId]?.name ?? user.roleId} access.`)
+    await writeActivity(
+      'user_created',
+      'admin',
+      `Created user ${input.name.trim()} with ${data.roles[input.roleId]?.name ?? input.roleId} access.`
+    )
     await writeNotification(
       'New user registered',
-      `User ${user.name} was registered as ${data?.roles[user.roleId]?.name || user.roleId} by ${currentUser?.name ?? 'Admin'}.`,
+      `User ${input.name.trim()} was registered as ${data.roles[input.roleId]?.name ?? input.roleId} by ${currentUser.name}.`,
       'info',
       ['admin']
     )
@@ -1154,46 +1207,18 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You do not have permission to update users.')
     }
 
-    const existing = data.users[userId]
-    if (!existing) {
-      throw new Error('User not found.')
-    }
-
-    const normalizedLoginId = normalizeLookup(input.loginId)
-    const normalizedPhone = normalizePhoneLookup(input.phone)
-
-    const loginIdExists = users.some(
-      (user) => user.id !== userId && normalizeLookup(user.loginId) === normalizedLoginId
-    )
-    if (loginIdExists) {
-      throw new Error('That login ID is already in use.')
-    }
-
-    const phoneExists = users.some(
-      (user) => user.id !== userId && normalizePhoneLookup(user.phone) === normalizedPhone
-    )
-    if (phoneExists) {
-      throw new Error('That phone number is already in use.')
-    }
-
-    if (!data.roles[input.roleId]) {
-      throw new Error('Selected role does not exist.')
-    }
-
-    const db = getDatabaseOrThrow()
-    const updatedUser: UserRecord = {
-      ...existing,
-      name: input.name.trim(),
-      loginId: normalizedLoginId,
-      email: `${normalizedLoginId}@local`,
-      phone: normalizedPhone,
+    await callUserApi('PATCH', {
+      userId,
+      name: input.name,
+      loginId: input.loginId,
+      email: input.email,
+      phone: input.phone,
+      password: input.password,
       roleId: input.roleId,
-      title: input.title.trim(),
-      password: input.password ? input.password : existing.password,
-    }
+      title: input.title,
+    })
 
-    await update(ref(db, `erp/users/${userId}`), updatedUser)
-    await writeActivity('user_updated', 'admin', `Updated user ${updatedUser.name}.`)
+    await writeActivity('user_updated', 'admin', `Updated user ${input.name.trim()}.`)
   }
 
   async function deleteUser(userId: string) {
@@ -1214,12 +1239,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('User not found.')
     }
 
-    const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
-      [`users/${userId}`]: null,
-    })
+    await callUserApi('DELETE', { userId })
     await writeActivity('user_deleted', 'admin', `Deleted user ${existing.name}.`)
   }
+
 
   async function createRole(input: RoleInput) {
     if (!data || !currentUser) {
@@ -1945,11 +1968,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  function switchUser(userId: string) {
-    setCurrentUserId(userId)
-    persistCurrentUserId(userId)
-  }
-
   const value = useMemo<ERPContextValue>(
     () => ({
       data,
@@ -1960,7 +1978,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       currentPermissions,
       login,
       logout,
-      switchUser,
       createUser,
       updateUser,
       deleteUser,

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, LockKeyhole, Smartphone, Users } from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, LockKeyhole, Smartphone, Users } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
@@ -13,8 +13,9 @@ import { useERP } from '@/lib/erp/provider'
 export function LoginScreen() {
   const router = useRouter()
   const { currentUser, loading, login } = useERP()
-  const [identifier, setIdentifier] = useState('01844902338')
-  const [password, setPassword] = useState('123456')
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -93,12 +94,13 @@ export function LoginScreen() {
 
             <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Login ID or phone</label>
+                <label className="text-sm font-medium text-foreground">Email address</label>
                 <Input
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
-                  placeholder="01844902338"
-                  autoComplete="username"
+                  placeholder="name@powerinternationalbd.com"
+                  type="email"
+                  autoComplete="email"
                   className="h-11 rounded-xl"
                   required
                 />
@@ -106,15 +108,26 @@ export function LoginScreen() {
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">Password</label>
-                <Input
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  type="password"
-                  placeholder="Password"
-                  autoComplete="current-password"
-                  className="h-11 rounded-xl"
-                  required
-                />
+                <div className="relative">
+                  <Input
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Password"
+                    autoComplete="current-password"
+                    className="h-11 rounded-xl pr-11"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((current) => !current)}
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-xl text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
 
               {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
@@ -129,9 +142,8 @@ export function LoginScreen() {
             </form>
 
             <div className="mt-8 border-t border-border/60 pt-6 text-sm leading-6 text-muted-foreground">
-              <p className="font-medium text-foreground">Demo admin account</p>
-              <p className="mt-1">Phone: 01844902338</p>
-              <p>Password: 123456</p>
+              <p>Sign in with your work email address.</p>
+              <p className="mt-1">Lost your password? Ask an administrator to reset it for you.</p>
             </div>
           </section>
         </div>

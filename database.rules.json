@@ -1,6 +1,22 @@
-﻿{
+{
   "rules": {
-    ".read": true,
-    ".write": true
+    ".read": false,
+    ".write": false,
+
+    "erp": {
+      ".read": "auth != null && root.child('erp/users').child(auth.uid).child('status').val() === 'active'",
+
+      "users": {
+        ".write": false
+      },
+
+      "roles": {
+        ".write": "auth != null && root.child('erp/users').child(auth.uid).child('roleId').val() === 'admin'"
+      },
+
+      "$section": {
+        ".write": "auth != null && $section !== 'users' && $section !== 'roles' && root.child('erp/users').child(auth.uid).child('status').val() === 'active'"
+      }
+    }
   }
 }

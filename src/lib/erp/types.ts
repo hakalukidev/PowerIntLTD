@@ -19,13 +19,16 @@ export type RoleInput = {
   permissions: string[]
 }
 
+/**
+ * Credentials live in Firebase Authentication, never in the database, so this
+ * record deliberately has no password field.
+ */
 export type UserRecord = {
   id: string
   name: string
   loginId: string
   email: string
   phone: string
-  password: string
   roleId: string
   title: string
   status: 'active' | 'inactive'
@@ -469,6 +472,7 @@ export type TaskInput = {
 export type UserInput = {
   name: string
   loginId: string
+  email: string
   phone: string
   password: string
   roleId: string

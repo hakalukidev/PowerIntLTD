@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,6 +24,7 @@ import type { UserRecord } from '@/lib/erp/types'
 const initialForm = {
   name: '',
   loginId: '',
+  email: '',
   phone: '',
   password: '',
   roleId: 'viewer',
@@ -33,6 +34,7 @@ const initialForm = {
 export function UserManagementPanel() {
   const { data, currentUser, createUser, updateUser, deleteUser, hasPermission } = useERP()
   const [form, setForm] = useState(initialForm)
+  const [showPassword, setShowPassword] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -73,6 +75,7 @@ export function UserManagementPanel() {
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
+    setShowPassword(false)
     if (next) {
       setMessage(null)
       setError(null)
@@ -84,9 +87,11 @@ export function UserManagementPanel() {
 
   function handleEditClick(user: UserRecord) {
     setEditingUser(user)
+    setShowPassword(false)
     setForm({
       name: user.name,
       loginId: user.loginId,
+      email: user.email ?? '',
       phone: user.phone,
       password: '',
       roleId: user.roleId,
@@ -156,8 +161,8 @@ export function UserManagementPanel() {
               <DialogTitle>{editingUser ? 'Edit user' : 'Create a new user'}</DialogTitle>
               <DialogDescription>
                 {editingUser
-                  ? 'Update the login ID, phone number, and role for this team member. Leave the password blank to keep it unchanged.'
-                  : 'Set the login ID, password, phone number, and role for a new team member.'}
+                  ? 'Update the login ID, email address, phone number, and role for this team member. Leave the password blank to keep it unchanged.'
+                  : 'Set the login ID, email address, password, phone number, and role for a new team member.'}
               </DialogDescription>
             </DialogHeader>
             <form className="space-y-5" onSubmit={handleSubmit}>
@@ -203,6 +208,15 @@ export function UserManagementPanel() {
               <div className="space-y-4 rounded-2xl border border-border/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Login credentials</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2 sm:col-span-2">
+                    <p className="text-sm font-medium text-foreground">Email address</p>
+                    <Input
+                      value={form.email}
+                      onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                      placeholder="e.g. name@powerinternationalbd.com"
+                      type="email"
+                    />
+                  </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">
                       Login ID<span className="ml-0.5 text-rose-500">*</span>
@@ -218,13 +232,25 @@ export function UserManagementPanel() {
                     <p className="text-sm font-medium text-foreground">
                       Password{!editingUser ? <span className="ml-0.5 text-rose-500">*</span> : null}
                     </p>
-                    <Input
-                      value={form.password}
-                      onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-                      placeholder={editingUser ? 'Leave blank to keep unchanged' : 'Set a password'}
-                      type="password"
-                      required={!editingUser}
-                    />
+                    <div className="relative">
+                      <Input
+                        value={form.password}
+                        onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                        placeholder={editingUser ? 'Leave blank to keep unchanged' : 'Set a password'}
+                        type={showPassword ? 'text' : 'password'}
+                        className="pr-10"
+                        required={!editingUser}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((current) => !current)}
+                        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        aria-pressed={showPassword}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

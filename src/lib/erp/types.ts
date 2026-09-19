@@ -29,10 +29,6 @@ export type UserRecord = {
   loginId: string
   email: string
   phone: string
-<<<<<<< HEAD
-=======
-  password?: string
->>>>>>> 64d31e6 (update)
   roleId: string
   title: string
   status: 'active' | 'inactive'

@@ -12,16 +12,10 @@ import { useERP } from '@/lib/erp/provider'
 
 export function LoginScreen() {
   const router = useRouter()
-<<<<<<< HEAD
   const { currentUser, loading, login } = useERP()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-=======
-  const { currentUser, loading, login, error: accessError } = useERP()
-  const [identifier, setIdentifier] = useState('01844902338')
-  const [password, setPassword] = useState('123456')
->>>>>>> 64d31e6 (update)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -100,11 +94,7 @@ export function LoginScreen() {
 
             <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
               <div className="space-y-2">
-<<<<<<< HEAD
                 <label className="text-sm font-medium text-foreground">Email address</label>
-=======
-                <label className="text-sm font-medium text-foreground">Phone number or login ID</label>
->>>>>>> 64d31e6 (update)
                 <Input
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
@@ -140,9 +130,7 @@ export function LoginScreen() {
                 </div>
               </div>
 
-              {error || accessError ? (
-                <p className="text-sm text-rose-600 dark:text-rose-400">{error ?? accessError}</p>
-              ) : null}
+              {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
 
               <Button type="submit" className="h-11 w-full rounded-xl text-sm font-medium" disabled={submitting || loading}>
                 {submitting ? 'Signing in...' : loading ? 'Loading users...' : (

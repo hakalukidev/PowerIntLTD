@@ -254,6 +254,23 @@ export type CreditLedgerEntryRecord = {
   createdAt: string
 }
 
+export type DamageProductStatus = 'pending' | 'sent-to-office' | 'received' | 'resolved'
+
+export type DamageProductRecord = {
+  id: string
+  productName: string
+  quantity: number
+  zone: string
+  reportedDate: string
+  sentDate?: string
+  receivedDate?: string
+  reason: string
+  notes: string
+  status: DamageProductStatus
+  createdAt: string
+  updatedAt: string
+}
+
 export type CourierStatus = 'in-transit' | 'delivered' | 'returned' | 'cod-collected'
 
 export type CourierRecord = {
@@ -289,6 +306,7 @@ export type ERPData = {
   sellerTransactions: Record<string, SellerTransactionRecord>
   creditLedgerEntries: Record<string, CreditLedgerEntryRecord>
   couriers: Record<string, CourierRecord>
+  damageProducts: Record<string, DamageProductRecord>
   investors: Record<string, InvestorRecord>
   employees: Record<string, EmployeeRecord>
   salesTargets: Record<string, SalesTargetRecord>
@@ -458,6 +476,15 @@ export type CourierInput = {
   quantity: number
   codAmount: number
   sentDate?: string
+}
+
+export type DamageProductInput = {
+  productName: string
+  quantity: number
+  zone: string
+  reportedDate?: string
+  reason?: string
+  notes?: string
 }
 
 export type TaskInput = {

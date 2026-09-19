@@ -17,6 +17,8 @@ import type {
   CreditLedgerEntryInput,
   CustomerInput,
   CustomerRecord,
+  DamageProductInput,
+  DamageProductRecord,
   EmployeeInput,
   EmployeeRecord,
   ERPData,
@@ -116,6 +118,9 @@ type ERPContextValue = {
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
   deleteCourier: (courierId: string) => Promise<void>
+  saveDamageProduct: (input: DamageProductInput, damageProductId?: string) => Promise<void>
+  updateDamageProductStatus: (damageProductId: string, status: DamageProductRecord['status']) => Promise<void>
+  deleteDamageProduct: (damageProductId: string) => Promise<void>
   saveEmployee: (input: EmployeeInput, employeeId?: string) => Promise<string>
   deleteEmployee: (employeeId: string) => Promise<void>
   recordSale: (input: RecordSaleInput) => Promise<void>
@@ -302,6 +307,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     sellerTransactions: source.sellerTransactions ?? {},
     creditLedgerEntries: source.creditLedgerEntries ?? {},
     couriers: source.couriers ?? {},
+    damageProducts: source.damageProducts ?? {},
     investors: source.investors ?? {},
     employees: source.employees ?? {},
     salesTargets: source.salesTargets ?? {},
@@ -1707,6 +1713,102 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('courier_deleted', 'courier', `Deleted courier shipment for ${courier.customerName}.`)
   }
 
+  async function saveDamageProduct(input: DamageProductInput, damageProductId?: string) {
+    if (!data) {
+      return
+    }
+
+    const productName = input.productName.trim()
+    if (!productName) {
+      throw new Error('Product name is required.')
+    }
+
+    const zone = input.zone.trim()
+    if (!zone) {
+      throw new Error('Zone is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = damageProductId ? data.damageProducts[damageProductId] : null
+    const id = existing?.id ?? createId('dmg')
+    const now = new Date().toISOString()
+    const damageProduct = {
+      id,
+      productName,
+      quantity: Math.max(input.quantity ?? 0, 0),
+      zone,
+      reportedDate: input.reportedDate?.trim() || existing?.reportedDate || now,
+      sentDate: existing?.sentDate ?? '',
+      receivedDate: existing?.receivedDate ?? '',
+      reason: input.reason?.trim() || existing?.reason || '',
+      notes: input.notes?.trim() || existing?.notes || '',
+      status: existing?.status ?? 'pending',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/damageProducts'), { [id]: damageProduct })
+    await writeActivity(
+      existing ? 'damage_product_updated' : 'damage_product_reported',
+      'damage_products',
+      existing
+        ? `Updated damage report for ${damageProduct.productName}.`
+        : `Reported damage for ${damageProduct.quantity} x ${damageProduct.productName} in ${damageProduct.zone} zone.`
+    )
+  }
+
+  async function updateDamageProductStatus(damageProductId: string, status: DamageProductRecord['status']) {
+    if (!data) {
+      return
+    }
+
+    const damageProduct = data.damageProducts[damageProductId]
+    if (!damageProduct) {
+      return
+    }
+
+    const now = new Date().toISOString()
+    const dateFields: Partial<DamageProductRecord> = {}
+    if (status === 'sent-to-office' && !damageProduct.sentDate) {
+      dateFields.sentDate = now
+    }
+    if (status === 'received' && !damageProduct.receivedDate) {
+      dateFields.receivedDate = now
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/damageProducts/${damageProductId}`), { status, updatedAt: now, ...dateFields })
+    await writeActivity(
+      'damage_product_status_changed',
+      'damage_products',
+      `Marked ${damageProduct.productName} (${damageProduct.zone}) as ${status.replace(/-/g, ' ')}.`
+    )
+
+    if (status === 'sent-to-office') {
+      await writeNotification(
+        'Damage product update',
+        `${damageProduct.quantity} x ${damageProduct.productName} from ${damageProduct.zone} zone is on the way to the main office.`,
+        'info',
+        ['admin', 'store_manager']
+      )
+    }
+  }
+
+  async function deleteDamageProduct(damageProductId: string) {
+    if (!data) {
+      return
+    }
+
+    const damageProduct = data.damageProducts[damageProductId]
+    if (!damageProduct) {
+      throw new Error('Damage product record not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`damageProducts/${damageProductId}`]: null })
+    await writeActivity('damage_product_deleted', 'damage_products', `Deleted damage report for ${damageProduct.productName}.`)
+  }
+
   async function saveEmployee(input: EmployeeInput, employeeId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -2012,6 +2114,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveCourier,
       updateCourierStatus,
       deleteCourier,
+      saveDamageProduct,
+      updateDamageProductStatus,
+      deleteDamageProduct,
       saveEmployee,
       deleteEmployee,
       recordSale,

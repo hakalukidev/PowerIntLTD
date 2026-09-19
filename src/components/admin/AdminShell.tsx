@@ -4,6 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   Banknote,
   Bell,
   Boxes,
@@ -120,6 +121,13 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/courier',
         icon: PackageCheck,
         permission: 'couriers.view',
+      },
+      {
+        label: 'Damage Products',
+        description: 'Zone-wise damage reports and main office status',
+        href: '/admin/damage-products',
+        icon: AlertTriangle,
+        permission: 'damage_products.view',
       },
       {
         label: 'Accounting & Finance',

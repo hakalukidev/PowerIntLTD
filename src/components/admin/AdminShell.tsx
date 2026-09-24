@@ -224,7 +224,7 @@ function SidebarContent({
             className={cn('flex min-w-0 items-center gap-3', collapsed && 'justify-center')}
             onClick={onNavigate}
           >
-            <Image src="/power-icon.png" alt="ERP" width={34} height={34} className="h-8 w-8 shrink-0 rounded-md object-contain" />
+            <Image src="/power-icon.png" alt="ERP" loading="eager" width={34} height={34} className="h-8 w-8 shrink-0 rounded-md object-contain" />
             {!collapsed ? (
               <div className="min-w-0">
                 <p className="text-xs font-medium uppercase tracking-[0.28em] text-sidebar-foreground/60">

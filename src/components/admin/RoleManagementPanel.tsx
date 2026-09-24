@@ -26,6 +26,7 @@ const initialForm = {
   name: '',
   description: '',
   permissions: [] as string[],
+  zoneIds: [] as string[],
 }
 
 function groupByCategory(permissions: PermissionDefinition[]) {
@@ -297,6 +298,10 @@ export function RoleManagementPanel() {
 
   const roles = useMemo(() => Object.values(data?.roles ?? {}), [data?.roles])
   const allPermissions = useMemo(() => Object.values(data?.permissions ?? {}), [data?.permissions])
+  const zones = useMemo(
+    () => Object.values(data?.zones ?? {}).sort((left, right) => left.name.localeCompare(right.name)),
+    [data?.zones]
+  )
 
   const usersByRole = useMemo(() => {
     const map = new Map<string, UserRecord[]>()
@@ -347,6 +352,7 @@ export function RoleManagementPanel() {
       name: role.name,
       description: role.description,
       permissions: [...role.permissions],
+      zoneIds: [...(role.zoneIds ?? [])],
     })
     setMessage(null)
     setError(null)
@@ -471,6 +477,40 @@ export function RoleManagementPanel() {
                   />
                 </div>
 
+                {editingRole?.id !== 'admin' ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Zone access</p>
+                    {zones.length ? (
+                      <div className="grid gap-1.5 rounded-xl border border-border/70 p-3 sm:grid-cols-3">
+                        {zones.map((zone) => (
+                          <label key={zone.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-primary"
+                              checked={form.zoneIds.includes(zone.id)}
+                              onChange={() =>
+                                setForm((current) => ({
+                                  ...current,
+                                  zoneIds: current.zoneIds.includes(zone.id)
+                                    ? current.zoneIds.filter((id) => id !== zone.id)
+                                    : [...current.zoneIds, zone.id],
+                                }))
+                              }
+                            />
+                            <span>{zone.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No zones yet. Create zones from the Credit Sheet page first.</p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Tick zones to limit this role: its users will only see customers from those zones in CRM and the credit sheet.
+                      Leave all unticked for no limit.
+                    </p>
+                  </div>
+                ) : null}
+
                 {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
 
                 <DialogFooter>
@@ -493,6 +533,7 @@ export function RoleManagementPanel() {
                   <TableHead>Role</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Permissions</TableHead>
+                  <TableHead>Zones</TableHead>
                   <TableHead>Users</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -500,7 +541,7 @@ export function RoleManagementPanel() {
               <TableBody>
                 {roles.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
                       No roles yet. Click &quot;Create role&quot; to add one.
                     </TableCell>
                   </TableRow>
@@ -519,6 +560,11 @@ export function RoleManagementPanel() {
                           <Badge variant="outline" className="rounded-full">
                             {role.permissions.length}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {role.zoneIds?.length
+                            ? role.zoneIds.map((zoneId) => data?.zones[zoneId]?.name ?? 'Deleted zone').join(', ')
+                            : 'All zones'}
                         </TableCell>
                         <TableCell>{userCount}</TableCell>
                         <TableCell className="text-right">

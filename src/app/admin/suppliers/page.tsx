@@ -153,13 +153,26 @@ export default function SuppliersPage() {
         const supplierPurchases = purchases.filter((purchase) => purchase.supplierId === supplier.id)
         const purchaseTotal = supplierPurchases.reduce((sum, purchase) => sum + purchase.total, 0)
         const lastPurchase = [...supplierPurchases].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
-        const assignedProducts = products.filter((product) => product.supplierId === supplier.id).length
+        const supplierProducts = products.filter((product) => product.supplierId === supplier.id)
+        const assignedProducts = supplierProducts.length
+        // Everything this supplier has supplied, so searching a product finds its supplier.
+        const productTerms = Array.from(
+          new Set([
+            ...supplierProducts.flatMap((product) => [product.name, product.sku, product.brand]),
+            ...supplierPurchases.map((purchase) => purchase.productName),
+          ].filter(Boolean))
+        )
+        const productNames = Array.from(
+          new Set([...supplierProducts.map((product) => product.name), ...supplierPurchases.map((purchase) => purchase.productName)].filter(Boolean))
+        )
 
         return {
           supplier,
           purchaseCount: supplierPurchases.length,
           purchaseTotal,
           assignedProducts,
+          productTerms,
+          productNames,
           lastPurchaseDate: lastPurchase?.createdAt ?? supplier.updatedAt,
           landedCost: getLandedCost(supplier),
           hasHistory: supplierPurchases.length > 0 || assignedProducts > 0,
@@ -171,9 +184,10 @@ export default function SuppliersPage() {
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
 
-    return supplierRows.filter(({ supplier }) => {
+    return supplierRows.filter(({ supplier, productTerms }) => {
       const matchesSearch =
         !normalizedQuery ||
+        productTerms.some((term) => term.toLowerCase().includes(normalizedQuery)) ||
         [
           supplier.name,
           supplier.company,
@@ -338,7 +352,7 @@ export default function SuppliersPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Supplier and import data table</CardTitle>
-              <CardDescription>Search by supplier, importer, phone, country, LC number, or location.</CardDescription>
+              <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location.</CardDescription>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_190px_auto]">
               <div className="relative">
@@ -347,7 +361,7 @@ export default function SuppliersPage() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="pl-9"
-                  placeholder="Search suppliers"
+                  placeholder="Search suppliers or products"
                 />
               </div>
               <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as typeof typeFilter)}>
@@ -382,18 +396,27 @@ export default function SuppliersPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ supplier, purchaseCount, purchaseTotal, assignedProducts, lastPurchaseDate, landedCost, hasHistory }) => (
+                  {filteredRows.map(({ supplier, productNames, purchaseCount, purchaseTotal, assignedProducts, lastPurchaseDate, landedCost, hasHistory }) => (
                     <TableRow key={supplier.id}>
-                      <TableCell className="min-w-60">
+                      <TableCell className="min-w-40">
                         <div>
                           <p className="font-semibold">{supplier.name}</p>
                           <p className="text-sm text-muted-foreground">{supplier.company}</p>
                           <Badge variant="outline" className={cn('mt-2 rounded-full', typeToneClass(supplier.supplierType))}>
                             {supplierTypeLabels[supplier.supplierType]}
                           </Badge>
+                          {(() => {
+                            const normalizedQuery = query.trim().toLowerCase()
+                            const matched = normalizedQuery
+                              ? productNames.filter((name) => name.toLowerCase().includes(normalizedQuery))
+                              : []
+                            return matched.length ? (
+                              <p className="mt-2 text-xs text-primary">Supplies: {matched.join(', ')}</p>
+                            ) : null
+                          })()}
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-56">
+                      <TableCell className="min-w-44">
                         <div className="space-y-2 text-sm">
                           <div className="flex items-center gap-2">
                             <Phone className="h-4 w-4 text-muted-foreground" />
@@ -403,10 +426,10 @@ export default function SuppliersPage() {
                             <MapPin className="h-4 w-4 text-muted-foreground" />
                             <span>{supplier.location || supplier.country}</span>
                           </div>
-                          {supplier.email ? <p className="text-xs text-muted-foreground">{supplier.email}</p> : null}
+                          {supplier.email ? <p className="break-all text-xs text-muted-foreground">{supplier.email}</p> : null}
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-48">
+                      <TableCell className="min-w-36">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -428,7 +451,7 @@ export default function SuppliersPage() {
                         </DropdownMenu>
                         <p className="mt-2 text-xs text-muted-foreground">{supplier.lcNumber || 'No LC number'}</p>
                       </TableCell>
-                      <TableCell className="min-w-56">
+                      <TableCell className="min-w-40">
                         <div className="space-y-1 text-xs text-muted-foreground">
                           <p>Product: {formatCurrency(supplier.productCost, supplier.currency)}</p>
                           <p>Shipping: {formatCurrency(supplier.shippingCost, supplier.currency)}</p>
@@ -436,11 +459,11 @@ export default function SuppliersPage() {
                           <p>Other: {formatCurrency(supplier.otherCost, supplier.currency)}</p>
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-44">
+                      <TableCell className="min-w-32">
                         <p className="font-semibold">{formatCurrency(landedCost, supplier.currency)}</p>
                         <p className="text-xs text-muted-foreground">Total until warehouse</p>
                       </TableCell>
-                      <TableCell className="min-w-44">
+                      <TableCell className="min-w-36">
                         <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>
                         <p className="text-xs text-muted-foreground">
                           {purchaseCount} purchases, {assignedProducts} products

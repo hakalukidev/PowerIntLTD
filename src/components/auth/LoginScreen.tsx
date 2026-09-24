@@ -12,7 +12,7 @@ import { useERP } from '@/lib/erp/provider'
 
 export function LoginScreen() {
   const router = useRouter()
-  const { currentUser, loading, login } = useERP()
+  const { currentUser, error: sessionError, loading, login } = useERP()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -47,7 +47,7 @@ export function LoginScreen() {
       <div className="relative flex min-h-screen flex-col">
         <header className="flex items-center justify-between px-6 py-6 sm:px-10">
           <div className="flex items-center gap-3">
-            <Image src="/power-icon.png" alt="Power International BD" width={30} height={30} className="h-7 w-7 rounded-md object-contain" />
+            <Image src="/power-icon.png" alt="Power International BD" loading="eager" width={30} height={30} className="h-7 w-7 rounded-md object-contain" />
             <div className="flex flex-col leading-tight">
               <span className="text-sm font-semibold uppercase tracking-[0.3em] text-muted-foreground">Power International BD</span>
               <span className="text-[11px] font-medium uppercase tracking-[0.25em] text-primary/70">ERP System</span>
@@ -130,7 +130,7 @@ export function LoginScreen() {
                 </div>
               </div>
 
-              {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
+              {error ?? sessionError ? <p className="text-sm text-rose-600 dark:text-rose-400">{error ?? sessionError}</p> : null}
 
               <Button type="submit" className="h-11 w-full rounded-xl text-sm font-medium" disabled={submitting || loading}>
                 {submitting ? 'Signing in...' : loading ? 'Loading users...' : (

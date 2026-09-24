@@ -15,6 +15,8 @@ import type {
   CourierInput,
   CourierRecord,
   CreditLedgerEntryInput,
+  CustomerCommitment,
+  CustomerCommitmentInput,
   CustomerInput,
   CustomerRecord,
   DamageProductInput,
@@ -46,6 +48,8 @@ import type {
   UserInput,
   UserRecord,
   WarehouseInput,
+  ZoneInput,
+  ZoneRecord,
 } from '@/lib/erp/types'
 import {
   computeSalaryFigures,
@@ -93,6 +97,10 @@ type ERPContextValue = {
   hasPermission: (permission: string) => boolean
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
+  saveCustomerCommitment: (customerId: string, input: CustomerCommitmentInput, commitmentId?: string) => Promise<void>
+  deleteCustomerCommitment: (customerId: string, commitmentId: string) => Promise<void>
+  saveZone: (input: ZoneInput, zoneId?: string) => Promise<string>
+  deleteZone: (zoneId: string) => Promise<void>
   saveSupplier: (input: SupplierInput, supplierId?: string) => Promise<string>
   deleteSupplier: (supplierId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
@@ -183,7 +191,7 @@ function normalizeRoleMap(roles: Record<string, RoleRecord>, catalog: Record<str
         }
       }
 
-      return [id, { ...role, permissions: Array.from(resolved) }]
+      return [id, { ...role, permissions: Array.from(resolved), zoneIds: role.zoneIds ?? [] }]
     })
   )
 }
@@ -213,9 +221,31 @@ function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
     tradeLicenseCopyPublicId: customer.tradeLicenseCopyPublicId || '',
     passportPhotoUrl: customer.passportPhotoUrl || '',
     passportPhotoPublicId: customer.passportPhotoPublicId || '',
+    bankDocumentUrl: customer.bankDocumentUrl || '',
+    bankDocumentPublicId: customer.bankDocumentPublicId || '',
+    dealerPhotoUrl: customer.dealerPhotoUrl || '',
+    dealerPhotoPublicId: customer.dealerPhotoPublicId || '',
+    signatureUrl: customer.signatureUrl || '',
+    signaturePublicId: customer.signaturePublicId || '',
     createdAt: customer.createdAt || now,
     updatedAt: customer.updatedAt || customer.createdAt || now,
   }
+}
+
+function normalizeZoneMap(zones?: Record<string, ZoneRecord> | null) {
+  return Object.fromEntries(
+    Object.entries(zones ?? {}).map(([id, zone]) => [
+      id,
+      {
+        ...zone,
+        id,
+        name: zone.name || 'Unnamed zone',
+        thanas: zone.thanas ?? [],
+        districts: zone.districts ?? [],
+        managerIds: zone.managerIds ?? [],
+      },
+    ])
+  )
 }
 
 function normalizeCustomerMap(customers?: Record<string, CustomerRecord> | null) {
@@ -296,6 +326,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     warehouses: source.warehouses ?? {},
     suppliers: normalizeSupplierMap(source.suppliers),
     customers: normalizeCustomerMap(source.customers),
+    zones: normalizeZoneMap(source.zones),
     products: normalizeProductMap(source.products),
     orders: normalizeOrderMap(source.orders),
     purchases: source.purchases ?? {},
@@ -401,6 +432,13 @@ function normalizeCustomerInput(input: CustomerInput) {
     tradeLicenseCopyPublicId: input.tradeLicenseCopyPublicId ?? '',
     passportPhotoUrl: input.passportPhotoUrl ?? '',
     passportPhotoPublicId: input.passportPhotoPublicId ?? '',
+    bankDocumentUrl: input.bankDocumentUrl ?? '',
+    bankDocumentPublicId: input.bankDocumentPublicId ?? '',
+    dealerPhotoUrl: input.dealerPhotoUrl ?? '',
+    dealerPhotoPublicId: input.dealerPhotoPublicId ?? '',
+    signatureUrl: input.signatureUrl ?? '',
+    signaturePublicId: input.signaturePublicId ?? '',
+    zoneId: input.zoneId ?? '',
   }
 }
 
@@ -580,10 +618,29 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     try {
       await signInWithEmailAndPassword(getAuthOrThrow(), normalizedEmail, password)
-    } catch {
+    } catch (reason) {
+      const code = (reason as { code?: string } | null)?.code ?? ''
+
       // Firebase distinguishes "no such user" from "wrong password"; we do not,
       // so an attacker cannot use the error to discover valid addresses.
-      throw new Error('Invalid email address or password.')
+      if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/user-not-found' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/invalid-email'
+      ) {
+        throw new Error('Invalid email address or password.')
+      }
+
+      // Anything else is a setup or network problem, not a bad password.
+      console.error('Firebase sign-in failed:', reason)
+      if (code === 'auth/too-many-requests') {
+        throw new Error('Too many failed attempts. Wait a few minutes and try again.')
+      }
+      if (code === 'auth/network-request-failed') {
+        throw new Error('Network error. Check your connection and try again.')
+      }
+      throw new Error(`Sign-in is unavailable (${code || 'unknown error'}). Check the Firebase Authentication setup.`)
     }
   }
 
@@ -824,6 +881,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       tradeLicenseCopyPublicId: input.tradeLicenseCopyPublicId ?? existingCustomer?.tradeLicenseCopyPublicId ?? '',
       passportPhotoUrl: input.passportPhotoUrl ?? existingCustomer?.passportPhotoUrl ?? '',
       passportPhotoPublicId: input.passportPhotoPublicId ?? existingCustomer?.passportPhotoPublicId ?? '',
+      bankDocumentUrl: input.bankDocumentUrl ?? existingCustomer?.bankDocumentUrl ?? '',
+      bankDocumentPublicId: input.bankDocumentPublicId ?? existingCustomer?.bankDocumentPublicId ?? '',
+      dealerPhotoUrl: input.dealerPhotoUrl ?? existingCustomer?.dealerPhotoUrl ?? '',
+      dealerPhotoPublicId: input.dealerPhotoPublicId ?? existingCustomer?.dealerPhotoPublicId ?? '',
+      signatureUrl: input.signatureUrl ?? existingCustomer?.signatureUrl ?? '',
+      signaturePublicId: input.signaturePublicId ?? existingCustomer?.signaturePublicId ?? '',
+      zoneId: input.zoneId ?? existingCustomer?.zoneId ?? '',
     })
 
     if (!normalized.name) {
@@ -840,6 +904,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const customer = {
       id,
       ...normalized,
+      ...(existingCustomer?.commitments ? { commitments: existingCustomer.commitments } : {}),
       createdAt: existingCustomer?.createdAt ?? now,
       updatedAt: now,
     }
@@ -874,6 +939,130 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`customers/${customerId}`]: null,
     })
     await writeActivity('customer_deleted', 'customers', `Deleted customer ${customer.name}.`)
+  }
+
+  async function saveCustomerCommitment(customerId: string, input: CustomerCommitmentInput, commitmentId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const customer = data.customers[customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+
+    const note = input.note.trim()
+    if (!note) {
+      throw new Error('Commitment details are required.')
+    }
+
+    const existing = commitmentId ? customer.commitments?.[commitmentId] : undefined
+    const id = existing?.id ?? createId('commitment')
+    const now = new Date().toISOString()
+    const commitment: CustomerCommitment = {
+      id,
+      note,
+      dueDate: input.dueDate ?? existing?.dueDate ?? '',
+      status: input.status ?? existing?.status ?? 'pending',
+      imageUrl: input.imageUrl ?? existing?.imageUrl ?? '',
+      imagePublicId: input.imagePublicId ?? existing?.imagePublicId ?? '',
+      createdBy: existing?.createdBy ?? currentUser?.name ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/customers/${customerId}/commitments`), { [id]: commitment })
+    await writeActivity(
+      existing ? 'customer_commitment_updated' : 'customer_commitment_created',
+      'customers',
+      existing
+        ? `Updated a commitment for ${customer.name}.`
+        : `Added a commitment for ${customer.name}: ${note}`
+    )
+  }
+
+  async function deleteCustomerCommitment(customerId: string, commitmentId: string) {
+    if (!data) {
+      return
+    }
+
+    const customer = data.customers[customerId]
+    if (!customer?.commitments?.[commitmentId]) {
+      throw new Error('Commitment not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/customers/${customerId}/commitments`), { [commitmentId]: null })
+    await writeActivity('customer_commitment_deleted', 'customers', `Removed a commitment for ${customer.name}.`)
+  }
+
+  async function saveZone(input: ZoneInput, zoneId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Zone name is required.')
+    }
+
+    const existingZone = zoneId ? data.zones[zoneId] : null
+    const duplicate = Object.values(data.zones).find(
+      (zone) => zone.id !== existingZone?.id && zone.name.trim().toLowerCase() === name.toLowerCase()
+    )
+    if (duplicate) {
+      throw new Error(`A zone named ${duplicate.name} already exists.`)
+    }
+
+    const id = existingZone?.id ?? createId('zone')
+    const now = new Date().toISOString()
+    const zone: ZoneRecord = {
+      id,
+      name,
+      thanas: Array.from(
+        new Map(
+          (input.thanas ?? existingZone?.thanas ?? []).map((area) => [`${area.district}|${area.thana}`, area])
+        ).values()
+      ),
+      districts: Array.from(new Set(input.districts ?? existingZone?.districts ?? [])),
+      managerIds: Array.from(new Set(input.managerIds ?? existingZone?.managerIds ?? [])),
+      createdAt: existingZone?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/zones'), { [id]: zone })
+    await writeActivity(
+      existingZone ? 'zone_updated' : 'zone_created',
+      'zones',
+      existingZone ? `Updated ${zone.name} zone.` : `Added ${zone.name} zone.`
+    )
+
+    return id
+  }
+
+  async function deleteZone(zoneId: string) {
+    if (!data) {
+      return
+    }
+
+    const zone = data.zones[zoneId]
+    if (!zone) {
+      throw new Error('Zone not found.')
+    }
+
+    // Customers pinned to this zone fall back to district-based resolution.
+    const updates: Record<string, null | string> = { [`zones/${zoneId}`]: null }
+    for (const customer of Object.values(data.customers)) {
+      if (customer.zoneId === zoneId) {
+        updates[`customers/${customer.id}/zoneId`] = ''
+      }
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('zone_deleted', 'zones', `Deleted ${zone.name} zone.`)
   }
 
   async function saveSupplier(input: SupplierInput, supplierId?: string) {
@@ -1273,6 +1462,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const validPermissionIds = new Set(Object.keys(data.permissions))
     const permissions = input.permissions.filter((permission) => validPermissionIds.has(permission))
+    const zoneIds = Array.from(new Set((input.zoneIds ?? []).filter((zoneId) => data.zones[zoneId])))
 
     const db = getDatabaseOrThrow()
     const id = createId('role')
@@ -1281,6 +1471,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       name,
       description: input.description?.trim() ?? '',
       permissions,
+      zoneIds,
     }
 
     await update(ref(db, 'erp/roles'), { [id]: role })
@@ -1315,6 +1506,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const validPermissionIds = new Set(Object.keys(data.permissions))
     const permissions = input.permissions.filter((permission) => validPermissionIds.has(permission))
+    // The admin role always sees every zone.
+    const zoneIds = roleId === 'admin' ? [] : Array.from(new Set((input.zoneIds ?? []).filter((zoneId) => data.zones[zoneId])))
 
     const db = getDatabaseOrThrow()
     const updatedRole: RoleRecord = {
@@ -1322,6 +1515,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       name,
       description: input.description?.trim() ?? '',
       permissions,
+      zoneIds,
     }
 
     await update(ref(db, `erp/roles/${roleId}`), updatedRole)
@@ -2091,6 +2285,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteProduct,
       saveCustomer,
       deleteCustomer,
+      saveCustomerCommitment,
+      deleteCustomerCommitment,
+      saveZone,
+      deleteZone,
       saveSupplier,
       deleteSupplier,
       saveWarehouse,

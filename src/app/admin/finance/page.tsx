@@ -24,6 +24,7 @@ import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
+import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -100,7 +101,7 @@ export default function FinancePage() {
     () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
     [data?.expenses]
   )
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const { customers } = useZoneAccess()
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const currency = data?.settings.currency
   const expenseCategories = useMemo(

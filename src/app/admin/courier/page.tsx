@@ -22,6 +22,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
+import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import type { CourierInput, CourierRecord } from '@/lib/erp/types'
 import { exportPdf, exportXlsx, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -81,9 +82,10 @@ export default function CourierUpdatePage() {
   const { data, saveCourier, updateCourierStatus, deleteCourier } = useERP()
   const currency = data?.settings.currency
   const couriers = useMemo(() => toArray(data?.couriers), [data?.couriers])
+  const { customers } = useZoneAccess()
   const customerNameOptions = useMemo(
-    () => Array.from(new Set(toArray(data?.customers).map((customer) => customer.name).filter(Boolean))).sort(),
-    [data?.customers]
+    () => Array.from(new Set(customers.map((customer) => customer.name).filter(Boolean))).sort(),
+    [customers]
   )
   const courierNameOptions = useMemo(
     () => Array.from(new Set(couriers.map((courier) => courier.courierName).filter(Boolean))).sort(),

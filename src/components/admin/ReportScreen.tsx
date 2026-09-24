@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
+import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatReportValue, reportExportValue, REPORT_SOURCES } from '@/lib/erp/reportSources'
 import { buildUserReport, exportPdf, exportXlsx, formatDate, toArray } from '@/lib/erp/utils'
 
@@ -220,7 +221,7 @@ export function ReportScreen() {
   }
 
   // Quick full-module exports (all rows, fixed columns, no filters needed)
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const { customers } = useZoneAccess()
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const userReport = buildUserReport(data)

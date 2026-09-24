@@ -1,9 +1,13 @@
 "use client"
 
+import Image from 'next/image'
 import { useMemo, useState, type FormEvent } from 'react'
-import { ArrowLeft, Eye, FileSpreadsheet, FileText, Plus, Printer, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, FileText, MapPinned, Plus, Printer, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { CommitmentsPanel, sortedCommitments } from '@/components/admin/credit-sheet/CommitmentsPanel'
+import { brandedDocument, openPrintWindow } from '@/components/admin/credit-sheet/printSheet'
+import { ZoneManagerDialog } from '@/components/admin/credit-sheet/ZoneManagerDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -16,10 +20,19 @@ import {
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { divisionList, districtsForDivision, findDivisionForDistrict, thanasForDistrict } from '@/lib/data/bangladeshLocations'
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
-import { escapeHtml, exportPdf, exportXlsx, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { useZoneAccess } from '@/lib/erp/useZoneAccess'
+import { escapeHtml, exportPdf, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import {
+  customerZoneId,
+  customerZoneName,
+  subZoneKey,
+  subZoneLabel,
+  UNASSIGNED_ZONE_ID,
+  UNASSIGNED_ZONE_NAME,
+} from '@/lib/erp/zones'
+import { cn } from '@/lib/utils/index'
 
 type LedgerRow = {
   id: string
@@ -41,6 +54,27 @@ type LedgerEntryFormState = {
   credit: string
 }
 
+type GroupBy = 'zone' | 'subzone' | 'district'
+
+type SheetRow = {
+  customer: CustomerRecord
+  purchaseTotal: number
+  paid: number
+  zoneId: string
+  zoneName: string
+  subZoneKey: string
+  subZoneName: string
+  district: string
+}
+
+type Totals = { dealers: number; purchase: number; paid: number; due: number }
+
+const GROUP_BY_OPTIONS: Array<{ value: GroupBy; label: string }> = [
+  { value: 'zone', label: 'Zone' },
+  { value: 'subzone', label: 'Sub-zone' },
+  { value: 'district', label: 'District' },
+]
+
 function emptyLedgerEntryForm(): LedgerEntryFormState {
   return {
     date: new Date().toISOString().slice(0, 10),
@@ -52,47 +86,103 @@ function emptyLedgerEntryForm(): LedgerEntryFormState {
   }
 }
 
-function zoneOf(customer: CustomerRecord) {
-  return findDivisionForDistrict(customer.district) || 'Unassigned zone'
+function totalsOf(rows: SheetRow[]): Totals {
+  return {
+    dealers: rows.length,
+    purchase: rows.reduce((sum, row) => sum + row.purchaseTotal, 0),
+    paid: rows.reduce((sum, row) => sum + row.paid, 0),
+    due: rows.reduce((sum, row) => sum + row.customer.due, 0),
+  }
+}
+
+function groupKeyOf(row: SheetRow, groupBy: GroupBy) {
+  if (groupBy === 'zone') return row.zoneName
+  if (groupBy === 'subzone') return row.subZoneName
+  return row.district
+}
+
+const NO_SUB_ZONE_FILTER = 'none'
+
+/** "Borishal" -> "Borishal Zone", while "Borishal Zone" stays as it is. */
+function zoneTitle(name: string) {
+  return /zone$/i.test(name.trim()) ? name.trim() : `${name.trim()} Zone`
+}
+
+function SheetBrandHeader({ topLeft, topRight, heading, badge }: { topLeft: string; topRight: string; heading: string; badge?: string }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between gap-4 text-xs text-muted-foreground">
+        <span>{topLeft}</span>
+        <span className="text-right">{topRight}</span>
+      </div>
+      <div className="flex items-center justify-center gap-4">
+        <Image src="/power-icon.png" alt="" width={52} height={52} className="h-11 w-11 object-contain" />
+        <h2 className="font-serif text-xl tracking-wide sm:text-3xl">POWER INTERNATIONAL BD</h2>
+      </div>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <span />
+        <span className="border-b border-foreground px-6 pb-0.5 text-center text-sm font-bold uppercase tracking-[0.12em] sm:px-14">
+          {heading}
+        </span>
+        {badge ? (
+          <span className="justify-self-end bg-cyan-400 px-4 py-0.5 text-xs font-bold uppercase text-slate-900 sm:px-7">{badge}</span>
+        ) : (
+          <span />
+        )}
+      </div>
+    </div>
+  )
 }
 
 export default function CreditSheetPage() {
-  const { data, recordCreditLedgerEntry, deleteCreditLedgerEntry } = useERP()
+  const { data, currentUser, hasPermission, recordCreditLedgerEntry, deleteCreditLedgerEntry } = useERP()
   const currency = data?.settings.currency
-  const customers = useMemo(() => toArray(data?.customers), [data?.customers])
+  const canEdit = hasPermission('credit_sheet.edit')
+  const canManageZones = hasPermission('zones.edit')
+  // Zone managers and zone-limited roles are limited to their own zones; everyone else sees all zones.
+  const { zones, zoneOptions, visibleZoneIds, customers } = useZoneAccess()
+  const allCustomers = useMemo(() => toArray(data?.customers), [data?.customers])
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
   const creditLedgerEntries = useMemo(() => toArray(data?.creditLedgerEntries), [data?.creditLedgerEntries])
 
+
   const [query, setQuery] = useState('')
-  const [filterDivision, setFilterDivision] = useState('all')
-  const [filterDistrict, setFilterDistrict] = useState('all')
-  const [filterThana, setFilterThana] = useState('all')
+  const [filterZone, setFilterZone] = useState('all')
+  const [filterSubZone, setFilterSubZone] = useState('all')
   const [priceMin, setPriceMin] = useState('')
   const [priceMax, setPriceMax] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [groupBy, setGroupBy] = useState<GroupBy>('zone')
+  const [zonesOpen, setZonesOpen] = useState(false)
+  const [zonesStartWithNew, setZonesStartWithNew] = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [entryDialogOpen, setEntryDialogOpen] = useState(false)
   const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm)
   const [isSavingEntry, setIsSavingEntry] = useState(false)
   const [ledgerFeedback, setLedgerFeedback] = useState<string | null>(null)
+  const [sheetFeedback, setSheetFeedback] = useState<string | null>(null)
 
-  const filterDistrictOptions = useMemo(
-    () => (filterDivision === 'all' ? [] : districtsForDivision(filterDivision)),
-    [filterDivision]
-  )
-  const filterThanaOptions = useMemo(
-    () => (filterDivision === 'all' || filterDistrict === 'all' ? [] : thanasForDistrict(filterDivision, filterDistrict)),
-    [filterDivision, filterDistrict]
-  )
+  const customerRows = useMemo<SheetRow[]>(() => {
+    const purchases = new Map<string, number>()
+    for (const order of orders) {
+      purchases.set(order.customerId, (purchases.get(order.customerId) ?? 0) + order.total)
+    }
 
-  const customerRows = useMemo(() => {
     return customers.map((customer) => {
-      const customerOrders = orders.filter((order) => order.customerId === customer.id)
-      const purchaseTotal = customerOrders.reduce((sum, order) => sum + order.total, 0)
-      return { customer, purchaseTotal }
+      const purchaseTotal = purchases.get(customer.id) ?? 0
+      return {
+        customer,
+        purchaseTotal,
+        paid: purchaseTotal - customer.due,
+        zoneId: customerZoneId(customer, zones),
+        zoneName: customerZoneName(customer, zones),
+        subZoneKey: subZoneKey(customer),
+        subZoneName: subZoneLabel(customer),
+        district: customer.district || 'Unknown district',
+      }
     })
-  }, [customers, orders])
+  }, [customers, orders, zones])
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -102,13 +192,14 @@ export default function CreditSheetPage() {
     const to = dateTo ? new Date(dateTo) : null
     if (to) to.setHours(23, 59, 59, 999)
 
-    return customerRows.filter(({ customer, purchaseTotal }) => {
+    return customerRows.filter((row) => {
+      const { customer, purchaseTotal } = row
       const matchesSearch =
         !normalizedQuery ||
         [customer.name, customer.company, customer.phone, customer.location].join(' ').toLowerCase().includes(normalizedQuery)
-      const matchesDivision = filterDivision === 'all' || zoneOf(customer) === filterDivision
-      const matchesDistrict = filterDistrict === 'all' || customer.district === filterDistrict
-      const matchesThana = filterThana === 'all' || customer.thana === filterThana
+      const matchesZone = filterZone === 'all' || row.zoneId === filterZone
+      const matchesSubZone =
+        filterSubZone === 'all' || row.subZoneKey === (filterSubZone === NO_SUB_ZONE_FILTER ? '' : filterSubZone)
       const matchesMinPrice = minPrice === null || Number.isNaN(minPrice) || purchaseTotal >= minPrice
       const matchesMaxPrice = maxPrice === null || Number.isNaN(maxPrice) || purchaseTotal <= maxPrice
       const joinedDate = new Date(customer.createdAt)
@@ -117,56 +208,82 @@ export default function CreditSheetPage() {
 
       return (
         matchesSearch &&
-        matchesDivision &&
-        matchesDistrict &&
-        matchesThana &&
+        matchesZone &&
+        matchesSubZone &&
         matchesMinPrice &&
         matchesMaxPrice &&
         matchesFrom &&
         matchesTo
       )
     })
-  }, [customerRows, query, filterDivision, filterDistrict, filterThana, priceMin, priceMax, dateFrom, dateTo])
+  }, [customerRows, query, filterZone, filterSubZone, priceMin, priceMax, dateFrom, dateTo])
+
+  // Sub-zones (thanas) that actually have dealers within the chosen zone.
+  const subZoneOptions = useMemo(() => {
+    const options = new Map<string, string>()
+    let hasNone = false
+    for (const row of customerRows) {
+      if (filterZone !== 'all' && row.zoneId !== filterZone) continue
+      if (row.subZoneKey) options.set(row.subZoneKey, row.subZoneName)
+      else hasNone = true
+    }
+    const sorted = Array.from(options.entries()).sort((left, right) => left[1].localeCompare(right[1]))
+    return { options: sorted, hasNone }
+  }, [customerRows, filterZone])
 
   const creditSheetGroups = useMemo(() => {
-    const groups = new Map<string, typeof filteredRows>()
+    const groups = new Map<string, SheetRow[]>()
 
     for (const row of filteredRows) {
-      const zone = zoneOf(row.customer)
-      const rowsForZone = groups.get(zone) ?? []
-      rowsForZone.push(row)
-      groups.set(zone, rowsForZone)
+      const key = groupKeyOf(row, groupBy)
+      const rowsForGroup = groups.get(key) ?? []
+      rowsForGroup.push(row)
+      groups.set(key, rowsForGroup)
     }
 
     return Array.from(groups.entries())
-      .map(([zone, rows]) => ({
-        zone,
-        rows: [...rows].sort((left, right) => left.customer.name.localeCompare(right.customer.name)),
+      .map(([name, rows]) => ({
+        name,
+        rows: [...rows].sort(
+          (left, right) =>
+            left.subZoneName.localeCompare(right.subZoneName) || left.customer.name.localeCompare(right.customer.name)
+        ),
+        totals: totalsOf(rows),
       }))
-      .sort((left, right) => left.zone.localeCompare(right.zone))
-  }, [filteredRows])
+      .sort((left, right) => left.name.localeCompare(right.name))
+  }, [filteredRows, groupBy])
 
-  const metrics = useMemo(() => {
-    return {
-      totalDealers: filteredRows.length,
-      purchaseTotal: filteredRows.reduce((sum, row) => sum + row.purchaseTotal, 0),
-      dueTotal: filteredRows.reduce((sum, row) => sum + row.customer.due, 0),
+  const metrics = useMemo(() => totalsOf(filteredRows), [filteredRows])
+
+  const groupLabel = GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? 'Zone'
+  const showZoneColumn = groupBy !== 'zone'
+  const showSubZoneColumn = groupBy !== 'subzone'
+  const showDistrictColumn = groupBy !== 'district'
+
+  const scopeName = useMemo(() => {
+    if (filterZone !== 'all') {
+      return filterZone === UNASSIGNED_ZONE_ID ? UNASSIGNED_ZONE_NAME : zones.find((zone) => zone.id === filterZone)?.name ?? 'Zone'
     }
-  }, [filteredRows])
+    if (visibleZoneIds) return zoneOptions.map((zone) => zone.name).join(', ')
+    return 'All zones'
+  }, [filterZone, visibleZoneIds, zoneOptions, zones])
+  const sheetTopLeft = scopeName === 'All zones' ? 'All zones_Power Int.' : `${zoneTitle(scopeName)}_Power Int.`
 
   const selectedCustomer = useMemo(
     () => (selectedCustomerId ? customers.find((customer) => customer.id === selectedCustomerId) ?? null : null),
     [customers, selectedCustomerId]
   )
+  const selectedZoneName = selectedCustomer ? customerZoneName(selectedCustomer, zones) : ''
 
+  // Serial number within the dealer's zone, stable regardless of the viewer's filters.
   const selectedCustomerSerial = useMemo(() => {
     if (!selectedCustomer) return 0
-    const zone = zoneOf(selectedCustomer)
-    const zoneCustomers = customers
-      .filter((customer) => zoneOf(customer) === zone)
+    const zoneId = customerZoneId(selectedCustomer, zones)
+    const zoneCustomers = allCustomers
+      .filter((customer) => customerZoneId(customer, zones) === zoneId)
       .sort((left, right) => left.name.localeCompare(right.name))
     return zoneCustomers.findIndex((customer) => customer.id === selectedCustomer.id) + 1
-  }, [customers, selectedCustomer])
+  }, [allCustomers, selectedCustomer, zones])
 
   const ledgerRows = useMemo<LedgerRow[]>(() => {
     if (!selectedCustomerId) return []
@@ -232,42 +349,131 @@ export default function CreditSheetPage() {
     }
   }, [ledgerRows, ledgerWithBalance])
 
-  function handleExportXlsx() {
+  function exportRows(format: (amount: number) => string | number) {
+    const rows: (string | number)[][] = []
     let serial = 0
-    void exportXlsx(
-      'credit-sheet.xlsx',
-      'Credit Sheet',
-      ['SL', 'Zone', 'Dealer', 'Mobile', 'Total purchase', 'Paid', 'Due (credit)'],
-      creditSheetGroups.flatMap(({ zone, rows }) =>
-        rows.map(({ customer, purchaseTotal }) => {
-          serial += 1
-          return [serial, zone, customer.name, customer.phone, purchaseTotal, purchaseTotal - customer.due, customer.due]
-        })
-      )
+
+    for (const group of creditSheetGroups) {
+      for (const row of group.rows) {
+        serial += 1
+        rows.push([
+          serial,
+          group.name,
+          row.zoneName,
+          row.subZoneName,
+          row.district,
+          row.customer.name,
+          row.customer.phone,
+          format(row.purchaseTotal),
+          format(row.paid),
+          format(row.customer.due),
+        ])
+      }
+      rows.push(['', `${group.name} total`, '', '', '', `${group.totals.dealers} dealers`, '', format(group.totals.purchase), format(group.totals.paid), format(group.totals.due)])
+    }
+
+    rows.push(['', 'Grand total', '', '', '', `${metrics.dealers} dealers`, '', format(metrics.purchase), format(metrics.paid), format(metrics.due)])
+    return rows
+  }
+
+  const exportHeaders = () => ['SL', groupLabel, 'Zone', 'Sub-zone', 'District', 'Dealer', 'Mobile', 'Total purchase', 'Paid', 'Due (credit)']
+
+  function handleExportPdf() {
+    void exportPdf(
+      'credit-sheet.pdf',
+      `Power International BD - Credit Sheet (${scopeName}, by ${groupLabel.toLowerCase()})`,
+      exportHeaders(),
+      exportRows((amount) => formatCurrency(amount, currency))
     )
   }
 
-  function handleExportPdf() {
-    let serial = 0
-    void exportPdf(
-      'credit-sheet.pdf',
-      'Credit Sheet',
-      ['SL', 'Zone', 'Dealer', 'Mobile', 'Total purchase', 'Paid', 'Due (credit)'],
-      creditSheetGroups.flatMap(({ zone, rows }) =>
-        rows.map(({ customer, purchaseTotal }) => {
-          serial += 1
-          return [
-            serial,
-            zone,
-            customer.name,
-            customer.phone,
-            formatCurrency(purchaseTotal, currency),
-            formatCurrency(purchaseTotal - customer.due, currency),
-            formatCurrency(customer.due, currency),
-          ]
-        })
+  function handlePrintSheet() {
+    const money = (amount: number) => escapeHtml(formatCurrency(amount, currency))
+    const extraHeaders = `${showZoneColumn ? '<th>Zone</th>' : ''}${showSubZoneColumn ? '<th>Sub-zone</th>' : ''}${showDistrictColumn ? '<th>District</th>' : ''}`
+    const extraCount = Number(showZoneColumn) + Number(showSubZoneColumn) + Number(showDistrictColumn)
+
+    const groupsHtml = creditSheetGroups
+      .map(
+        (group) => `
+          <p class="group-title">${escapeHtml(group.name)}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>SL</th><th>Dealer</th><th>Owner</th><th>Mobile</th>${extraHeaders}
+                <th class="numeric">Total purchase</th><th class="numeric">Paid</th><th class="numeric">Due (credit)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${group.rows
+                .map(
+                  (row, index) => `
+                    <tr>
+                      <td>${index + 1}</td>
+                      <td>${escapeHtml(row.customer.name)}</td>
+                      <td>${escapeHtml(row.customer.company)}</td>
+                      <td>${escapeHtml(row.customer.phone)}</td>
+                      ${showZoneColumn ? `<td>${escapeHtml(row.zoneName)}</td>` : ''}
+                      ${showSubZoneColumn ? `<td>${escapeHtml(row.customer.thana || '-')}</td>` : ''}
+                      ${showDistrictColumn ? `<td>${escapeHtml(row.district)}</td>` : ''}
+                      <td class="numeric">${money(row.purchaseTotal)}</td>
+                      <td class="numeric">${money(row.paid)}</td>
+                      <td class="numeric">${money(row.customer.due)}</td>
+                    </tr>
+                  `
+                )
+                .join('')}
+              <tr class="subtotal">
+                <td colspan="${4 + extraCount}">${escapeHtml(group.name)} total (${group.totals.dealers} dealers)</td>
+                <td class="numeric">${money(group.totals.purchase)}</td>
+                <td class="numeric">${money(group.totals.paid)}</td>
+                <td class="numeric">${money(group.totals.due)}</td>
+              </tr>
+            </tbody>
+          </table>
+        `
       )
-    )
+      .join('')
+
+    const summaryHtml = `
+      <p class="section-title">${escapeHtml(groupLabel)}-wise summary</p>
+      <table>
+        <thead>
+          <tr><th>${escapeHtml(groupLabel)}</th><th class="numeric">Dealers</th><th class="numeric">Total purchase</th><th class="numeric">Paid</th><th class="numeric">Due (credit)</th></tr>
+        </thead>
+        <tbody>
+          ${creditSheetGroups
+            .map(
+              (group) => `
+                <tr>
+                  <td>${escapeHtml(group.name)}</td>
+                  <td class="numeric">${group.totals.dealers}</td>
+                  <td class="numeric">${money(group.totals.purchase)}</td>
+                  <td class="numeric">${money(group.totals.paid)}</td>
+                  <td class="numeric">${money(group.totals.due)}</td>
+                </tr>
+              `
+            )
+            .join('')}
+          <tr class="grand">
+            <td>Grand total</td>
+            <td class="numeric">${metrics.dealers}</td>
+            <td class="numeric">${money(metrics.purchase)}</td>
+            <td class="numeric">${money(metrics.paid)}</td>
+            <td class="numeric">${money(metrics.due)}</td>
+          </tr>
+        </tbody>
+      </table>
+    `
+
+    const html = brandedDocument({
+      title: 'Credit Sheet',
+      topLeft: sheetTopLeft,
+      topRight: `${groupLabel}-wise`,
+      heading: 'Credit Sheet',
+      body: groupsHtml + summaryHtml,
+    })
+
+    setSheetFeedback(openPrintWindow(html) ? null : 'Allow popups to print or save the credit sheet as PDF.')
   }
 
   function openEntryDialog() {
@@ -331,116 +537,117 @@ export default function CreditSheetPage() {
       )
       .join('')
 
-    const zone = zoneOf(selectedCustomer)
-    const generatedAt = new Intl.DateTimeFormat('en-BD', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date())
+    const commitments = sortedCommitments(selectedCustomer)
+    const commitmentsHtml = commitments.length
+      ? `
+        <p class="section-title">Commitment notes</p>
+        <div class="notes">
+          ${commitments
+            .map(
+              (commitment) => `
+                <div class="note">
+                  ${commitment.imageUrl ? `<img src="${escapeHtml(commitment.imageUrl)}" alt="" />` : ''}
+                  <div>
+                    <div>${escapeHtml(commitment.note)}</div>
+                    <div class="meta">
+                      ${commitment.status === 'fulfilled' ? 'Fulfilled' : 'Pending'}
+                      ${commitment.dueDate ? ` · Due ${escapeHtml(formatDate(commitment.dueDate))}` : ''}
+                      · Added ${escapeHtml(formatDate(commitment.createdAt))}${commitment.createdBy ? ` by ${escapeHtml(commitment.createdBy)}` : ''}
+                    </div>
+                  </div>
+                </div>
+              `
+            )
+            .join('')}
+        </div>
+      `
+      : ''
 
-    const html = `
-      <!doctype html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Ledger - ${escapeHtml(selectedCustomer.name)}</title>
-          <style>
-            * { box-sizing: border-box; }
-            @page { margin: 0; }
-            body { color: #111827; font-family: 'Noto Sans Bengali', Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; }
-            .top-row { display: flex; justify-content: space-between; font-size: 11px; color: #4b5563; }
-            .brand { align-items: center; display: flex; gap: 14px; justify-content: center; margin-top: 12px; }
-            .brand h1 { font-size: 26px; letter-spacing: .02em; margin: 0; }
-            .ledger-title { font-size: 15px; font-weight: 700; letter-spacing: .1em; margin: 10px 0 16px; text-align: center; text-transform: uppercase; }
-            table.info { border-collapse: collapse; margin-bottom: 18px; width: 100%; }
-            table.info td { border: 1px solid #9ca3af; font-size: 12px; padding: 6px 10px; }
-            table.info td.label { background: #f3f4f6; font-weight: 700; width: 14%; }
-            table.ledger { border-collapse: collapse; margin-top: 6px; width: 100%; }
-            table.ledger th, table.ledger td { border: 1px solid #9ca3af; font-size: 11px; padding: 6px 8px; }
-            table.ledger th { background: #eef2ff; text-transform: uppercase; }
-            .numeric { text-align: right; }
-            tfoot td { background: #dbeafe; font-weight: 700; }
-            .print-date { color: #6b7280; font-size: 10px; margin-top: 18px; text-align: right; }
-            @media print { button { display: none; } }
-          </style>
-        </head>
-        <body>
-          <div class="top-row">
-            <span>${escapeHtml(zone)} Zone_Power Int.</span>
-            <span>${escapeHtml(selectedCustomer.name)}</span>
-          </div>
-          <div class="brand">
-            <h1>POWER INTERNATIONAL BD</h1>
-          </div>
-          <p class="ledger-title">Leadger</p>
+    const address = [selectedCustomer.location, selectedCustomer.thana, selectedCustomer.district].filter(Boolean).join(', ')
+    const bank = selectedCustomer.bankName
+      ? `${selectedCustomer.bankName}${selectedCustomer.branchName ? ` (${selectedCustomer.branchName})` : ''}`
+      : ''
+    const orNA = (value: string | undefined) => escapeHtml(value || 'N/A')
+    const body = `
+      <table class="info">
+        <tr>
+          <td class="label">Account of</td>
+          <td class="center">${orNA(selectedCustomer.name)}</td>
+          <td class="label">Owner Name</td>
+          <td class="center" colspan="3">${orNA(selectedCustomer.company)}</td>
+        </tr>
+        <tr>
+          <td class="label">Add</td>
+          <td>${orNA(address)}</td>
+          <td class="label">Zone</td>
+          <td>${orNA(selectedZoneName)}</td>
+          <td class="label">SL. No.</td>
+          <td class="center">${selectedCustomerSerial}</td>
+        </tr>
+        <tr>
+          <td class="label">Contact No.</td>
+          <td>${orNA(selectedCustomer.phone)}</td>
+          <td class="label">Email</td>
+          <td colspan="3">${orNA(selectedCustomer.email)}</td>
+        </tr>
+        <tr>
+          <td class="label">NID No.</td>
+          <td>${orNA(selectedCustomer.nid)}</td>
+          <td class="label">Trade License</td>
+          <td>${orNA(selectedCustomer.tradeLicenseNo)}</td>
+          <td class="label">Bank</td>
+          <td>${orNA(bank)}</td>
+        </tr>
+      </table>
 
-          <table class="info">
-            <tr>
-              <td class="label">Account of</td>
-              <td>${escapeHtml(selectedCustomer.name)}</td>
-              <td class="label">Owner Name</td>
-              <td>${escapeHtml(selectedCustomer.company || 'N/A')}</td>
-            </tr>
-            <tr>
-              <td class="label">Address</td>
-              <td>${escapeHtml(selectedCustomer.location || 'N/A')}</td>
-              <td class="label">SL. No.</td>
-              <td>${selectedCustomerSerial}</td>
-            </tr>
-            <tr>
-              <td class="label">Contact No.</td>
-              <td>${escapeHtml(selectedCustomer.phone || 'N/A')}</td>
-              <td class="label">Email</td>
-              <td>${escapeHtml(selectedCustomer.email || 'N/A')}</td>
-            </tr>
-          </table>
-
-          <table class="ledger">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Particulars</th>
-                <th class="numeric">Qty</th>
-                <th class="numeric">Unit Price</th>
-                <th class="numeric">Debit</th>
-                <th class="numeric">Credit</th>
-                <th>Dr/Cr</th>
-                <th class="numeric">Balance</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-            <tfoot>
-              <tr>
-                <td colspan="2">Total</td>
-                <td class="numeric">${ledgerTotals.qty}</td>
-                <td></td>
-                <td class="numeric">${formatCurrency(ledgerTotals.debit, currency)}</td>
-                <td class="numeric">${formatCurrency(ledgerTotals.credit, currency)}</td>
-                <td>${ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</td>
-                <td class="numeric">${formatCurrency(Math.abs(ledgerTotals.balance), currency)}</td>
-              </tr>
-            </tfoot>
-          </table>
-
-          <p class="print-date">${escapeHtml(generatedAt)}</p>
-          <script>
-            window.addEventListener('load', () => {
-              window.focus();
-              window.print();
-            });
-          </script>
-        </body>
-      </html>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Particulars</th>
+            <th class="numeric">Qty</th>
+            <th class="numeric">Unit Price</th>
+            <th class="numeric">Debit</th>
+            <th class="numeric">Credit</th>
+            <th>Dr/Cr</th>
+            <th class="numeric">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr class="grand">
+            <td colspan="2">Total</td>
+            <td class="numeric">${ledgerTotals.qty}</td>
+            <td></td>
+            <td class="numeric">${formatCurrency(ledgerTotals.debit, currency)}</td>
+            <td class="numeric">${formatCurrency(ledgerTotals.credit, currency)}</td>
+            <td>${ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</td>
+            <td class="numeric">${formatCurrency(Math.abs(ledgerTotals.balance), currency)}</td>
+          </tr>
+        </tbody>
+      </table>
+      ${commitmentsHtml}
     `
 
-    const popup = window.open('', '_blank', 'width=1000,height=760')
-    if (!popup) {
-      setLedgerFeedback('Allow popups to print or save the ledger as PDF.')
-      return
-    }
+    const html = brandedDocument({
+      title: `Ledger - ${selectedCustomer.name}`,
+      topLeft: `${zoneTitle(selectedZoneName)}_Power Int.`,
+      topRight: selectedCustomer.name,
+      heading: 'Ledger',
+      badge: 'Index',
+      body,
+    })
 
-    popup.document.open()
-    popup.document.write(html)
-    popup.document.close()
+    if (!openPrintWindow(html)) {
+      setLedgerFeedback('Allow popups to print or save the ledger as PDF.')
+    }
   }
 
   if (selectedCustomer) {
+    const address = [selectedCustomer.location, selectedCustomer.thana, selectedCustomer.district].filter(Boolean).join(', ')
+    const infoLabel = 'border border-border px-3 py-2 font-semibold whitespace-nowrap'
+    const infoValue = 'border border-border px-3 py-2'
+
     return (
       <AdminShell active="Credit Sheet">
         <div className="space-y-6">
@@ -454,10 +661,12 @@ export default function CreditSheetPage() {
                 <Printer className="mr-1.5 h-4 w-4" />
                 Print / PDF ledger
               </Button>
-              <Button type="button" size="sm" className="rounded-lg" onClick={openEntryDialog}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                Add ledger entry
-              </Button>
+              {canEdit ? (
+                <Button type="button" size="sm" className="rounded-lg" onClick={openEntryDialog}>
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  Add ledger entry
+                </Button>
+              ) : null}
             </div>
           </div>
 
@@ -468,38 +677,46 @@ export default function CreditSheetPage() {
           ) : null}
 
           <Card className="border-border/70 shadow-sm">
-            <CardHeader>
-              <CardTitle>{selectedCustomer.name}</CardTitle>
-              <CardDescription>Full account statement (ledger) and contact details for this dealer.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-4 rounded-2xl border border-border/70 p-4 sm:grid-cols-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">SL. No.</p>
-                  <p className="font-medium">{selectedCustomerSerial}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Owner Name</p>
-                  <p className="font-medium">{selectedCustomer.company || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Zone</p>
-                  <p className="font-medium">
-                    {[selectedCustomer.thana, selectedCustomer.district, zoneOf(selectedCustomer)].filter(Boolean).join(', ') || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Contact No.</p>
-                  <p className="font-medium">{selectedCustomer.phone || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Email</p>
-                  <p className="font-medium">{selectedCustomer.email || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Address</p>
-                  <p className="font-medium">{selectedCustomer.location || 'N/A'}</p>
-                </div>
+            <CardContent className="space-y-5 p-4 sm:p-6">
+              <SheetBrandHeader
+                topLeft={`${zoneTitle(selectedZoneName)}_Power Int.`}
+                topRight={selectedCustomer.name}
+                heading="Ledger"
+                badge="Index"
+              />
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] border-collapse text-sm">
+                  <tbody>
+                    <tr>
+                      <td className={infoLabel}>Account of</td>
+                      <td className={cn(infoValue, 'text-center')}>{selectedCustomer.name}</td>
+                      <td className={infoLabel}>Owner Name</td>
+                      <td className={cn(infoValue, 'text-center')} colSpan={3}>
+                        {selectedCustomer.company || 'N/A'}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className={infoLabel}>Add</td>
+                      <td className={infoValue}>{address || 'N/A'}</td>
+                      <td className={infoLabel}>Zone</td>
+                      <td className={infoValue}>{selectedZoneName}</td>
+                      <td className={infoLabel}>SL. No.</td>
+                      <td className={cn(infoValue, 'text-center')}>{selectedCustomerSerial}</td>
+                    </tr>
+                    <tr>
+                      <td className={infoLabel}>Contact No.</td>
+                      <td className={infoValue}>{selectedCustomer.phone || 'N/A'}</td>
+                      <td className={infoLabel}>Email</td>
+                      <td className={infoValue} colSpan={3}>
+                        {selectedCustomer.email || 'N/A'}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid gap-4 rounded-2xl border border-border/70 p-4 text-sm sm:grid-cols-3">
                 <div>
                   <p className="text-xs text-muted-foreground">NID No</p>
                   <p className="font-medium">{selectedCustomer.nid || 'N/A'}</p>
@@ -520,7 +737,7 @@ export default function CreditSheetPage() {
               <div className="overflow-x-auto rounded-2xl border border-border/70">
                 <Table>
                   <TableHeader>
-                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                    <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
                       <TableHead>Date</TableHead>
                       <TableHead>Particulars</TableHead>
                       <TableHead className="text-right">Qty</TableHead>
@@ -529,7 +746,7 @@ export default function CreditSheetPage() {
                       <TableHead className="text-right">Credit</TableHead>
                       <TableHead>Dr/Cr</TableHead>
                       <TableHead className="text-right">Balance</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      {canEdit ? <TableHead className="text-right">Actions</TableHead> : null}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -543,25 +760,27 @@ export default function CreditSheetPage() {
                         <TableCell className="text-right">{row.credit ? formatCurrency(row.credit, currency) : ''}</TableCell>
                         <TableCell>{row.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(Math.abs(row.balance), currency)}</TableCell>
-                        <TableCell className="text-right">
-                          {row.removable ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:text-destructive"
-                              onClick={() => void handleDeleteEntry(row.id)}
-                              aria-label="Delete ledger entry"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          ) : null}
-                        </TableCell>
+                        {canEdit ? (
+                          <TableCell className="text-right">
+                            {row.removable ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:text-destructive"
+                                onClick={() => void handleDeleteEntry(row.id)}
+                                aria-label="Delete ledger entry"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            ) : null}
+                          </TableCell>
+                        ) : null}
                       </TableRow>
                     ))}
                     {ledgerWithBalance.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="h-20 text-center text-muted-foreground">
+                        <TableCell colSpan={canEdit ? 9 : 8} className="h-20 text-center text-muted-foreground">
                           No ledger entries yet.
                         </TableCell>
                       </TableRow>
@@ -577,12 +796,24 @@ export default function CreditSheetPage() {
                         <TableCell className="text-right">{formatCurrency(ledgerTotals.credit, currency)}</TableCell>
                         <TableCell>{ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
                         <TableCell className="text-right">{formatCurrency(Math.abs(ledgerTotals.balance), currency)}</TableCell>
-                        <TableCell />
+                        {canEdit ? <TableCell /> : null}
                       </TableRow>
                     </TableFooter>
                   ) : null}
                 </Table>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Commitment notes &amp; images</CardTitle>
+              <CardDescription>
+                Payment promises and other commitments from this dealer, with a photo of the cheque, memo or document if you have one.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <CommitmentsPanel customer={selectedCustomer} canEdit={canEdit} />
             </CardContent>
           </Card>
         </div>
@@ -681,14 +912,22 @@ export default function CreditSheetPage() {
     )
   }
 
+  const extraColumnCount = Number(showZoneColumn) + Number(showSubZoneColumn) + Number(showDistrictColumn)
+
+  function openZones(startWithNew: boolean) {
+    setZonesStartWithNew(startWithNew)
+    setZonesOpen(true)
+  }
+
   return (
     <AdminShell active="Credit Sheet">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
-            ['Dealers', metrics.totalDealers.toLocaleString('en-BD'), 'Matching current filters'],
-            ['Total purchase', formatCurrency(metrics.purchaseTotal, currency), 'From sales history'],
-            ['Due (credit)', formatCurrency(metrics.dueTotal, currency), 'Outstanding across dealers'],
+            ['Dealers', metrics.dealers.toLocaleString('en-BD'), 'Matching current filters'],
+            ['Total purchase', formatCurrency(metrics.purchase, currency), 'From sales history'],
+            ['Paid', formatCurrency(metrics.paid, currency), 'Purchase minus outstanding due'],
+            ['Due (credit)', formatCurrency(metrics.due, currency), 'Outstanding across dealers'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
               <CardContent className="p-5">
@@ -700,16 +939,42 @@ export default function CreditSheetPage() {
           ))}
         </div>
 
+        {visibleZoneIds ? (
+          <Card className="border-border/70 bg-primary/5 shadow-sm">
+            <CardContent className="p-4 text-sm text-primary">
+              You are responsible for {zoneOptions.map((zone) => zone.name).join(', ')}. Only dealers in your zone are shown.
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {sheetFeedback ? (
+          <Card className="border-border/70 bg-primary/5 shadow-sm">
+            <CardContent className="p-4 text-sm text-primary">{sheetFeedback}</CardContent>
+          </Card>
+        ) : null}
+
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Credit sheet</CardTitle>
-              <CardDescription>Grouped by name and zone — every dealer&apos;s running account.</CardDescription>
+              <CardDescription>Every dealer&apos;s running account, with totals by zone, sub-zone (thana) or district.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handleExportXlsx}>
-                <FileSpreadsheet className="mr-1.5 h-4 w-4" />
-                Export XLSX
+              {canManageZones ? (
+                <>
+                  <Button type="button" size="sm" className="rounded-lg" onClick={() => openZones(true)}>
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    Add zone
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => openZones(false)}>
+                    <MapPinned className="mr-1.5 h-4 w-4" />
+                    Manage zones
+                  </Button>
+                </>
+              ) : null}
+              <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handlePrintSheet}>
+                <Printer className="mr-1.5 h-4 w-4" />
+                Print sheet
               </Button>
               <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handleExportPdf}>
                 <FileText className="mr-1.5 h-4 w-4" />
@@ -718,70 +983,48 @@ export default function CreditSheetPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-4 grid gap-3 rounded-2xl border border-border/70 p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-              <div className="space-y-1.5 xl:col-span-2">
+            <div className="mb-4 grid gap-3 rounded-2xl border border-border/70 p-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Search</p>
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or phone" />
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">Division</p>
+                <p className="text-xs font-medium text-muted-foreground">Zone</p>
                 <Select
-                  value={filterDivision}
+                  value={filterZone}
                   onValueChange={(value) => {
-                    setFilterDivision(value)
-                    setFilterDistrict('all')
-                    setFilterThana('all')
+                    setFilterZone(value)
+                    setFilterSubZone('all')
                   }}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="All divisions" />
+                    <SelectValue placeholder="All zones" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All divisions</SelectItem>
-                    {divisionList.map((division) => (
-                      <SelectItem key={division} value={division}>
-                        {division}
+                    <SelectItem value="all">{visibleZoneIds ? 'All my zones' : 'All zones'}</SelectItem>
+                    {zoneOptions.map((zone) => (
+                      <SelectItem key={zone.id} value={zone.id}>
+                        {zone.name}
                       </SelectItem>
                     ))}
+                    {visibleZoneIds ? null : <SelectItem value={UNASSIGNED_ZONE_ID}>{UNASSIGNED_ZONE_NAME}</SelectItem>}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">District</p>
-                <Select
-                  value={filterDistrict}
-                  disabled={filterDivision === 'all'}
-                  onValueChange={(value) => {
-                    setFilterDistrict(value)
-                    setFilterThana('all')
-                  }}
-                >
+                <p className="text-xs font-medium text-muted-foreground">Sub-zone (thana)</p>
+                <Select value={filterSubZone} onValueChange={setFilterSubZone}>
                   <SelectTrigger>
-                    <SelectValue placeholder="All districts" />
+                    <SelectValue placeholder="All sub-zones" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All districts</SelectItem>
-                    {filterDistrictOptions.map((district) => (
-                      <SelectItem key={district} value={district}>
-                        {district}
+                    <SelectItem value="all">All sub-zones</SelectItem>
+                    {subZoneOptions.options.map(([key, label]) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
                       </SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">Thana</p>
-                <Select value={filterThana} disabled={filterDistrict === 'all'} onValueChange={setFilterThana}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="All thanas" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All thanas</SelectItem>
-                    {filterThanaOptions.map((thana) => (
-                      <SelectItem key={thana} value={thana}>
-                        {thana}
-                      </SelectItem>
-                    ))}
+                    {subZoneOptions.hasNone ? <SelectItem value={NO_SUB_ZONE_FILTER}>No thana set</SelectItem> : null}
                   </SelectContent>
                 </Select>
               </div>
@@ -803,61 +1046,157 @@ export default function CreditSheetPage() {
               </div>
             </div>
 
-            {creditSheetGroups.length === 0 ? (
-              <p className="py-10 text-center text-sm text-muted-foreground">No customers match the current filters.</p>
-            ) : (
-              <div className="space-y-6">
-                {creditSheetGroups.map(({ zone, rows }) => (
-                  <div key={zone} className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{zone}</p>
-                    <div className="overflow-x-auto rounded-2xl border border-border/70">
+            <div className="mb-5 flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-muted-foreground">Totals by</p>
+              <div className="inline-flex rounded-lg border border-border/70 p-0.5" role="radiogroup" aria-label="Group totals by">
+                {GROUP_BY_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={groupBy === option.value}
+                    onClick={() => setGroupBy(option.value)}
+                    className={cn(
+                      'rounded-md px-3 py-1 text-sm font-medium transition-colors',
+                      groupBy === option.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-6 rounded-2xl border border-border/70 p-4 sm:p-6">
+              <SheetBrandHeader topLeft={sheetTopLeft} topRight={`${groupLabel}-wise`} heading="Credit Sheet" />
+
+              {creditSheetGroups.length === 0 ? (
+                <p className="py-10 text-center text-sm text-muted-foreground">No customers match the current filters.</p>
+              ) : (
+                <>
+                  {creditSheetGroups.map((group) => (
+                    <div key={group.name} className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {group.name} · {group.totals.dealers} dealers
+                      </p>
+                      <div className="overflow-x-auto rounded-xl border border-border/70">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
+                              <TableHead>SL</TableHead>
+                              <TableHead>Dealer</TableHead>
+                              <TableHead>Mobile</TableHead>
+                              {showZoneColumn ? <TableHead>Zone</TableHead> : null}
+                              {showSubZoneColumn ? <TableHead>Sub-zone</TableHead> : null}
+                              {showDistrictColumn ? <TableHead>District</TableHead> : null}
+                              <TableHead className="text-right">Total purchase</TableHead>
+                              <TableHead className="text-right">Paid</TableHead>
+                              <TableHead className="text-right">Due (credit)</TableHead>
+                              <TableHead className="text-right">Details</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {group.rows.map((row, index) => (
+                              <TableRow key={row.customer.id}>
+                                <TableCell className="text-muted-foreground">{index + 1}</TableCell>
+                                <TableCell className="font-medium">
+                                  {row.customer.name}
+                                  {row.customer.commitments && Object.values(row.customer.commitments).some((item) => item.status === 'pending') ? (
+                                    <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
+                                      Commitment
+                                    </span>
+                                  ) : null}
+                                </TableCell>
+                                <TableCell>{row.customer.phone}</TableCell>
+                                {showZoneColumn ? <TableCell>{row.zoneName}</TableCell> : null}
+                                {showSubZoneColumn ? <TableCell>{row.customer.thana || '-'}</TableCell> : null}
+                                {showDistrictColumn ? <TableCell>{row.district}</TableCell> : null}
+                                <TableCell className="text-right">{formatCurrency(row.purchaseTotal, currency)}</TableCell>
+                                <TableCell className="text-right">{formatCurrency(row.paid, currency)}</TableCell>
+                                <TableCell className="text-right font-medium text-amber-700 dark:text-amber-400">
+                                  {formatCurrency(row.customer.due, currency)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => setSelectedCustomerId(row.customer.id)}
+                                    aria-label={`View ${row.customer.name} details`}
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                          <TableFooter>
+                            <TableRow className="font-semibold">
+                              <TableCell colSpan={3 + extraColumnCount}>{group.name} total</TableCell>
+                              <TableCell className="text-right">{formatCurrency(group.totals.purchase, currency)}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(group.totals.paid, currency)}</TableCell>
+                              <TableCell className="text-right text-amber-700 dark:text-amber-400">
+                                {formatCurrency(group.totals.due, currency)}
+                              </TableCell>
+                              <TableCell />
+                            </TableRow>
+                          </TableFooter>
+                        </Table>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{groupLabel}-wise summary</p>
+                    <div className="overflow-x-auto rounded-xl border border-border/70">
                       <Table>
                         <TableHeader>
-                          <TableRow className="bg-muted/40 hover:bg-muted/40">
-                            <TableHead>SL</TableHead>
-                            <TableHead>Dealer</TableHead>
-                            <TableHead>Mobile</TableHead>
+                          <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
+                            <TableHead>{groupLabel}</TableHead>
+                            <TableHead className="text-right">Dealers</TableHead>
                             <TableHead className="text-right">Total purchase</TableHead>
                             <TableHead className="text-right">Paid</TableHead>
                             <TableHead className="text-right">Due (credit)</TableHead>
-                            <TableHead className="text-right">Details</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {rows.map(({ customer, purchaseTotal }, index) => (
-                            <TableRow key={customer.id}>
-                              <TableCell className="text-muted-foreground">{index + 1}</TableCell>
-                              <TableCell className="font-medium">{customer.name}</TableCell>
-                              <TableCell>{customer.phone}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(purchaseTotal, currency)}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(purchaseTotal - customer.due, currency)}</TableCell>
-                              <TableCell className="text-right font-medium text-amber-700 dark:text-amber-400">
-                                {formatCurrency(customer.due, currency)}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="icon"
-                                  className="h-8 w-8"
-                                  onClick={() => setSelectedCustomerId(customer.id)}
-                                  aria-label={`View ${customer.name} details`}
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
+                          {creditSheetGroups.map((group) => (
+                            <TableRow key={group.name}>
+                              <TableCell className="font-medium">{group.name}</TableCell>
+                              <TableCell className="text-right">{group.totals.dealers}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(group.totals.purchase, currency)}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(group.totals.paid, currency)}</TableCell>
+                              <TableCell className="text-right text-amber-700 dark:text-amber-400">
+                                {formatCurrency(group.totals.due, currency)}
                               </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
+                        <TableFooter>
+                          <TableRow className="font-semibold">
+                            <TableCell>Grand total</TableCell>
+                            <TableCell className="text-right">{metrics.dealers}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(metrics.purchase, currency)}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(metrics.paid, currency)}</TableCell>
+                            <TableCell className="text-right text-amber-700 dark:text-amber-400">
+                              {formatCurrency(metrics.due, currency)}
+                            </TableCell>
+                          </TableRow>
+                        </TableFooter>
                       </Table>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
+
+      {canManageZones ? (
+        <ZoneManagerDialog open={zonesOpen} onOpenChange={setZonesOpen} startWithNewZone={zonesStartWithNew} />
+      ) : null}
     </AdminShell>
   )
 }

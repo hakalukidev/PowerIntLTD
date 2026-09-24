@@ -11,12 +11,15 @@ export type RoleRecord = {
   name: string
   description: string
   permissions: string[]
+  /** Zones this role is limited to. Users with the role only see those zones' customers. Empty means no limit. */
+  zoneIds?: string[]
 }
 
 export type RoleInput = {
   name: string
   description?: string
   permissions: string[]
+  zoneIds?: string[]
 }
 
 /**
@@ -86,8 +89,65 @@ export type CustomerRecord = {
   tradeLicenseCopyPublicId: string
   passportPhotoUrl: string
   passportPhotoPublicId: string
+  bankDocumentUrl: string
+  bankDocumentPublicId: string
+  dealerPhotoUrl: string
+  dealerPhotoPublicId: string
+  signatureUrl: string
+  signaturePublicId: string
+  /** Explicit zone. When empty the zone is resolved from the customer's district. */
+  zoneId?: string
+  commitments?: Record<string, CustomerCommitment>
   createdAt: string
   updatedAt: string
+}
+
+export type CustomerCommitmentStatus = 'pending' | 'fulfilled'
+
+export type CustomerCommitment = {
+  id: string
+  note: string
+  dueDate: string
+  status: CustomerCommitmentStatus
+  imageUrl?: string
+  imagePublicId?: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type CustomerCommitmentInput = {
+  note: string
+  dueDate?: string
+  status?: CustomerCommitmentStatus
+  imageUrl?: string
+  imagePublicId?: string
+}
+
+/** A thana inside a zone. Thana names repeat across districts (e.g. "Sadar"), so both are kept. */
+export type ZoneArea = {
+  district: string
+  thana: string
+}
+
+export type ZoneRecord = {
+  id: string
+  name: string
+  /** Sub-zones: customers in these thanas fall into the zone unless assigned elsewhere. */
+  thanas: ZoneArea[]
+  /** Legacy whole-district coverage from before zones were split into thanas. */
+  districts: string[]
+  /** Users responsible for the zone. They only see this zone's customers on the credit sheet. */
+  managerIds: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type ZoneInput = {
+  name: string
+  thanas?: ZoneArea[]
+  districts?: string[]
+  managerIds?: string[]
 }
 
 export type ProductStatus = 'active' | 'low-stock' | 'out-of-stock'
@@ -295,6 +355,7 @@ export type ERPData = {
   warehouses: Record<string, WarehouseRecord>
   suppliers: Record<string, SupplierRecord>
   customers: Record<string, CustomerRecord>
+  zones: Record<string, ZoneRecord>
   products: Record<string, ProductRecord>
   orders: Record<string, OrderRecord>
   purchases: Record<string, PurchaseRecord>
@@ -379,6 +440,13 @@ export type CustomerInput = {
   tradeLicenseCopyPublicId?: string
   passportPhotoUrl?: string
   passportPhotoPublicId?: string
+  bankDocumentUrl?: string
+  bankDocumentPublicId?: string
+  dealerPhotoUrl?: string
+  dealerPhotoPublicId?: string
+  signatureUrl?: string
+  signaturePublicId?: string
+  zoneId?: string
 }
 
 export type SupplierInput = {

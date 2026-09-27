@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { Check, Edit, MapPin, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
+import { Check, Edit, MapPin, Package, Phone, Plus, Search, Ship, Trash2, X } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierInput, SupplierRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, getProductStatus, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SupplierFormState = {
@@ -45,6 +45,7 @@ type SupplierFormState = {
   otherCost: string
   currency: string
   notes: string
+  suppliedProducts: string[]
 }
 
 const emptySupplierForm: SupplierFormState = {
@@ -63,6 +64,7 @@ const emptySupplierForm: SupplierFormState = {
   otherCost: '0',
   currency: 'BDT',
   notes: '',
+  suppliedProducts: [],
 }
 
 const supplierTypeLabels: Record<SupplierRecord['supplierType'], string> = {
@@ -114,6 +116,26 @@ function lcToneClass(status: SupplierRecord['lcStatus']) {
   return 'border-border bg-muted text-muted-foreground'
 }
 
+const productStatusLabels: Record<ReturnType<typeof getProductStatus>, string> = {
+  active: 'In stock',
+  'low-stock': 'Low stock',
+  'out-of-stock': 'Out of stock',
+}
+
+function productStatusClass(status: ReturnType<typeof getProductStatus>) {
+  if (status === 'active') {
+    return 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300'
+  }
+
+  if (status === 'low-stock') {
+    return 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
+  }
+
+  return 'border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300'
+}
+
+const MAX_PRODUCT_MATCHES = 6
+
 function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
   return {
     name: supplier.name,
@@ -131,6 +153,7 @@ function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
     otherCost: String(supplier.otherCost),
     currency: supplier.currency,
     notes: supplier.notes,
+    suppliedProducts: supplier.suppliedProducts,
   }
 }
 
@@ -146,6 +169,7 @@ export default function SuppliersPage() {
   const [editingSupplier, setEditingSupplier] = useState<SupplierRecord | null>(null)
   const [supplierForm, setSupplierForm] = useState<SupplierFormState>(emptySupplierForm)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [productDraft, setProductDraft] = useState('')
 
   const supplierRows = useMemo(() => {
     return suppliers
@@ -158,12 +182,13 @@ export default function SuppliersPage() {
         // Everything this supplier has supplied, so searching a product finds its supplier.
         const productTerms = Array.from(
           new Set([
+            ...supplier.suppliedProducts,
             ...supplierProducts.flatMap((product) => [product.name, product.sku, product.brand]),
             ...supplierPurchases.map((purchase) => purchase.productName),
           ].filter(Boolean))
         )
         const productNames = Array.from(
-          new Set([...supplierProducts.map((product) => product.name), ...supplierPurchases.map((purchase) => purchase.productName)].filter(Boolean))
+          new Set([...supplier.suppliedProducts, ...supplierProducts.map((product) => product.name), ...supplierPurchases.map((purchase) => purchase.productName)].filter(Boolean))
         )
 
         return {
@@ -207,6 +232,80 @@ export default function SuppliersPage() {
     })
   }, [query, supplierRows, typeFilter])
 
+  // Searching a product name shows that product's full details above the supplier table.
+  const productMatches = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery) {
+      return []
+    }
+
+    const warehouses = data?.warehouses ?? {}
+    const catalogMatches = products
+      .filter((product) =>
+        [product.name, product.sku, product.brand, product.category, product.serialNumber ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery)
+      )
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((product) => {
+        const productName = product.name.toLowerCase()
+        const productPurchases = purchases
+          .filter((purchase) => purchase.productId === product.id)
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        const supplierNames = Array.from(
+          new Set(
+            [
+              data?.suppliers[product.supplierId]?.name,
+              ...productPurchases.map((purchase) => data?.suppliers[purchase.supplierId]?.name ?? purchase.supplierName),
+              ...suppliers
+                .filter((supplier) => supplier.suppliedProducts.some((name) => name.toLowerCase() === productName))
+                .map((supplier) => supplier.name),
+            ].filter((name): name is string => Boolean(name))
+          )
+        )
+
+        return {
+          key: product.id,
+          name: product.name,
+          product,
+          status: getProductStatus(product.stockQty, product.minStock),
+          warehouseName: warehouses[product.warehouseId]?.name ?? '',
+          supplierNames,
+          purchaseCount: productPurchases.length,
+          purchasedQty: productPurchases.reduce((sum, purchase) => sum + purchase.quantity, 0),
+          lastPurchase: productPurchases[0],
+        }
+      })
+
+    // Products typed on a supplier's form that are not in the product list yet.
+    const catalogNames = new Set(products.map((product) => product.name.toLowerCase()))
+    const namedOnlyMatches = Array.from(
+      suppliers
+        .flatMap((supplier) => supplier.suppliedProducts.map((name) => ({ name, supplierName: supplier.name })))
+        .filter(({ name }) => name.toLowerCase().includes(normalizedQuery) && !catalogNames.has(name.toLowerCase()))
+        .reduce((groups, { name, supplierName }) => {
+          const key = name.toLowerCase()
+          const group = groups.get(key) ?? { name, supplierNames: [] as string[] }
+          if (!group.supplierNames.includes(supplierName)) group.supplierNames.push(supplierName)
+          return groups.set(key, group)
+        }, new Map<string, { name: string; supplierNames: string[] }>())
+        .values()
+    ).map((group) => ({
+      key: `named:${group.name.toLowerCase()}`,
+      name: group.name,
+      product: null,
+      status: null,
+      warehouseName: '',
+      supplierNames: group.supplierNames,
+      purchaseCount: 0,
+      purchasedQty: 0,
+      lastPurchase: undefined,
+    }))
+
+    return [...catalogMatches, ...namedOnlyMatches]
+  }, [data?.suppliers, data?.warehouses, products, purchases, query, suppliers])
+
   const metrics = useMemo(() => {
     return {
       suppliers: suppliers.length,
@@ -224,6 +323,32 @@ export default function SuppliersPage() {
     [suppliers]
   )
 
+  const productNameOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([...products.map((product) => product.name), ...suppliers.flatMap((supplier) => supplier.suppliedProducts)].filter(Boolean))
+      ).sort((left, right) => left.localeCompare(right)),
+    [products, suppliers]
+  )
+
+  function addSuppliedProduct() {
+    const name = productDraft.trim()
+    if (!name) {
+      return
+    }
+
+    setSupplierForm((current) =>
+      current.suppliedProducts.some((existing) => existing.toLowerCase() === name.toLowerCase())
+        ? current
+        : { ...current, suppliedProducts: [...current.suppliedProducts, name] }
+    )
+    setProductDraft('')
+  }
+
+  function removeSuppliedProduct(name: string) {
+    setSupplierForm((current) => ({ ...current, suppliedProducts: current.suppliedProducts.filter((existing) => existing !== name) }))
+  }
+
   const previewLandedCost =
     Number(supplierForm.productCost || 0) +
     Number(supplierForm.shippingCost || 0) +
@@ -233,6 +358,7 @@ export default function SuppliersPage() {
   function openCreateDialog() {
     setEditingSupplier(null)
     setSupplierForm(emptySupplierForm)
+    setProductDraft('')
     setFeedback(null)
     setDialogOpen(true)
   }
@@ -240,6 +366,7 @@ export default function SuppliersPage() {
   function openEditDialog(supplier: SupplierRecord) {
     setEditingSupplier(supplier)
     setSupplierForm(formFromSupplier(supplier))
+    setProductDraft('')
     setFeedback(null)
     setDialogOpen(true)
   }
@@ -264,6 +391,8 @@ export default function SuppliersPage() {
       otherCost: Number(supplierForm.otherCost),
       currency: supplierForm.currency,
       notes: supplierForm.notes,
+      // A product typed but not yet added with the button still counts.
+      suppliedProducts: [...supplierForm.suppliedProducts, productDraft],
     }
 
     try {
@@ -313,6 +442,7 @@ export default function SuppliersPage() {
           otherCost: supplier.otherCost,
           currency: supplier.currency,
           notes: supplier.notes,
+          suppliedProducts: supplier.suppliedProducts,
         },
         supplier.id
       )
@@ -325,7 +455,7 @@ export default function SuppliersPage() {
   return (
     <AdminShell active="Suppliers & Imports">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Suppliers', metrics.suppliers.toLocaleString('en-BD'), 'Local, foreign, and importers'],
             ['Import partners', metrics.importPartners.toLocaleString('en-BD'), 'Foreign suppliers and importers'],
@@ -333,9 +463,9 @@ export default function SuppliersPage() {
             ['Import charges', formatCurrency(metrics.importCharges, currency), 'Shipping, customs, and handling'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -348,14 +478,92 @@ export default function SuppliersPage() {
           </Card>
         ) : null}
 
+        {productMatches.length ? (
+          <Card className="border-border/70 shadow-sm">
+            <CardHeader>
+              <CardTitle>Matching products</CardTitle>
+              <CardDescription>
+                {productMatches.length > MAX_PRODUCT_MATCHES
+                  ? `Showing ${MAX_PRODUCT_MATCHES} of ${productMatches.length} products matching "${query.trim()}". Type more of the name to narrow it down.`
+                  : `Products matching "${query.trim()}", with stock, prices, and who supplies them.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 lg:grid-cols-2">
+              {productMatches.slice(0, MAX_PRODUCT_MATCHES).map(({ key, name, product, status, warehouseName, supplierNames, purchaseCount, purchasedQty, lastPurchase }) => (
+                <div key={key} className="space-y-3 rounded-2xl border border-border/70 p-4">
+                  <div className="flex items-start gap-3">
+                    {product?.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={product.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-lg border border-border/70 object-cover" />
+                    ) : (
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40">
+                        <Package className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold">{name}</p>
+                        {status ? (
+                          <Badge variant="outline" className={cn('rounded-full', productStatusClass(status))}>
+                            {productStatusLabels[status]}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="rounded-full text-muted-foreground">Not in product list</Badge>
+                        )}
+                      </div>
+                      {product ? (
+                        <p className="text-sm text-muted-foreground">
+                          {[product.brand, product.category, product.sku ? `SKU ${product.sku}` : ''].filter(Boolean).join(' · ')}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {product ? (
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+                      {[
+                        ['Stock', `${product.stockQty.toLocaleString('en-BD')} (min ${product.minStock}, max ${product.maxStock})`],
+                        ['Warehouse', warehouseName || 'N/A'],
+                        ['Warranty', product.warrantyMonths ? `${product.warrantyMonths} months` : 'None'],
+                        ['Purchase price', formatCurrency(product.purchasePrice, currency)],
+                        ['Selling price', formatCurrency(product.sellingPrice, currency)],
+                        ['Wholesale price', formatCurrency(product.wholesalePrice, currency)],
+                        ['Purchases', `${purchaseCount} (${purchasedQty.toLocaleString('en-BD')} units)`],
+                        [
+                          'Last purchase',
+                          lastPurchase
+                            ? `${formatDate(lastPurchase.createdAt)} · ${formatCurrency(lastPurchase.unitCost, lastPurchase.currency)}/unit`
+                            : 'None yet',
+                        ],
+                        ...(product.serialNumber ? [['Serial no.', product.serialNumber]] : []),
+                      ].map(([label, value]) => (
+                        <div key={label}>
+                          <p className="text-xs text-muted-foreground">{label}</p>
+                          <p className="font-medium">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="text-sm">
+                    <p className="text-xs text-muted-foreground">Supplied by</p>
+                    <p className="font-medium">{supplierNames.length ? supplierNames.join(', ') : 'No supplier recorded'}</p>
+                  </div>
+                  {product?.description ? <p className="text-xs text-muted-foreground">{product.description}</p> : null}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Supplier and import data table</CardTitle>
               <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location.</CardDescription>
             </div>
-            <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_190px_auto]">
-              <div className="relative">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(220px,1fr)_190px_auto]">
+              <div className="relative col-span-2 sm:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
@@ -409,9 +617,9 @@ export default function SuppliersPage() {
                             const normalizedQuery = query.trim().toLowerCase()
                             const matched = normalizedQuery
                               ? productNames.filter((name) => name.toLowerCase().includes(normalizedQuery))
-                              : []
+                              : supplier.suppliedProducts
                             return matched.length ? (
-                              <p className="mt-2 text-xs text-primary">Supplies: {matched.join(', ')}</p>
+                              <p className="mt-2 max-w-64 text-xs text-primary">Supplies: {matched.join(', ')}</p>
                             ) : null
                           })()}
                         </div>
@@ -562,6 +770,56 @@ export default function SuppliersPage() {
                   </datalist>
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-border/70 p-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Products supplied <span className="font-normal normal-case">(optional)</span>
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Pick an existing product or type a new name, then press Add.</p>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  list="supplier-product-options"
+                  value={productDraft}
+                  onChange={(event) => setProductDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      addSuppliedProduct()
+                    }
+                  }}
+                  placeholder="e.g. 12V Car Battery"
+                />
+                <datalist id="supplier-product-options">
+                  {productNameOptions.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                <Button type="button" variant="outline" className="rounded-xl" onClick={addSuppliedProduct} disabled={!productDraft.trim()}>
+                  <Plus className="mr-1 h-4 w-4" />
+                  Add
+                </Button>
+              </div>
+              {supplierForm.suppliedProducts.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {supplierForm.suppliedProducts.map((name) => (
+                    <Badge key={name} variant="outline" className="gap-1 rounded-full py-1 pl-2.5 pr-1 text-sm font-normal">
+                      <Package className="h-3.5 w-3.5 text-muted-foreground" />
+                      {name}
+                      <button
+                        type="button"
+                        className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => removeSuppliedProduct(name)}
+                        aria-label={`Remove ${name}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-4 rounded-2xl border border-border/70 p-4">

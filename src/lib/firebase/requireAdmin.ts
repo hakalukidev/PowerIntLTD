@@ -1,3 +1,5 @@
+import { resolveRoles } from '@/lib/erp/roles'
+import type { RoleRecord } from '@/lib/erp/types'
 import { getAdminAuth, getAdminDatabase } from '@/lib/firebase/admin'
 
 export class AuthorizationError extends Error {
@@ -42,8 +44,9 @@ export async function requirePermission(request: Request, permission: string) {
     throw new AuthorizationError('This account is inactive.', 403)
   }
 
-  const roleSnapshot = await db.ref(`erp/roles/${caller.roleId}/permissions`).get()
-  const permissions = (roleSnapshot.val() as string[] | null) ?? []
+  // Resolved the same way as in the app: built-in roles, legacy permission ids, and admin = everything.
+  const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
+  const permissions = (caller.roleId && roles[caller.roleId]?.permissions) || []
 
   if (!permissions.includes(permission)) {
     throw new AuthorizationError('You do not have permission to do that.', 403)

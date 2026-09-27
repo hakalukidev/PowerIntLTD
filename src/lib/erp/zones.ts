@@ -1,14 +1,14 @@
-import type { CustomerRecord, RoleRecord, UserRecord, ZoneRecord } from './types'
+import type { CustomerRecord, ERPData, RoleRecord, UserRecord, ZoneRecord } from './types'
 
 export const UNASSIGNED_ZONE_ID = 'unassigned'
 export const UNASSIGNED_ZONE_NAME = 'Unassigned zone'
 
-export const NO_SUB_ZONE_NAME = 'No thana'
+export const NO_SUB_ZONE_NAME = 'No sub-zone'
 
 /**
- * A customer's zone is the one they were explicitly assigned to; otherwise the
- * zone that has the customer's thana as a sub-zone (or, for older zones, covers
- * the whole district).
+ * A dealer's zone is the one they were explicitly assigned to; otherwise the
+ * zone that has the dealer's sub-zone (or, for older zones, covers the whole
+ * district saved on older dealers).
  */
 export function resolveCustomerZone(customer: CustomerRecord, zones: ZoneRecord[]): ZoneRecord | null {
   if (customer.zoneId) {
@@ -30,14 +30,30 @@ export function resolveCustomerZone(customer: CustomerRecord, zones: ZoneRecord[
   return zones.find((zone) => zone.districts.includes(customer.district)) ?? null
 }
 
-/** Unique key of a customer's sub-zone (thana), since thana names repeat across districts. */
-export function subZoneKey(customer: CustomerRecord) {
-  return customer.thana ? `${customer.district}|${customer.thana}` : ''
+const normalizeName = (name: string) => name.trim().toLowerCase()
+
+/** The sub-zone names an admin set up for a zone, in the order they were added. */
+export function zoneSubZones(zone: ZoneRecord | null | undefined): string[] {
+  const seen = new Set<string>()
+  return (zone?.thanas ?? [])
+    .map((area) => area.thana.trim())
+    .filter((name) => name && !seen.has(normalizeName(name)) && seen.add(normalizeName(name)))
+}
+
+/**
+ * Key of a dealer's sub-zone. The same sub-zone name can exist in two zones, so the
+ * zone is part of the key. Dealers are stored with the sub-zone name in `thana`.
+ */
+export function subZoneKey(customer: CustomerRecord, zones: ZoneRecord[]) {
+  return customer.thana ? subZoneKeyFor(customerZoneId(customer, zones), customer.thana) : ''
+}
+
+export function subZoneKeyFor(zoneId: string, subZone: string) {
+  return `${zoneId}|${normalizeName(subZone)}`
 }
 
 export function subZoneLabel(customer: CustomerRecord) {
-  if (!customer.thana) return NO_SUB_ZONE_NAME
-  return customer.district ? `${customer.thana} (${customer.district})` : customer.thana
+  return customer.thana?.trim() || NO_SUB_ZONE_NAME
 }
 
 export function customerZoneId(customer: CustomerRecord, zones: ZoneRecord[]) {
@@ -71,4 +87,36 @@ export function filterCustomersForUser(
   const visible = visibleZoneIdsFor(user, zones, role)
   if (!visible) return customers
   return customers.filter((customer) => visible.has(customerZoneId(customer, zones)))
+}
+
+function pickRecords<T>(records: Record<string, T>, keep: (record: T) => boolean) {
+  return Object.fromEntries(Object.entries(records ?? {}).filter(([, record]) => keep(record)))
+}
+
+/**
+ * The ERP data as a zone-limited user may see it: only their zones' customers,
+ * the orders, credit ledger entries, and courier parcels of those customers,
+ * and their zones' damage reports. Users who are not limited to zones get the data unchanged.
+ */
+export function scopeDataToUserZones(data: ERPData, user: UserRecord | null): ERPData {
+  const zones = Object.values(data.zones ?? {})
+  const visible = visibleZoneIdsFor(user, zones, user ? data.roles[user.roleId] : null)
+  if (!visible) return data
+
+  const customers = pickRecords(data.customers, (customer) => visible.has(customerZoneId(customer, zones)))
+  const zoneNames = new Set(zones.filter((zone) => visible.has(zone.id)).map((zone) => normalizeName(zone.name)))
+  const customerNames = new Set(Object.values(customers).map((customer) => customer.name.trim().toLowerCase()))
+
+  return {
+    ...data,
+    customers,
+    orders: pickRecords(data.orders, (order) => Boolean(customers[order.customerId])),
+    creditLedgerEntries: pickRecords(data.creditLedgerEntries, (entry) => Boolean(customers[entry.customerId])),
+    // Older parcels were saved with only the customer's name.
+    couriers: pickRecords(data.couriers, (courier) =>
+      courier.customerId ? Boolean(customers[courier.customerId]) : customerNames.has(courier.customerName.trim().toLowerCase())
+    ),
+    // Damage reports name their zone rather than linking to it.
+    damageProducts: pickRecords(data.damageProducts, (record) => zoneNames.has(normalizeName(record.zone ?? ''))),
+  }
 }

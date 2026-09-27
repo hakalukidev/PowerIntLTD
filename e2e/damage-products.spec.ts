@@ -20,6 +20,26 @@ async function selectRadixOption(page: Page, triggerSelector: string, optionText
   await page.waitForTimeout(300)
 }
 
+/**
+ * Zones are created by an admin, so the tests use whatever zones exist:
+ * opens the zone select and picks the option at `index` (skipping "All zones").
+ */
+async function selectZoneByIndex(page: Page, triggerSelector: string, index: number) {
+  await page.click(triggerSelector)
+  const options = page.getByRole('option').filter({ hasNotText: /^All zones$/ })
+  await options.first().waitFor({ state: 'visible' })
+  const count = await options.count()
+  if (count <= index) {
+    await page.keyboard.press('Escape')
+    return null
+  }
+  const option = options.nth(index)
+  const name = (await option.innerText()).trim()
+  await option.click()
+  await page.waitForTimeout(300)
+  return name
+}
+
 async function deleteAllMatching(page: Page, productName: string) {
   let remaining = await page.locator(`tr:has-text("${productName}")`).count()
   while (remaining > 0) {
@@ -64,7 +84,8 @@ test.describe('Damage Products', () => {
 
         await page.fill('input[placeholder="e.g. Two Post Service Lift"]', productName)
         await page.fill('input[type="number"]', '3')
-        await selectRadixOption(page, 'button:has-text("Select zone")', 'Rangpur')
+        const zoneName = await selectZoneByIndex(page, 'button:has-text("Select zone")', 0)
+        test.skip(!zoneName, 'Create at least one zone to run this test.')
 
         await page.fill(
           'input[placeholder="e.g. Hydraulic cylinder leak found during unboxing"]',
@@ -77,7 +98,7 @@ test.describe('Damage Products', () => {
         const row = page.locator(`tr:has-text("${productName}")`)
         await expect(row).toBeVisible()
         await expect(row).toContainText('3')
-        await expect(row).toContainText('Rangpur')
+        await expect(row).toContainText(zoneName!)
         await expect(row).toContainText('Pending at zone')
       })
 
@@ -117,22 +138,25 @@ test.describe('Damage Products', () => {
     await loginAsAdmin(page)
     await gotoViaSidebar(page, 'Damage Products', '**/admin/damage-products')
 
+    let otherZone: string | null = null
     try {
-      await test.step('report a damage product in Khulna zone', async () => {
+      await test.step('report a damage product in the first zone', async () => {
         await page.click('button:has-text("Report damage")')
         await page.fill('input[placeholder="e.g. Two Post Service Lift"]', productName)
-        await selectRadixOption(page, 'button:has-text("Select zone")', 'Khulna')
+        const zoneName = await selectZoneByIndex(page, 'button:has-text("Select zone")', 0)
+        test.skip(!zoneName, 'Create at least one zone to run this test.')
         await page.click('button:has-text("Save report")')
         await expect(page.getByText('New damage product reported.')).toBeVisible()
       })
 
       await test.step('filtering to a different zone hides the record', async () => {
-        await selectRadixOption(page, 'button:has-text("All zones")', 'Sylhet')
+        otherZone = await selectZoneByIndex(page, 'button:has-text("All zones")', 1)
+        test.skip(!otherZone, 'Create at least two zones to run this test.')
         await expect(page.locator(`tr:has-text("${productName}")`)).toHaveCount(0)
       })
 
       await test.step('resetting to all zones shows the record again', async () => {
-        await selectRadixOption(page, 'button:has-text("Sylhet")', 'All zones')
+        await selectRadixOption(page, `button:has-text("${otherZone}")`, 'All zones')
         await expect(page.locator(`tr:has-text("${productName}")`)).toBeVisible()
       })
     } finally {

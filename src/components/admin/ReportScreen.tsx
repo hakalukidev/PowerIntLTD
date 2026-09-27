@@ -188,6 +188,8 @@ export function ReportScreen() {
           <title>${escapeHtml(reportTitle)}</title>
           <style>
             * { box-sizing: border-box; }
+            /* No page margin, so the browser does not print its own title and URL on the page. */
+            @page { margin: 0; }
             body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 24px; }
             h1 { font-size: 22px; margin: 0; }
             p { color: #4b5563; font-size: 12px; margin: 6px 0 0; }
@@ -196,7 +198,7 @@ export function ReportScreen() {
             th, td { border: 1px solid #d1d5db; padding: 8px; }
             td { font-size: 12px; vertical-align: top; }
             .numeric { text-align: right; }
-            @media print { body { padding: 12px; } }
+            @media print { body { padding: 12mm; } }
           </style>
         </head>
         <body>
@@ -408,12 +410,12 @@ export function ReportScreen() {
         </Card>
 
         {summaries.length > 0 ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {summaries.map(({ column, total }) => (
               <Card key={column.key} className="border-border/70 shadow-sm">
-                <CardContent className="p-5">
+                <CardContent className="p-4 sm:p-5">
                   <p className="text-sm text-muted-foreground">Total {column.label}</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">
+                  <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">
                     {formatReportValue(column, total, currency ?? 'BDT')}
                   </p>
                 </CardContent>

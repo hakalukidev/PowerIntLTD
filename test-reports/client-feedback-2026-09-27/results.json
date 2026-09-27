@@ -1,0 +1,1741 @@
+{
+  "config": {
+    "argv": [
+      "/usr/bin/node",
+      "/home/syed-rafiul-islam-rakat/PowerIntLTD/node_modules/.bin/playwright",
+      "test",
+      "--reporter=list,json"
+    ],
+    "configFile": "/home/syed-rafiul-islam-rakat/PowerIntLTD/playwright.config.ts",
+    "rootDir": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/home/syed-rafiul-islam-rakat/PowerIntLTD/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.63.0",
+    "workers": 1,
+    "webServer": {
+      "command": "npm run dev",
+      "url": "http://localhost:3100",
+      "reuseExistingServer": true,
+      "timeout": 60000
+    }
+  },
+  "suites": [
+    {
+      "title": "credit-sheet-pdf.spec.ts",
+      "file": "credit-sheet-pdf.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Credit sheet PDF",
+          "file": "credit-sheet-pdf.spec.ts",
+          "line": 77,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-02.1 Export PDF saves an A4 PDF laid out like the printed sheet",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "credit-sheet-screen.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Exported credit-sheet.pdf: A4 portrait, 1 page(s), with logo heading, zone tables, totals and grand total."
+                    },
+                    {
+                      "type": "note",
+                      "description": "Grand total row is identical in Export PDF and Print sheet: \"Grand total 10 BDT 7,600 BDT 2,000 BDT 64,100\"."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3185,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        },
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:11.967Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "credit-sheet-screen.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Exported credit-sheet.pdf: A4 portrait, 1 page(s), with logo heading, zone tables, totals and grand total."
+                        },
+                        {
+                          "type": "note",
+                          "description": "Grand total row is identical in Export PDF and Print sheet: \"Grand total 10 BDT 7,600 BDT 2,000 BDT 64,100\"."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f1102c2f4f09ce29b9c6-4a9b9d19eb46ce554d67",
+              "file": "credit-sheet-pdf.spec.ts",
+              "line": 78,
+              "column": 7
+            },
+            {
+              "title": "TC-03.1 the exported credit sheet PDF has no stray header text",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "First lines of the PDF: \"POWER INTERNATIONAL BD\", \"CREDIT SHEET\" — nothing above the company heading."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2991,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:16.618Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "First lines of the PDF: \"POWER INTERNATIONAL BD\", \"CREDIT SHEET\" — nothing above the company heading."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f1102c2f4f09ce29b9c6-8d4afa00664335b49c45",
+              "file": "credit-sheet-pdf.spec.ts",
+              "line": 108,
+              "column": 7
+            },
+            {
+              "title": "TC-03.2 Print sheet asks the browser for no page margin, so it has no room for its title/URL",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "The stray text is the browser's own print header (\"Credit Sheet\", date, about:blank). Print sheet now sets a zero page margin, which Chrome and Edge on desktop honour by leaving the header out. Some phone browsers and Firefox ignore it, so files should be saved with Export PDF / Download PDF, which never go through the print dialog."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2742,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:19.617Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "The stray text is the browser's own print header (\"Credit Sheet\", date, about:blank). Print sheet now sets a zero page margin, which Chrome and Edge on desktop honour by leaving the header out. Some phone browsers and Firefox ignore it, so files should be saved with Export PDF / Download PDF, which never go through the print dialog."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f1102c2f4f09ce29b9c6-2e9dde1d1483a82b4034",
+              "file": "credit-sheet-pdf.spec.ts",
+              "line": 120,
+              "column": 7
+            },
+            {
+              "title": "TC-03.3 a dealer's own ledger downloads as a PDF with no stray header text",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "dealer-ledger-screen.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Downloaded ledger-E2E-PDF-Dealer-1790509031955.pdf directly (no print dialog): starts with the company heading, no title, date or URL."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2908,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:22.369Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "dealer-ledger-screen.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Downloaded ledger-E2E-PDF-Dealer-1790509031955.pdf directly (no print dialog): starts with the company heading, no title, date or URL."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f1102c2f4f09ce29b9c6-fb32e3b36651b547de01",
+              "file": "credit-sheet-pdf.spec.ts",
+              "line": 135,
+              "column": 7
+            },
+            {
+              "title": "TC-03.4 a dealer's form from the CRM downloads as a PDF with no stray header text",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "Downloaded dealer-form-E2E-PDF-Dealer-1790509031955.pdf directly (no print dialog), with no title, date or URL on it."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3606,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:25.289Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "Downloaded dealer-form-E2E-PDF-Dealer-1790509031955.pdf directly (no print dialog), with no title, date or URL on it."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f1102c2f4f09ce29b9c6-3e28126af31a39310769",
+              "file": "credit-sheet-pdf.spec.ts",
+              "line": 156,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "crm-dealers.spec.ts",
+      "file": "crm-dealers.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Dealers (CRM)",
+          "file": "crm-dealers.spec.ts",
+          "line": 46,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-01.1 the dealer list has Zone and Sub-zone filters listing every zone",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "Zone filter options: All zones, Chattogram Zone, Dhaka Zone, Rajshahi Zone, Unassigned zone."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "crm-zone-filter-open.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2850,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:29.037Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "Zone filter options: All zones, Chattogram Zone, Dhaka Zone, Rajshahi Zone, Unassigned zone."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "crm-zone-filter-open.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "292cbbc70c4276a9e88b-f83df34f9821b6ad5b57",
+              "file": "crm-dealers.spec.ts",
+              "line": 47,
+              "column": 7
+            },
+            {
+              "title": "TC-01.2 filtering by zone and sub-zone shows only that zone's dealers",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "crm-filtered-by-zone.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Sub-zone filter \"Agrabad\" kept the dealer in that sub-zone."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 5639,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:33.138Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "crm-filtered-by-zone.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Sub-zone filter \"Agrabad\" kept the dealer in that sub-zone."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "292cbbc70c4276a9e88b-dafff967c1bbbc4fa65c",
+              "file": "crm-dealers.spec.ts",
+              "line": 65,
+              "column": 7
+            },
+            {
+              "title": "TC-01.3 a dealer added with a zone and sub-zone appears under that zone",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "crm-add-dealer-form.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Dealer saved in Chattogram Zone / Agrabad and listed under that zone filter."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 6074,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:38.785Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "crm-add-dealer-form.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Dealer saved in Chattogram Zone / Agrabad and listed under that zone filter."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "292cbbc70c4276a9e88b-db6e74d8782fb25cb8a9",
+              "file": "crm-dealers.spec.ts",
+              "line": 107,
+              "column": 7
+            },
+            {
+              "title": "TC-04.1 the CRM speaks of dealers, not customers",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "No \"Customer\" wording found on the dealer list or the Add dealer form."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "crm-dealer-wording.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3041,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:44.868Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "No \"Customer\" wording found on the dealer list or the Add dealer form."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "crm-dealer-wording.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "292cbbc70c4276a9e88b-01402bf3e93e25eb2f03",
+              "file": "crm-dealers.spec.ts",
+              "line": 150,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "damage-products.spec.ts",
+      "file": "damage-products.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Damage Products",
+          "file": "damage-products.spec.ts",
+          "line": 53,
+          "column": 6,
+          "specs": [
+            {
+              "title": "saving without a zone shows an error inside the dialog instead of silently failing",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3064,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:37:47.928Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "316999750b9a92259ab1-90a31194f9a00ba29988",
+              "file": "damage-products.spec.ts",
+              "line": 54,
+              "column": 7
+            },
+            {
+              "title": "report, track status, edit, and delete a damage product",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 5979,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "steps": [
+                        {
+                          "title": "report a new damage product",
+                          "duration": 1053
+                        },
+                        {
+                          "title": "advance status to Sent to main office",
+                          "duration": 1214
+                        },
+                        {
+                          "title": "edit the record",
+                          "duration": 527
+                        },
+                        {
+                          "title": "clean up: delete the test record(s)",
+                          "duration": 459
+                        }
+                      ],
+                      "startTime": "2026-09-27T11:37:50.999Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "316999750b9a92259ab1-06e9b975517a94fe2021",
+              "file": "damage-products.spec.ts",
+              "line": 73,
+              "column": 7
+            },
+            {
+              "title": "zone filter narrows the table to matching records",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 5206,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "steps": [
+                        {
+                          "title": "report a damage product in the first zone",
+                          "duration": 1306
+                        },
+                        {
+                          "title": "filtering to a different zone hides the record",
+                          "duration": 722
+                        },
+                        {
+                          "title": "resetting to all zones shows the record again",
+                          "duration": 600
+                        },
+                        {
+                          "title": "clean up: delete the test record",
+                          "duration": 231
+                        }
+                      ],
+                      "startTime": "2026-09-27T11:37:56.985Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "316999750b9a92259ab1-1b23721b79530101dffe",
+              "file": "damage-products.spec.ts",
+              "line": 135,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "login.spec.ts",
+      "file": "login.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Login",
+          "file": "login.spec.ts",
+          "line": 11,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-L.1 one click on \"Enter dashboard\" signs in and opens the dashboard",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "Dashboard opened 2315 ms after a single click."
+                    },
+                    {
+                      "type": "note",
+                      "description": "Button states seen after the click: Signing in...."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "login-dashboard-after-one-click.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2660,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:02.202Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "Dashboard opened 2315 ms after a single click."
+                        },
+                        {
+                          "type": "note",
+                          "description": "Button states seen after the click: Signing in...."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "login-dashboard-after-one-click.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-6234574049dbf9d244dd",
+              "file": "login.spec.ts",
+              "line": 12,
+              "column": 7
+            },
+            {
+              "title": "TC-L.2 browser-autofilled email and password still sign in on the first click",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2508,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:04.870Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-093c445dedaaaf4ee71a",
+              "file": "login.spec.ts",
+              "line": 44,
+              "column": 7
+            },
+            {
+              "title": "TC-L.3 a wrong password shows an error and the button can be used again",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "login-wrong-password.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1307,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:07.385Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "login-wrong-password.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "41d3fd2474a19feb00a1-625e09f7dc2ca5a01da0",
+              "file": "login.spec.ts",
+              "line": 62,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "mobile.spec.ts",
+      "file": "mobile.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Mobile layout",
+          "file": "mobile.spec.ts",
+          "line": 24,
+          "column": 6,
+          "specs": [
+            {
+              "title": "TC-08.1 every main screen fits the phone width without sideways scrolling",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "Phone viewport: 412×839 (Pixel 7)."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-dashboard.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-sales.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-dealers.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-credit-sheet.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-stock.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-suppliers.png"
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-damage-products.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "7 screens checked, none wider than the 412px screen."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 15943,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:08.709Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "Phone viewport: 412×839 (Pixel 7)."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-dashboard.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-sales.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-dealers.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-credit-sheet.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-stock.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-suppliers.png"
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-damage-products.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "7 screens checked, none wider than the 412px screen."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "e79c838550b25e92508e-eb4848f1512ddc714ea6",
+              "file": "mobile.spec.ts",
+              "line": 25,
+              "column": 7
+            },
+            {
+              "title": "TC-08.2 phone navigation: bottom tab bar and a slide-out menu instead of the sidebar",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-menu-open.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Bottom tab bar buttons are 64px high; the More menu opens every other module."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3649,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:24.661Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-menu-open.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Bottom tab bar buttons are 64px high; the More menu opens every other module."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "e79c838550b25e92508e-f5ba601141ef11ee9799",
+              "file": "mobile.spec.ts",
+              "line": 46,
+              "column": 7
+            },
+            {
+              "title": "TC-08.3 text is readable: body text at least 14px and inputs at least 16px (no zoom-in on focus)",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "note",
+                      "description": "Body text 16px, inputs 16px, font: Inter."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 8062,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:28.319Z",
+                      "annotations": [
+                        {
+                          "type": "note",
+                          "description": "Body text 16px, inputs 16px, font: Inter."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "e79c838550b25e92508e-54c422ef587f24b4012e",
+              "file": "mobile.spec.ts",
+              "line": 70,
+              "column": 7
+            },
+            {
+              "title": "TC-08.4 dialogs fit on the phone screen and can be scrolled",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "screenshot",
+                      "description": "mobile-add-dealer-dialog.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Add dealer form is 388×807px on a 412×839 screen."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 11285,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:36.388Z",
+                      "annotations": [
+                        {
+                          "type": "screenshot",
+                          "description": "mobile-add-dealer-dialog.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Add dealer form is 388×807px on a 412×839 screen."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "e79c838550b25e92508e-695b459b581f422be9f1",
+              "file": "mobile.spec.ts",
+              "line": 88,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "suppliers.spec.ts",
+      "file": "suppliers.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Suppliers & Imports",
+          "file": "suppliers.spec.ts",
+          "line": 38,
+          "column": 15,
+          "specs": [
+            {
+              "title": "TC-05.1 a new supplier can be saved with the products they supply",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                        "line": 38,
+                        "column": 15
+                      }
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "supplier-add-products.png"
+                    },
+                    {
+                      "type": "note",
+                      "description": "Supplier saved with products: E2E Gel Battery 1790509127685, E2E Solar Charger 1790509127685."
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 4085,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:47.688Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                            "line": 38,
+                            "column": 15
+                          }
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "supplier-add-products.png"
+                        },
+                        {
+                          "type": "note",
+                          "description": "Supplier saved with products: E2E Gel Battery 1790509127685, E2E Solar Charger 1790509127685."
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "aab0ac69f8e8c07c3318-4d2759cd4a4ca20483d7",
+              "file": "suppliers.spec.ts",
+              "line": 39,
+              "column": 7
+            },
+            {
+              "title": "TC-06.1 searching a product the supplier supplies shows the product and its supplier",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                        "line": 38,
+                        "column": 15
+                      }
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "supplier-search-typed-product.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2808,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:52.609Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                            "line": 38,
+                            "column": 15
+                          }
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "supplier-search-typed-product.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "aab0ac69f8e8c07c3318-63af9dd295ba33f72f0a",
+              "file": "suppliers.spec.ts",
+              "line": 77,
+              "column": 7
+            },
+            {
+              "title": "TC-06.2 searching a catalog product shows its full details",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                        "line": 38,
+                        "column": 15
+                      }
+                    },
+                    {
+                      "type": "note",
+                      "description": "Searching \"Men's Jacket\" shows stock, warehouse, prices, purchase history and suppliers."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "supplier-search-catalog-product.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2910,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:55.428Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                            "line": 38,
+                            "column": 15
+                          }
+                        },
+                        {
+                          "type": "note",
+                          "description": "Searching \"Men's Jacket\" shows stock, warehouse, prices, purchase history and suppliers."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "supplier-search-catalog-product.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "aab0ac69f8e8c07c3318-2d36ec283f58eda7fe8e",
+              "file": "suppliers.spec.ts",
+              "line": 91,
+              "column": 7
+            },
+            {
+              "title": "TC-06.3 a search with no match shows neither product details nor suppliers",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                        "line": 38,
+                        "column": 15
+                      }
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2389,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:38:58.346Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                            "line": 38,
+                            "column": 15
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "aab0ac69f8e8c07c3318-de7d1ab15d2e440748b6",
+              "file": "suppliers.spec.ts",
+              "line": 109,
+              "column": 7
+            },
+            {
+              "title": "TC-05.2 the test supplier can be deleted again",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                        "line": 38,
+                        "column": 15
+                      }
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 3595,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:39:00.744Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/suppliers.spec.ts",
+                            "line": 38,
+                            "column": 15
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "aab0ac69f8e8c07c3318-d7a412d2131f34618c1d",
+              "file": "suppliers.spec.ts",
+              "line": 117,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "zone-access.spec.ts",
+      "file": "zone-access.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Zone access",
+          "file": "zone-access.spec.ts",
+          "line": 83,
+          "column": 15,
+          "specs": [
+            {
+              "title": "TC-07.1 a zone manager sees only their own zone's dealers in the CRM",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                        "line": 83,
+                        "column": 15
+                      }
+                    },
+                    {
+                      "type": "note",
+                      "description": "Signed in as a Zone Manager for Chattogram Zone: saw the Chattogram Zone dealer; none of the 7 Dhaka Zone dealers were listed."
+                    },
+                    {
+                      "type": "note",
+                      "description": "Zone filter only offers: All zones, Chattogram Zone."
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "zone-manager-dealers.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2852,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:39:04.462Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                            "line": 83,
+                            "column": 15
+                          }
+                        },
+                        {
+                          "type": "note",
+                          "description": "Signed in as a Zone Manager for Chattogram Zone: saw the Chattogram Zone dealer; none of the 7 Dhaka Zone dealers were listed."
+                        },
+                        {
+                          "type": "note",
+                          "description": "Zone filter only offers: All zones, Chattogram Zone."
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "zone-manager-dealers.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4f57d67b23297df3c7a1-1684846fb13ece638fd3",
+              "file": "zone-access.spec.ts",
+              "line": 84,
+              "column": 7
+            },
+            {
+              "title": "TC-07.2 the zone manager's credit sheet only has their zone",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                        "line": 83,
+                        "column": 15
+                      }
+                    },
+                    {
+                      "type": "screenshot",
+                      "description": "zone-manager-credit-sheet.png"
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2824,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:39:10.462Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                            "line": 83,
+                            "column": 15
+                          }
+                        },
+                        {
+                          "type": "screenshot",
+                          "description": "zone-manager-credit-sheet.png"
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4f57d67b23297df3c7a1-b19b92021b4f7eb94be6",
+              "file": "zone-access.spec.ts",
+              "line": 107,
+              "column": 7
+            },
+            {
+              "title": "TC-07.3 the zone manager cannot open other modules they were not given",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                        "line": 83,
+                        "column": 15
+                      }
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2673,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:39:13.296Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                            "line": 83,
+                            "column": 15
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4f57d67b23297df3c7a1-0fb6496001a5c93270b2",
+              "file": "zone-access.spec.ts",
+              "line": 118,
+              "column": 7
+            },
+            {
+              "title": "TC-07.4 an admin still sees the dealers of every zone",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "serial",
+                      "location": {
+                        "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                        "line": 83,
+                        "column": 15
+                      }
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2727,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-27T11:39:15.977Z",
+                      "annotations": [
+                        {
+                          "type": "serial",
+                          "location": {
+                            "file": "/home/syed-rafiul-islam-rakat/PowerIntLTD/e2e/zone-access.spec.ts",
+                            "line": 83,
+                            "column": 15
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "4f57d67b23297df3c7a1-f9e3440c906745f322c6",
+              "file": "zone-access.spec.ts",
+              "line": 125,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-27T11:37:11.263Z",
+    "duration": 128750.962,
+    "expected": 28,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

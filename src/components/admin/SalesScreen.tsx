@@ -425,32 +425,32 @@ export function SalesScreen() {
           </Card>
         ) : null}
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
+            <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Open</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{openOrders}</p>
+              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{openOrders}</p>
               <Progress value={orders.length ? (openOrders / orders.length) * 100 : 0} className="mt-4" />
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
+            <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Ready</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{readyOrders}</p>
+              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{readyOrders}</p>
               <Progress value={orders.length ? (readyOrders / orders.length) * 100 : 0} className="mt-4" />
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
+            <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Customer receivable</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(receivableTotal, data?.settings.currency)}</p>
+              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{formatCurrency(receivableTotal, data?.settings.currency)}</p>
               <p className="mt-2 text-xs text-muted-foreground">{overdueOrders.length} overdue reminders</p>
             </CardContent>
           </Card>
           <Card className="border-border/70 shadow-sm">
-            <CardContent className="p-5">
+            <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Supplier payable estimate</p>
-              <p className="mt-2 text-2xl font-semibold tracking-tight">{formatCurrency(supplierPayableEstimate, data?.settings.currency)}</p>
+              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{formatCurrency(supplierPayableEstimate, data?.settings.currency)}</p>
               <p className="mt-2 text-xs text-muted-foreground">From recorded purchases</p>
             </CardContent>
           </Card>
@@ -476,8 +476,8 @@ export function SalesScreen() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-              <div className="relative xl:col-span-2">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
+              <div className="relative col-span-2">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
@@ -531,7 +531,7 @@ export function SalesScreen() {
                 Due only
               </Button>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
                 <Input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />

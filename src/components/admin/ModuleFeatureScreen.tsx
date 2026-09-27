@@ -77,9 +77,9 @@ export function ModuleFeatureScreen({
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {highlights.map((highlight) => (
             <Card key={highlight.label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{highlight.label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{highlight.value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{highlight.value}</p>
                 <p className="mt-2 text-sm text-muted-foreground">{highlight.note}</p>
               </CardContent>
             </Card>

@@ -93,23 +93,40 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
     setForm((current) => ({ ...current, thanas: current.thanas.filter((item) => areaKey(item) !== areaKey(area)) }))
   }
 
+  function withThana(thanas: ZoneArea[], name: string) {
+    const thana = name.trim()
+    if (!thana || thanas.some((area) => sameThanaName(area.thana, thana))) return thanas
+    return [...thanas, { district: '', thana }]
+  }
+
   function addThana() {
-    const thana = thanaDraft.trim()
-    if (!thana) return
-    setForm((current) =>
-      current.thanas.some((area) => sameThanaName(area.thana, thana))
-        ? current
-        : { ...current, thanas: [...current.thanas, { district: '', thana }] }
-    )
+    setForm((current) => ({ ...current, thanas: withThana(current.thanas, thanaDraft) }))
     setThanaDraft('')
   }
+
+  // Creating a zone whose name is already taken adds to that zone instead of failing.
+  const matchingZone = editingId ? null : zones.find((zone) => sameThanaName(zone.name, form.name))
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBusy(true)
     setError(null)
     try {
-      await saveZone(form, editingId ?? undefined)
+      // A sub-zone typed but not yet added with the button is still saved.
+      const thanas = withThana(form.thanas, thanaDraft)
+      if (matchingZone) {
+        await saveZone(
+          {
+            name: matchingZone.name,
+            thanas: thanas.reduce((merged, area) => withThana(merged, area.thana), matchingZone.thanas),
+            managerIds: Array.from(new Set([...matchingZone.managerIds, ...form.managerIds])),
+          },
+          matchingZone.id
+        )
+      } else {
+        await saveZone({ ...form, thanas }, editingId ?? undefined)
+      }
+      setThanaDraft('')
       if (startWithNewZone && !editingId) onOpenChange(false)
       setFormOpen(false)
       setEditingId(null)
@@ -122,7 +139,7 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
   }
 
   async function handleDelete(zone: ZoneRecord) {
-    if (!window.confirm(`Delete ${zone.name}? Dealers in it will fall back to their district's zone.`)) return
+    if (!window.confirm(`Delete ${zone.name}? Its dealers will be left without a zone until they are moved to another one.`)) return
     setBusy(true)
     setError(null)
     try {
@@ -142,7 +159,7 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
         <DialogHeader>
           <DialogTitle>Zones</DialogTitle>
           <DialogDescription>
-            A zone is made of thanas (its sub-zones). Users responsible for a zone only see that zone&apos;s dealers.
+            Create zones and the sub-zones inside them. Dealers are filed under a zone and sub-zone, and users responsible for a zone only see that zone&apos;s dealers.
           </DialogDescription>
         </DialogHeader>
 
@@ -160,10 +177,17 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                 placeholder="e.g. Borishal Zone"
                 required
               />
+              {matchingZone ? (
+                <p className="text-xs text-primary">
+                  {matchingZone.name} already exists
+                  {matchingZone.thanas.length ? ` (sub-zones: ${matchingZone.thanas.map((area) => area.thana).join(', ')})` : ''}. The
+                  sub-zones and users below will be added to it.
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-2">
-              <p className="text-sm font-medium text-foreground">Sub-zones (thanas)</p>
+              <p className="text-sm font-medium text-foreground">Sub-zones</p>
               {form.thanas.length ? (
                 <div className="flex flex-wrap gap-1.5">
                   {form.thanas.map((area) => {
@@ -171,7 +195,6 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                     return (
                       <span key={areaKey(area)} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary">
                         {area.thana}
-                        {area.district ? <span className="text-primary/60">({area.district})</span> : null}
                         {owner ? <span className="text-amber-600">· also in {owner}</span> : null}
                         <button type="button" onClick={() => removeThana(area)} aria-label={`Remove ${area.thana}`}>
                           <X className="h-3 w-3" />
@@ -181,7 +204,7 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                   })}
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">No thanas yet. Dealers can still be assigned to this zone directly.</p>
+                <p className="text-xs text-muted-foreground">No sub-zones yet. Dealers can still be assigned to the zone itself.</p>
               )}
               <div className="flex gap-2">
                 <Input
@@ -193,14 +216,14 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                       addThana()
                     }
                   }}
-                  placeholder="Type a thana name, e.g. Kotwali"
+                  placeholder="Sub-zone name, e.g. Kotwali"
                 />
                 <Button type="button" variant="outline" className="shrink-0 rounded-lg" onClick={addThana} disabled={!thanaDraft.trim()}>
                   <Plus className="mr-1.5 h-4 w-4" />
                   Add
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">Dealers whose thana has the same name join this zone automatically.</p>
+              <p className="text-xs text-muted-foreground">Dealers pick one of these sub-zones when they are added to this zone.</p>
             </div>
 
             <div className="space-y-2">
@@ -235,7 +258,7 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                 Cancel
               </Button>
               <Button type="submit" className="rounded-xl" disabled={busy}>
-                {busy ? 'Saving...' : editingId ? 'Save zone' : 'Create zone'}
+                {busy ? 'Saving...' : editingId ? 'Save zone' : matchingZone ? `Add to ${matchingZone.name}` : 'Create zone'}
               </Button>
             </div>
           </form>
@@ -255,10 +278,11 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                       Sub-zones:{' '}
                       {zone.thanas.length
                         ? zone.thanas.map((area) => area.thana).join(', ')
-                        : zone.districts.length
-                          ? `all of ${zone.districts.join(', ')}`
-                          : 'none'}
+                        : 'none'}
                     </p>
+                    {zone.districts.length ? (
+                      <p className="text-xs text-muted-foreground">Also holds older dealers saved with district {zone.districts.join(', ')}</p>
+                    ) : null}
                     <p className="text-xs text-muted-foreground">
                       Responsible: {zone.managerIds.length ? zone.managerIds.map(userName).join(', ') : 'nobody yet'}
                     </p>

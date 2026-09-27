@@ -22,8 +22,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { divisionList } from '@/lib/data/bangladeshLocations'
 import { useERP } from '@/lib/erp/provider'
+import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import type { DamageProductInput, DamageProductRecord } from '@/lib/erp/types'
 import { exportPdf, exportXlsx, formatDate, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -95,6 +95,8 @@ function statusToneClass(status: DamageProductRecord['status']) {
 export default function DamageProductsPage() {
   const { data, saveDamageProduct, updateDamageProductStatus, deleteDamageProduct } = useERP()
   const damageProducts = useMemo(() => toArray(data?.damageProducts), [data?.damageProducts])
+  // Reports are filed against the zones an admin set up (only the user's own zones when they are zone-limited).
+  const { zoneOptions } = useZoneAccess()
 
   const [query, setQuery] = useState('')
   const [filterZone, setFilterZone] = useState('all')
@@ -244,7 +246,7 @@ export default function DamageProductsPage() {
   return (
     <AdminShell active="Damage Products">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Damage reports', metrics.total.toLocaleString('en-BD'), 'All zones combined'],
             ['Pending at zone', metrics.pending.toLocaleString('en-BD'), 'Not yet sent to main office'],
@@ -252,9 +254,9 @@ export default function DamageProductsPage() {
             ['Resolved', metrics.resolved.toLocaleString('en-BD'), 'Closed damage cases'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -273,8 +275,8 @@ export default function DamageProductsPage() {
               <CardTitle>Damage products</CardTitle>
               <CardDescription>Track which zone reported the damage and its current status.</CardDescription>
             </div>
-            <div className="grid gap-3 sm:grid-cols-[minmax(200px,1fr)_auto_auto_auto_auto]">
-              <div className="relative">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(200px,1fr)_auto_auto_auto_auto]">
+              <div className="relative col-span-2 sm:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
@@ -284,14 +286,14 @@ export default function DamageProductsPage() {
                 />
               </div>
               <Select value={filterZone} onValueChange={setFilterZone}>
-                <SelectTrigger className="h-10 w-40 rounded-xl">
+                <SelectTrigger className="h-10 w-full rounded-xl sm:w-40">
                   <SelectValue placeholder="All zones" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All zones</SelectItem>
-                  {divisionList.map((division) => (
-                    <SelectItem key={division} value={division}>
-                      {division}
+                  {zoneOptions.map((zone) => (
+                    <SelectItem key={zone.id} value={zone.name}>
+                      {zone.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -495,9 +497,9 @@ export default function DamageProductsPage() {
                       <SelectValue placeholder="Select zone" />
                     </SelectTrigger>
                     <SelectContent>
-                      {divisionList.map((division) => (
-                        <SelectItem key={division} value={division}>
-                          {division}
+                      {zoneOptions.map((zone) => (
+                        <SelectItem key={zone.id} value={zone.name}>
+                          {zone.name}
                         </SelectItem>
                       ))}
                     </SelectContent>

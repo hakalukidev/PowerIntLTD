@@ -151,7 +151,7 @@ export default function SalaryPage() {
           </Select>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Total payable', formatCurrency(metrics.totalPayable, currency), 'Base salary + commission'],
             ['Paid so far', formatCurrency(metrics.totalPaid, currency), 'Across all employees'],
@@ -159,9 +159,9 @@ export default function SalaryPage() {
             ['On hold', metrics.onHold.toLocaleString('en-BD'), 'Below 80% target achievement'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>

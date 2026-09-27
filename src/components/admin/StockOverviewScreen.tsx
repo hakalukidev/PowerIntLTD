@@ -560,13 +560,13 @@ export function StockOverviewScreen() {
                 </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Products</p><p className="mt-1 text-2xl font-semibold tracking-tight">{products.length}</p></div>
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Units in stock</p><p className="mt-1 text-2xl font-semibold tracking-tight">{totalUnits}</p></div>
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Inventory value</p><p className="mt-1 text-2xl font-semibold tracking-tight">{formatCurrency(totalInventoryValue, currency)}</p></div>
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Low stock</p><p className="mt-1 text-2xl font-semibold tracking-tight">{lowStockProducts.length}</p></div>
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Warehouses</p><p className="mt-1 text-2xl font-semibold tracking-tight">{warehouses.length}</p></div>
-              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Suppliers</p><p className="mt-1 text-2xl font-semibold tracking-tight">{suppliers.length}</p></div>
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Products</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{products.length}</p></div>
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Units in stock</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{totalUnits}</p></div>
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Inventory value</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{formatCurrency(totalInventoryValue, currency)}</p></div>
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Low stock</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{lowStockProducts.length}</p></div>
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Warehouses</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{warehouses.length}</p></div>
+              <div className="rounded-2xl border border-border/70 bg-card px-4 py-4"><p className="text-sm text-muted-foreground">Suppliers</p><p className="mt-1 break-words text-lg font-semibold tracking-tight sm:text-2xl">{suppliers.length}</p></div>
             </div>
           </CardContent>
         </Card>

@@ -24,7 +24,7 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
   return (
     <Button
       type="button"
-      variant="outline"
+      variant="ghost"
       size="icon"
       className={cn("rounded-full", className)}
       aria-label="Toggle color mode"

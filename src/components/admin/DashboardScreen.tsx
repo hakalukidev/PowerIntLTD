@@ -179,7 +179,7 @@ export function DashboardScreen() {
           </Card>
         ) : null}
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
           {kpis.map((item) => {
             const Icon = item.icon
 
@@ -189,16 +189,16 @@ export function DashboardScreen() {
                 className="overflow-hidden border-border/70 shadow-sm transition-transform hover:-translate-y-0.5"
                 style={{ borderTopWidth: 3, borderTopColor: `hsl(var(--${item.tone}))` }}
               >
-                <CardContent className="flex items-center gap-3 p-4">
+                <CardContent className="flex items-center gap-3 p-3 sm:p-4">
                   <div
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                    className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl sm:flex"
                     style={{ backgroundColor: `hsl(var(--${item.tone}) / 0.15)`, color: `hsl(var(--${item.tone}))` }}
                   >
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs text-muted-foreground">{item.label}</p>
-                    <p className="mt-1 truncate text-lg font-semibold tracking-tight">{item.value}</p>
+                    <p className="mt-1 break-words text-base font-semibold tracking-tight sm:text-lg">{item.value}</p>
                   </div>
                 </CardContent>
               </Card>
@@ -208,7 +208,7 @@ export function DashboardScreen() {
 
         <div className="grid gap-6 xl:grid-cols-[1.15fr_1.85fr]">
           <Card className="border-border/70 shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
               <div>
                 <CardTitle>Investors</CardTitle>
                 <CardDescription>Name, contact, products and invested amount.</CardDescription>
@@ -266,7 +266,7 @@ export function DashboardScreen() {
         </div>
 
         <Card className="border-border/70 shadow-sm">
-          <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
             <div>
               <CardTitle>Revenue vs expense</CardTitle>
               <CardDescription>Order revenue against purchase spend over the selected period.</CardDescription>

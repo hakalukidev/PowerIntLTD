@@ -60,6 +60,8 @@ export type SupplierRecord = {
   otherCost: number
   currency: string
   notes: string
+  /** Products this supplier deals in, by name, as entered on the supplier form. */
+  suppliedProducts: string[]
   createdAt: string
   updatedAt: string
 }
@@ -124,7 +126,7 @@ export type CustomerCommitmentInput = {
   imagePublicId?: string
 }
 
-/** A thana inside a zone. Thana names repeat across districts (e.g. "Sadar"), so both are kept. */
+/** A sub-zone inside a zone, named by an admin. `district` is only set on sub-zones from before zones were admin-defined. */
 export type ZoneArea = {
   district: string
   thana: string
@@ -133,7 +135,7 @@ export type ZoneArea = {
 export type ZoneRecord = {
   id: string
   name: string
-  /** Sub-zones: customers in these thanas fall into the zone unless assigned elsewhere. */
+  /** Sub-zones, created by an admin. Dealers pick one of them; older dealers whose thana matches one fall into the zone. */
   thanas: ZoneArea[]
   /** Legacy whole-district coverage from before zones were split into thanas. */
   districts: string[]
@@ -465,6 +467,7 @@ export type SupplierInput = {
   otherCost?: number
   currency?: string
   notes?: string
+  suppliedProducts?: string[]
 }
 
 export type PurchaseInput = {

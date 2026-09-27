@@ -28,7 +28,6 @@ import type {
   InvestorInput,
   OrderInput,
   OrderRecord,
-  PermissionDefinition,
   ProductInput,
   ProductRecord,
   PurchaseInput,
@@ -76,6 +75,8 @@ import {
 } from 'firebase/auth'
 
 import { auth, database } from '@/lib/firebase/config'
+import { resolveRoles } from './roles'
+import { scopeDataToUserZones } from './zones'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -140,60 +141,6 @@ const CURRENT_USER_STORAGE_KEY = 'ims-current-user'
 
 function normalizeLookup(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
-}
-
-function mergeRecordMap<T extends { id: string }>(defaults: Record<string, T>, current?: Record<string, T> | null) {
-  const merged: Record<string, T> = { ...defaults }
-
-  for (const [id, record] of Object.entries(current ?? {})) {
-    const defaultRecord = merged[id]
-    merged[id] = defaultRecord ? { ...defaultRecord, ...record } : record
-  }
-
-  return merged
-}
-
-// Roles saved before the permission catalog was split into per-module view/edit/delete
-// grants still store these coarse ids. Expand them to their closest granular equivalents
-// so existing roles keep the access they had instead of losing it silently.
-const LEGACY_PERMISSION_MAP: Record<string, string[]> = {
-  view_dashboard: ['dashboard.view'],
-  view_products: ['inventory.view'],
-  manage_products: ['inventory.view', 'inventory.edit'],
-  manage_orders: ['sales.view', 'sales.edit', 'couriers.view', 'couriers.edit'],
-  view_reports: ['reports.view', 'customers.view'],
-  view_finance: ['suppliers.view', 'finance.view', 'sellers.view'],
-  view_employees: ['employees.view', 'sales_target.view', 'salary.view'],
-  manage_employees: [
-    'employees.view',
-    'employees.edit',
-    'sales_target.view',
-    'sales_target.edit',
-    'salary.view',
-    'salary.edit',
-  ],
-}
-
-function normalizeRoleMap(roles: Record<string, RoleRecord>, catalog: Record<string, PermissionDefinition>) {
-  return Object.fromEntries(
-    Object.entries(roles).map(([id, role]) => {
-      if (id === 'admin') {
-        return [id, { ...role, permissions: Object.keys(catalog) }]
-      }
-
-      const resolved = new Set<string>()
-      for (const permission of role.permissions) {
-        const migrated = LEGACY_PERMISSION_MAP[permission]
-        if (migrated) {
-          migrated.forEach((next) => resolved.add(next))
-        } else if (catalog[permission]) {
-          resolved.add(permission)
-        }
-      }
-
-      return [id, { ...role, permissions: Array.from(resolved), zoneIds: role.zoneIds ?? [] }]
-    })
-  )
 }
 
 function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
@@ -273,6 +220,8 @@ function normalizeSupplierRecord(supplier: SupplierRecord): SupplierRecord {
     otherCost: Number(supplier.otherCost ?? 0),
     currency: supplier.currency || 'BDT',
     notes: supplier.notes || '',
+    // Firebase drops empty arrays, so older suppliers come back without this.
+    suppliedProducts: Array.isArray(supplier.suppliedProducts) ? supplier.suppliedProducts : [],
     createdAt: supplier.createdAt || now,
     updatedAt: supplier.updatedAt || supplier.createdAt || now,
   }
@@ -321,7 +270,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
 
   return {
     permissions: DEFAULT_ERP_DATA.permissions,
-    roles: normalizeRoleMap(mergeRecordMap(DEFAULT_ERP_DATA.roles, source.roles), DEFAULT_ERP_DATA.permissions),
+    roles: resolveRoles(source.roles),
     users: source.users ?? {},
     warehouses: source.warehouses ?? {},
     suppliers: normalizeSupplierMap(source.suppliers),
@@ -459,6 +408,7 @@ function normalizeSupplierInput(input: SupplierInput) {
     otherCost: Math.max(input.otherCost ?? 0, 0),
     currency: input.currency?.trim().toUpperCase() || 'BDT',
     notes: input.notes?.trim() ?? '',
+    suppliedProducts: Array.from(new Set((input.suppliedProducts ?? []).map((name) => name.trim()).filter(Boolean))),
   }
 }
 
@@ -1052,7 +1002,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Zone not found.')
     }
 
-    // Customers pinned to this zone fall back to district-based resolution.
+    // Dealers pinned to this zone are left without one.
     const updates: Record<string, null | string> = { [`zones/${zoneId}`]: null }
     for (const customer of Object.values(data.customers)) {
       if (customer.zoneId === zoneId) {
@@ -2264,9 +2214,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  // Screens only get the customers (and their orders, ledger, parcels) of the signed-in
+  // user's zones. The actions below keep working on the full data.
+  const visibleData = useMemo(() => (data ? scopeDataToUserZones(data, currentUser) : data), [currentUser, data])
+
   const value = useMemo<ERPContextValue>(
     () => ({
-      data,
+      data: visibleData,
       loading,
       error,
       users,
@@ -2320,7 +2274,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recordSale,
       saveSalaryPayment,
     }),
-    [currentPermissions, currentUser, data, error, loading, users]
+    [currentPermissions, currentUser, data, error, loading, users, visibleData]
   )
 
   return <ERPContext.Provider value={value}>{children}</ERPContext.Provider>

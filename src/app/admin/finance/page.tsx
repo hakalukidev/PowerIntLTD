@@ -363,7 +363,7 @@ export default function FinancePage() {
         <section className="space-y-4">
           <SectionHeader icon={LayoutGrid} title="Overview" description="Key figures for the selected period." />
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {[
               ['Revenue / Sales', formatCurrency(finance.revenue, currency), ArrowUpRight, 'Total invoice value'],
               ['Cash received', formatCurrency(finance.cashIn, currency), Wallet, 'Paid amount collected'],
@@ -374,12 +374,12 @@ export default function FinancePage() {
 
               return (
                 <Card key={label as string} className="border-border/70 shadow-sm">
-                  <CardContent className="p-5">
+                  <CardContent className="p-4 sm:p-5">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <MetricIcon className="h-4 w-4" />
                       {label as string}
                     </div>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight">{value as string}</p>
+                    <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value as string}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{note as string}</p>
                   </CardContent>
                 </Card>
@@ -387,7 +387,7 @@ export default function FinancePage() {
             })}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             {[
               ['Invoices', finance.invoices.toLocaleString('en-BD'), `${finance.unitsSold} units sold`],
               ['COGS', formatCurrency(finance.cogs, currency), 'Product purchase cost'],
@@ -395,9 +395,9 @@ export default function FinancePage() {
               ['Net cash flow', formatCurrency(finance.netCashFlow, currency), 'Cash received minus purchases'],
             ].map(([label, value, note]) => (
               <Card key={label} className="border-border/70 shadow-sm">
-                <CardContent className="p-5">
+                <CardContent className="p-4 sm:p-5">
                   <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                  <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{note}</p>
                 </CardContent>
               </Card>

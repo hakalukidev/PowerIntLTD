@@ -136,7 +136,7 @@ export default function SalesTargetPage() {
           </Select>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Active sales staff', metrics.employees.toLocaleString('en-BD'), 'Tracked against this month’s target'],
             ['On track (≥80%)', metrics.onTrack.toLocaleString('en-BD'), 'Salary hold released'],
@@ -144,9 +144,9 @@ export default function SalesTargetPage() {
             ['Commission this month', formatCurrency(metrics.totalCommission, currency), 'BDT per unit sold, summed'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -162,7 +162,7 @@ export default function SalesTargetPage() {
         <div className="grid gap-4 xl:grid-cols-2">
           {rows.map(({ employee, unitTarget, amountTarget, unitsSold, amountSold, achievement, commissionAmount, onTrack }) => (
             <Card key={employee.id} className="border-border/70 shadow-sm">
-              <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+              <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0">
                 <div>
                   <CardTitle className="text-base">{employee.name}</CardTitle>
                   <CardDescription>{employee.designation}</CardDescription>

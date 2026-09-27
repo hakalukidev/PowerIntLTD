@@ -5,15 +5,20 @@ export const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? '123456'
 
 /** Signs in through Firebase Auth (work email + password) and waits for the dashboard. */
 export async function loginAsAdmin(page: Page) {
-  await page.goto('/admin/dashboard')
-  await expect(page.getByText('Sign in')).toBeVisible()
+  await loginAs(page, ADMIN_EMAIL, ADMIN_PASSWORD)
+}
 
-  await page.locator('input[type="email"]').fill(ADMIN_EMAIL)
-  await page.locator('input[type="password"]').fill(ADMIN_PASSWORD)
+export async function loginAs(page: Page, email: string, password: string) {
+  await page.goto('/admin/dashboard')
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible({ timeout: 20_000 })
+
+  await page.locator('input[type="email"]').fill(email)
+  await page.locator('input[type="password"]').fill(password)
   await page.locator('button[type="submit"]').click()
 
   await page.waitForURL('**/admin/dashboard')
-  await expect(page.getByRole('heading', { name: "Today's sales" })).toBeVisible()
+  // Firebase sign-in plus the first database load can take several seconds on a slow connection.
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible({ timeout: 20_000 })
 }
 
 export async function gotoViaSidebar(page: Page, linkText: string, urlPattern: string) {

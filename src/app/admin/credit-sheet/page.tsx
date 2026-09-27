@@ -6,7 +6,7 @@ import { ArrowLeft, Eye, FileText, MapPinned, Plus, Printer, Trash2 } from 'luci
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { CommitmentsPanel, sortedCommitments } from '@/components/admin/credit-sheet/CommitmentsPanel'
-import { brandedDocument, openPrintWindow } from '@/components/admin/credit-sheet/printSheet'
+import { brandedDocument, downloadDocumentPdf, downloadSheetPdf, openPrintWindow, type SheetPdfTable } from '@/components/admin/credit-sheet/printSheet'
 import { ZoneManagerDialog } from '@/components/admin/credit-sheet/ZoneManagerDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,7 +23,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { escapeHtml, exportPdf, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 import {
   customerZoneId,
   customerZoneName,
@@ -54,7 +54,7 @@ type LedgerEntryFormState = {
   credit: string
 }
 
-type GroupBy = 'zone' | 'subzone' | 'district'
+type GroupBy = 'zone' | 'subzone'
 
 type SheetRow = {
   customer: CustomerRecord
@@ -64,7 +64,6 @@ type SheetRow = {
   zoneName: string
   subZoneKey: string
   subZoneName: string
-  district: string
 }
 
 type Totals = { dealers: number; purchase: number; paid: number; due: number }
@@ -72,7 +71,6 @@ type Totals = { dealers: number; purchase: number; paid: number; due: number }
 const GROUP_BY_OPTIONS: Array<{ value: GroupBy; label: string }> = [
   { value: 'zone', label: 'Zone' },
   { value: 'subzone', label: 'Sub-zone' },
-  { value: 'district', label: 'District' },
 ]
 
 function emptyLedgerEntryForm(): LedgerEntryFormState {
@@ -97,8 +95,18 @@ function totalsOf(rows: SheetRow[]): Totals {
 
 function groupKeyOf(row: SheetRow, groupBy: GroupBy) {
   if (groupBy === 'zone') return row.zoneName
-  if (groupBy === 'subzone') return row.subZoneName
-  return row.district
+  // The same sub-zone name can exist in two zones, so the zone is part of the group.
+  return `${row.zoneName} - ${row.subZoneName}`
+}
+
+/** Zones A-Z with the unassigned ones last, then sub-zones A-Z with dealers lacking one last. */
+function compareByZoneAndSubZone(left: SheetRow, right: SheetRow) {
+  return (
+    Number(left.zoneId === UNASSIGNED_ZONE_ID) - Number(right.zoneId === UNASSIGNED_ZONE_ID) ||
+    left.zoneName.localeCompare(right.zoneName) ||
+    Number(!left.subZoneKey) - Number(!right.subZoneKey) ||
+    left.subZoneName.localeCompare(right.subZoneName)
+  )
 }
 
 const NO_SUB_ZONE_FILTER = 'none'
@@ -161,12 +169,23 @@ export default function CreditSheetPage() {
   const [entryForm, setEntryForm] = useState<LedgerEntryFormState>(emptyLedgerEntryForm)
   const [isSavingEntry, setIsSavingEntry] = useState(false)
   const [ledgerFeedback, setLedgerFeedback] = useState<string | null>(null)
+  const [isSavingLedgerPdf, setIsSavingLedgerPdf] = useState(false)
   const [sheetFeedback, setSheetFeedback] = useState<string | null>(null)
 
   const customerRows = useMemo<SheetRow[]>(() => {
+    // Same sources as the dealer ledger: bills and payments on orders, plus hand-written ledger entries
+    // (credit = goods given, debit = payment received).
     const purchases = new Map<string, number>()
+    const payments = new Map<string, number>()
+    const add = (totals: Map<string, number>, customerId: string, amount: number) =>
+      totals.set(customerId, (totals.get(customerId) ?? 0) + amount)
     for (const order of orders) {
-      purchases.set(order.customerId, (purchases.get(order.customerId) ?? 0) + order.total)
+      add(purchases, order.customerId, order.total)
+      add(payments, order.customerId, order.paid)
+    }
+    for (const entry of creditLedgerEntries) {
+      add(purchases, entry.customerId, entry.credit)
+      add(payments, entry.customerId, entry.debit)
     }
 
     return customers.map((customer) => {
@@ -174,15 +193,14 @@ export default function CreditSheetPage() {
       return {
         customer,
         purchaseTotal,
-        paid: purchaseTotal - customer.due,
+        paid: payments.get(customer.id) ?? 0,
         zoneId: customerZoneId(customer, zones),
         zoneName: customerZoneName(customer, zones),
-        subZoneKey: subZoneKey(customer),
+        subZoneKey: subZoneKey(customer, zones),
         subZoneName: subZoneLabel(customer),
-        district: customer.district || 'Unknown district',
       }
     })
-  }, [customers, orders, zones])
+  }, [creditLedgerEntries, customers, orders, zones])
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -218,13 +236,13 @@ export default function CreditSheetPage() {
     })
   }, [customerRows, query, filterZone, filterSubZone, priceMin, priceMax, dateFrom, dateTo])
 
-  // Sub-zones (thanas) that actually have dealers within the chosen zone.
+  // Sub-zones that actually have dealers within the chosen zone.
   const subZoneOptions = useMemo(() => {
     const options = new Map<string, string>()
     let hasNone = false
     for (const row of customerRows) {
       if (filterZone !== 'all' && row.zoneId !== filterZone) continue
-      if (row.subZoneKey) options.set(row.subZoneKey, row.subZoneName)
+      if (row.subZoneKey) options.set(row.subZoneKey, filterZone === 'all' ? `${row.subZoneName} (${row.zoneName})` : row.subZoneName)
       else hasNone = true
     }
     const sorted = Array.from(options.entries()).sort((left, right) => left[1].localeCompare(right[1]))
@@ -245,20 +263,17 @@ export default function CreditSheetPage() {
       .map(([name, rows]) => ({
         name,
         rows: [...rows].sort(
-          (left, right) =>
-            left.subZoneName.localeCompare(right.subZoneName) || left.customer.name.localeCompare(right.customer.name)
+          (left, right) => compareByZoneAndSubZone(left, right) || left.customer.name.localeCompare(right.customer.name)
         ),
         totals: totalsOf(rows),
       }))
-      .sort((left, right) => left.name.localeCompare(right.name))
+      .sort((left, right) => compareByZoneAndSubZone(left.rows[0], right.rows[0]))
   }, [filteredRows, groupBy])
 
   const metrics = useMemo(() => totalsOf(filteredRows), [filteredRows])
 
   const groupLabel = GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? 'Zone'
-  const showZoneColumn = groupBy !== 'zone'
   const showSubZoneColumn = groupBy !== 'subzone'
-  const showDistrictColumn = groupBy !== 'district'
 
   const scopeName = useMemo(() => {
     if (filterZone !== 'all') {
@@ -349,48 +364,87 @@ export default function CreditSheetPage() {
     }
   }, [ledgerRows, ledgerWithBalance])
 
-  function exportRows(format: (amount: number) => string | number) {
-    const rows: (string | number)[][] = []
-    let serial = 0
-
-    for (const group of creditSheetGroups) {
-      for (const row of group.rows) {
-        serial += 1
-        rows.push([
-          serial,
-          group.name,
-          row.zoneName,
-          row.subZoneName,
-          row.district,
-          row.customer.name,
-          row.customer.phone,
-          format(row.purchaseTotal),
-          format(row.paid),
-          format(row.customer.due),
-        ])
-      }
-      rows.push(['', `${group.name} total`, '', '', '', `${group.totals.dealers} dealers`, '', format(group.totals.purchase), format(group.totals.paid), format(group.totals.due)])
+  // Export PDF draws the same layout as Print sheet, with selectable text. Sheets with Bangla
+  // text use an image of the printed page instead (jsPDF cannot join Bangla letters), with a
+  // hidden text layer so the Bangla can still be searched.
+  async function handleExportPdf() {
+    setSheetFeedback(null)
+    try {
+      const saved = await downloadSheetPdf({ ...sheetHeader(), tables: sheetPdfTables() }, 'credit-sheet.pdf')
+      if (!saved) await downloadDocumentPdf(buildSheetHtml(false), 'credit-sheet.pdf')
+    } catch (reason) {
+      setSheetFeedback(reason instanceof Error ? reason.message : 'Unable to create the PDF.')
     }
-
-    rows.push(['', 'Grand total', '', '', '', `${metrics.dealers} dealers`, '', format(metrics.purchase), format(metrics.paid), format(metrics.due)])
-    return rows
-  }
-
-  const exportHeaders = () => ['SL', groupLabel, 'Zone', 'Sub-zone', 'District', 'Dealer', 'Mobile', 'Total purchase', 'Paid', 'Due (credit)']
-
-  function handleExportPdf() {
-    void exportPdf(
-      'credit-sheet.pdf',
-      `Power International BD - Credit Sheet (${scopeName}, by ${groupLabel.toLowerCase()})`,
-      exportHeaders(),
-      exportRows((amount) => formatCurrency(amount, currency))
-    )
   }
 
   function handlePrintSheet() {
+    setSheetFeedback(openPrintWindow(buildSheetHtml(true)) ? null : 'Allow popups to print or save the credit sheet as PDF.')
+  }
+
+  function sheetHeader() {
+    return { heading: 'Credit Sheet' }
+  }
+
+  function sheetPdfTables(): SheetPdfTable[] {
+    const money = (amount: number) => formatCurrency(amount, currency)
+    const extraHeaders = [
+      ...(showSubZoneColumn ? ['Sub-zone'] : []),
+    ]
+    const amountStart = 4 + extraHeaders.length
+
+    const groupTables: SheetPdfTable[] = creditSheetGroups.map((group) => ({
+      title: group.name,
+      titleKind: 'group',
+      head: ['SL', 'Dealer', 'Owner', 'Mobile', ...extraHeaders, 'Total purchase', 'Paid', 'Due (credit)'],
+      numeric: [amountStart, amountStart + 1, amountStart + 2],
+      rows: [
+        ...group.rows.map((row, index) => ({
+          cells: [
+            String(index + 1),
+            row.customer.name,
+            row.customer.company,
+            row.customer.phone,
+            ...(showSubZoneColumn ? [row.customer.thana || '-'] : []),
+            money(row.purchaseTotal),
+            money(row.paid),
+            money(row.customer.due),
+          ],
+        })),
+        {
+          tone: 'subtotal' as const,
+          cells: [
+            { content: `${group.name} total (${group.totals.dealers} dealers)`, colSpan: amountStart },
+            money(group.totals.purchase),
+            money(group.totals.paid),
+            money(group.totals.due),
+          ],
+        },
+      ],
+    }))
+
+    const summaryTable: SheetPdfTable = {
+      title: `${groupLabel}-wise summary`,
+      titleKind: 'section',
+      head: [groupLabel, 'Dealers', 'Total purchase', 'Paid', 'Due (credit)'],
+      numeric: [1, 2, 3, 4],
+      rows: [
+        ...creditSheetGroups.map((group) => ({
+          cells: [group.name, String(group.totals.dealers), money(group.totals.purchase), money(group.totals.paid), money(group.totals.due)],
+        })),
+        {
+          tone: 'grand' as const,
+          cells: ['Grand total', String(metrics.dealers), money(metrics.purchase), money(metrics.paid), money(metrics.due)],
+        },
+      ],
+    }
+
+    return [...groupTables, summaryTable]
+  }
+
+  function buildSheetHtml(autoPrint: boolean) {
     const money = (amount: number) => escapeHtml(formatCurrency(amount, currency))
-    const extraHeaders = `${showZoneColumn ? '<th>Zone</th>' : ''}${showSubZoneColumn ? '<th>Sub-zone</th>' : ''}${showDistrictColumn ? '<th>District</th>' : ''}`
-    const extraCount = Number(showZoneColumn) + Number(showSubZoneColumn) + Number(showDistrictColumn)
+    const extraHeaders = showSubZoneColumn ? '<th>Sub-zone</th>' : ''
+    const extraCount = Number(showSubZoneColumn)
 
     const groupsHtml = creditSheetGroups
       .map(
@@ -412,9 +466,7 @@ export default function CreditSheetPage() {
                       <td>${escapeHtml(row.customer.name)}</td>
                       <td>${escapeHtml(row.customer.company)}</td>
                       <td>${escapeHtml(row.customer.phone)}</td>
-                      ${showZoneColumn ? `<td>${escapeHtml(row.zoneName)}</td>` : ''}
                       ${showSubZoneColumn ? `<td>${escapeHtml(row.customer.thana || '-')}</td>` : ''}
-                      ${showDistrictColumn ? `<td>${escapeHtml(row.district)}</td>` : ''}
                       <td class="numeric">${money(row.purchaseTotal)}</td>
                       <td class="numeric">${money(row.paid)}</td>
                       <td class="numeric">${money(row.customer.due)}</td>
@@ -465,15 +517,12 @@ export default function CreditSheetPage() {
       </table>
     `
 
-    const html = brandedDocument({
+    return brandedDocument({
       title: 'Credit Sheet',
-      topLeft: sheetTopLeft,
-      topRight: `${groupLabel}-wise`,
-      heading: 'Credit Sheet',
+      ...sheetHeader(),
       body: groupsHtml + summaryHtml,
+      autoPrint,
     })
-
-    setSheetFeedback(openPrintWindow(html) ? null : 'Allow popups to print or save the credit sheet as PDF.')
   }
 
   function openEntryDialog() {
@@ -517,8 +566,8 @@ export default function CreditSheetPage() {
     }
   }
 
-  function handlePrintLedger() {
-    if (!selectedCustomer) return
+  function buildLedgerHtml(autoPrint: boolean) {
+    if (!selectedCustomer) return null
 
     const rows = ledgerWithBalance
       .map(
@@ -629,17 +678,36 @@ export default function CreditSheetPage() {
       ${commitmentsHtml}
     `
 
-    const html = brandedDocument({
+    return brandedDocument({
       title: `Ledger - ${selectedCustomer.name}`,
-      topLeft: `${zoneTitle(selectedZoneName)}_Power Int.`,
-      topRight: selectedCustomer.name,
       heading: 'Ledger',
       badge: 'Index',
       body,
+      autoPrint,
     })
+  }
 
-    if (!openPrintWindow(html)) {
-      setLedgerFeedback('Allow popups to print or save the ledger as PDF.')
+  function handlePrintLedger() {
+    const html = buildLedgerHtml(true)
+    if (html && !openPrintWindow(html)) {
+      setLedgerFeedback('Allow popups to print the ledger.')
+    }
+  }
+
+  // Saves the ledger as a PDF file directly, so no browser print header or footer ends up on it.
+  async function handleDownloadLedgerPdf() {
+    const html = buildLedgerHtml(false)
+    if (!html || !selectedCustomer) return
+
+    setLedgerFeedback(null)
+    setIsSavingLedgerPdf(true)
+    try {
+      const slug = selectedCustomer.name.trim().replace(/[^\w\u0980-\u09FF]+/g, '-').replace(/^-+|-+$/g, '') || 'dealer'
+      await downloadDocumentPdf(html, `ledger-${slug}.pdf`)
+    } catch (reason) {
+      setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to create the PDF.')
+    } finally {
+      setIsSavingLedgerPdf(false)
     }
   }
 
@@ -659,7 +727,18 @@ export default function CreditSheetPage() {
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handlePrintLedger}>
                 <Printer className="mr-1.5 h-4 w-4" />
-                Print / PDF ledger
+                Print ledger
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() => void handleDownloadLedgerPdf()}
+                disabled={isSavingLedgerPdf}
+              >
+                <FileText className="mr-1.5 h-4 w-4" />
+                {isSavingLedgerPdf ? 'Preparing PDF...' : 'Download PDF'}
               </Button>
               {canEdit ? (
                 <Button type="button" size="sm" className="rounded-lg" onClick={openEntryDialog}>
@@ -912,7 +991,7 @@ export default function CreditSheetPage() {
     )
   }
 
-  const extraColumnCount = Number(showZoneColumn) + Number(showSubZoneColumn) + Number(showDistrictColumn)
+  const extraColumnCount = Number(showSubZoneColumn)
 
   function openZones(startWithNew: boolean) {
     setZonesStartWithNew(startWithNew)
@@ -922,17 +1001,17 @@ export default function CreditSheetPage() {
   return (
     <AdminShell active="Credit Sheet">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Dealers', metrics.dealers.toLocaleString('en-BD'), 'Matching current filters'],
             ['Total purchase', formatCurrency(metrics.purchase, currency), 'From sales history'],
-            ['Paid', formatCurrency(metrics.paid, currency), 'Purchase minus outstanding due'],
+            ['Paid', formatCurrency(metrics.paid, currency), 'Payments received'],
             ['Due (credit)', formatCurrency(metrics.due, currency), 'Outstanding across dealers'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -957,7 +1036,7 @@ export default function CreditSheetPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Credit sheet</CardTitle>
-              <CardDescription>Every dealer&apos;s running account, with totals by zone, sub-zone (thana) or district.</CardDescription>
+              <CardDescription>Every dealer&apos;s running account, with totals by zone or sub-zone.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               {canManageZones ? (
@@ -983,8 +1062,8 @@ export default function CreditSheetPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-4 grid gap-3 rounded-2xl border border-border/70 p-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="space-y-1.5">
+            <div className="mb-4 grid grid-cols-2 gap-3 rounded-2xl border border-border/70 p-3 sm:p-4 lg:grid-cols-4">
+              <div className="col-span-2 space-y-1.5 lg:col-span-1">
                 <p className="text-xs font-medium text-muted-foreground">Search</p>
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or phone" />
               </div>
@@ -1012,7 +1091,7 @@ export default function CreditSheetPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">Sub-zone (thana)</p>
+                <p className="text-xs font-medium text-muted-foreground">Sub-zone</p>
                 <Select value={filterSubZone} onValueChange={setFilterSubZone}>
                   <SelectTrigger>
                     <SelectValue placeholder="All sub-zones" />
@@ -1024,7 +1103,7 @@ export default function CreditSheetPage() {
                         {label}
                       </SelectItem>
                     ))}
-                    {subZoneOptions.hasNone ? <SelectItem value={NO_SUB_ZONE_FILTER}>No thana set</SelectItem> : null}
+                    {subZoneOptions.hasNone ? <SelectItem value={NO_SUB_ZONE_FILTER}>No sub-zone</SelectItem> : null}
                   </SelectContent>
                 </Select>
               </div>
@@ -1086,9 +1165,7 @@ export default function CreditSheetPage() {
                               <TableHead>SL</TableHead>
                               <TableHead>Dealer</TableHead>
                               <TableHead>Mobile</TableHead>
-                              {showZoneColumn ? <TableHead>Zone</TableHead> : null}
                               {showSubZoneColumn ? <TableHead>Sub-zone</TableHead> : null}
-                              {showDistrictColumn ? <TableHead>District</TableHead> : null}
                               <TableHead className="text-right">Total purchase</TableHead>
                               <TableHead className="text-right">Paid</TableHead>
                               <TableHead className="text-right">Due (credit)</TableHead>
@@ -1108,9 +1185,7 @@ export default function CreditSheetPage() {
                                   ) : null}
                                 </TableCell>
                                 <TableCell>{row.customer.phone}</TableCell>
-                                {showZoneColumn ? <TableCell>{row.zoneName}</TableCell> : null}
                                 {showSubZoneColumn ? <TableCell>{row.customer.thana || '-'}</TableCell> : null}
-                                {showDistrictColumn ? <TableCell>{row.district}</TableCell> : null}
                                 <TableCell className="text-right">{formatCurrency(row.purchaseTotal, currency)}</TableCell>
                                 <TableCell className="text-right">{formatCurrency(row.paid, currency)}</TableCell>
                                 <TableCell className="text-right font-medium text-amber-700 dark:text-amber-400">

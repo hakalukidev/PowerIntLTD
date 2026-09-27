@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 
 import { AuthorizationError, requirePermission } from '@/lib/firebase/requireAdmin'
 import { getAdminAuth } from '@/lib/firebase/admin'
-import type { UserRecord } from '@/lib/erp/types'
+import { resolveRoles } from '@/lib/erp/roles'
+import type { RoleRecord, UserRecord } from '@/lib/erp/types'
 
 export const runtime = 'nodejs'
 
@@ -72,8 +73,9 @@ async function assertRoleExists(
   db: Awaited<ReturnType<typeof requirePermission>>['db'],
   roleId: string
 ) {
-  const snapshot = await db.ref(`erp/roles/${roleId}`).get()
-  if (!snapshot.exists()) {
+  // Built-in roles (such as Zone Manager) exist even before anything about them is stored.
+  const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
+  if (!roles[roleId]) {
     throw new Error('Selected role does not exist.')
   }
 }

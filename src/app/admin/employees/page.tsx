@@ -203,7 +203,7 @@ export default function EmployeesPage() {
   return (
     <AdminShell active="Employee Management">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Total employees', metrics.total.toLocaleString('en-BD'), `${metrics.activeCount} currently active`],
             ['On probation', metrics.onProbation.toLocaleString('en-BD'), `${DEFAULT_PROBATION_MONTHS}-month probation window`],
@@ -211,9 +211,9 @@ export default function EmployeesPage() {
             ['Avg. base salary', formatCurrency(metrics.avgBaseSalary, currency), 'Before commission'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -234,8 +234,8 @@ export default function EmployeesPage() {
                 Joining date, probation, and confirmation status are tracked automatically for every employee.
               </CardDescription>
             </div>
-            <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_180px_auto]">
-              <div className="relative">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(220px,1fr)_180px_auto]">
+              <div className="relative col-span-2 sm:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Search employees" />
               </div>

@@ -16,6 +16,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  MoreHorizontal,
   PackageCheck,
   PanelLeftClose,
   PanelLeftOpen,
@@ -29,7 +30,6 @@ import {
 } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/theme-toggle'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -42,7 +42,6 @@ import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
 } from '@/components/ui/sheet'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { useERP } from '@/lib/erp/provider'
@@ -95,8 +94,8 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'suppliers.view',
       },
       {
-        label: 'Customers (CRM)',
-        description: 'Customer history, support, and credit tracking',
+        label: 'Dealers (CRM)',
+        description: 'Dealer history, support, and credit tracking',
         href: '/admin/customers',
         icon: Users,
         permission: 'customers.view',
@@ -190,6 +189,17 @@ type AdminShellProps = {
   children: ReactNode
 }
 
+function initialsOf(name: string) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('') || 'U'
+  )
+}
+
 function SidebarContent({
   active,
   onNavigate,
@@ -201,7 +211,8 @@ function SidebarContent({
   collapsed?: boolean
   onToggleCollapse?: () => void
 }) {
-  const { hasPermission, currentUser } = useERP()
+  const { hasPermission, currentUser, data, logout } = useERP()
+  const roleName = currentUser ? data?.roles[currentUser.roleId]?.name ?? currentUser.roleId : ''
 
   const visibleGroups = navigationGroups
     .map((group) => ({
@@ -212,105 +223,172 @@ function SidebarContent({
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div
-        className={cn(
-          'space-y-4 border-b border-sidebar-border py-6',
-          collapsed ? 'px-3' : 'px-5'
-        )}
-      >
-        <div className={cn('flex items-center gap-2', collapsed ? 'flex-col' : 'justify-between')}>
-          <Link
-            href="/admin/dashboard"
-            className={cn('flex min-w-0 items-center gap-3', collapsed && 'justify-center')}
-            onClick={onNavigate}
+      <div className={cn('flex h-16 shrink-0 items-center gap-2 border-b border-sidebar-border', collapsed ? 'justify-center px-2' : 'justify-between px-4')}>
+        <Link
+          href="/admin/dashboard"
+          className={cn('flex min-w-0 items-center gap-2.5', collapsed && 'justify-center')}
+          onClick={onNavigate}
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1">
+            <Image src="/power-icon.png" alt="ERP" loading="eager" width={28} height={28} className="h-7 w-7 object-contain" />
+          </span>
+          {!collapsed ? (
+            <span className="min-w-0 leading-tight">
+              <span className="block truncate text-[13px] font-semibold tracking-tight text-white">Power International</span>
+              <span className="block text-[11px] text-sidebar-foreground/55">BD · ERP System</span>
+            </span>
+          ) : null}
+        </Link>
+        {onToggleCollapse && !collapsed ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="hidden h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white lg:inline-flex"
+            onClick={onToggleCollapse}
+            title="Collapse sidebar"
           >
-            <Image src="/power-icon.png" alt="ERP" loading="eager" width={34} height={34} className="h-8 w-8 shrink-0 rounded-md object-contain" />
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+        ) : null}
+      </div>
+
+      <div className={cn('flex-1 space-y-5 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}>
+        {onToggleCollapse && collapsed ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="mx-auto hidden h-9 w-9 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white lg:flex"
+            onClick={onToggleCollapse}
+            title="Expand sidebar"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        ) : null}
+        {visibleGroups.map((group) => (
+          <div key={group.title} className="space-y-1">
             {!collapsed ? (
-              <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-[0.28em] text-sidebar-foreground/60">
-                  ERP
-                </p>
-                <h2 className="truncate text-lg font-semibold">Power International BD</h2>
-              </div>
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/40">{group.title}</p>
             ) : null}
-          </Link>
-          {onToggleCollapse ? (
+            <nav className="space-y-0.5">
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const isActive = active === item.label
+
+                return (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    onClick={onNavigate}
+                    title={collapsed ? item.label : item.description}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors',
+                      collapsed ? 'h-10 justify-center' : 'px-3 py-2.5',
+                      isActive
+                        ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-sm'
+                        : 'text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-white'
+                    )}
+                  >
+                    <Icon className="h-[18px] w-[18px] shrink-0" />
+                    {!collapsed ? <span className="truncate">{item.label}</span> : null}
+                  </Link>
+                )
+              })}
+            </nav>
+          </div>
+        ))}
+      </div>
+
+      {currentUser ? (
+        <div className={cn('shrink-0 border-t border-sidebar-border p-3', collapsed && 'px-2')}>
+          <div className={cn('flex items-center gap-2.5', collapsed && 'flex-col')}>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-xs font-semibold text-white">
+              {initialsOf(currentUser.name)}
+            </span>
+            {!collapsed ? (
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block truncate text-sm font-medium text-white">{currentUser.name}</span>
+                <span className="block truncate text-[11px] text-sidebar-foreground/55">{roleName}</span>
+              </span>
+            ) : null}
             <Button
               variant="ghost"
               size="icon"
-              className="hidden h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground lg:inline-flex"
-              onClick={onToggleCollapse}
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white"
+              onClick={logout}
+              title="Log out"
+              aria-label="Log out"
             >
-              {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              <LogOut className="h-4 w-4" />
             </Button>
-          ) : null}
+          </div>
         </div>
-      </div>
-
-      <div className={cn('flex-1 space-y-8 overflow-y-auto overflow-x-hidden py-6', collapsed ? 'px-2' : 'px-4')}>
-        <div className="space-y-6">
-          {visibleGroups.map((group) => (
-            <div key={group.title} className="space-y-3">
-              {!collapsed ? (
-                <p className="px-2 text-xs font-medium uppercase tracking-[0.26em] text-sidebar-foreground/45">
-                  {group.title}
-                </p>
-              ) : null}
-              <nav className="space-y-2">
-                {group.items.map((item) => {
-                  const Icon = item.icon
-                  const isActive = active === item.label
-
-                  return (
-                    <Link
-                      key={item.label}
-                      href={item.href}
-                      onClick={onNavigate}
-                      title={collapsed ? item.label : undefined}
-                      className={cn(
-                        'group flex items-center gap-3 rounded-2xl border transition-all',
-                        collapsed ? 'justify-center px-0 py-2.5' : 'items-start px-3 py-3',
-                        isActive
-                          ? 'border-sidebar-primary/25 bg-sidebar-primary text-sidebar-primary-foreground shadow-lg shadow-sidebar-primary/20'
-                          : 'border-transparent bg-transparent hover:border-sidebar-border hover:bg-sidebar-accent'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                          !collapsed && 'mt-0.5',
-                          isActive
-                            ? 'bg-white/18 text-sidebar-primary-foreground'
-                            : 'bg-sidebar-accent text-sidebar-foreground'
-                        )}
-                      >
-                        <Icon className="h-5 w-5" />
-                      </span>
-                      {!collapsed ? (
-                        <span className="min-w-0">
-                          <span className="block text-sm font-semibold">{item.label}</span>
-                          <span
-                            className={cn(
-                              'mt-1 block text-xs leading-5',
-                              isActive ? 'text-sidebar-primary-foreground/80' : 'text-sidebar-foreground/60'
-                            )}
-                          >
-                            {item.description}
-                          </span>
-                        </span>
-                      ) : null}
-                    </Link>
-                  )
-                })}
-              </nav>
-            </div>
-          ))}
-        </div>
-
-       
-      </div>
+      ) : null}
     </div>
+  )
+}
+
+/** The pages staff open most, in order; the bottom bar on phones shows the first ones they can access. */
+const MOBILE_TAB_HREFS = ['/admin/dashboard', '/admin/sales', '/admin/customers', '/admin/credit-sheet', '/admin/stock/overview']
+
+const MOBILE_TAB_LABELS: Record<string, string> = {
+  '/admin/dashboard': 'Home',
+  '/admin/sales': 'Sales',
+  '/admin/customers': 'Dealers',
+  '/admin/credit-sheet': 'Credit',
+  '/admin/stock/overview': 'Stock',
+}
+
+function MobileTabBar({ active, onOpenMenu }: { active: string; onOpenMenu: () => void }) {
+  const { hasPermission } = useERP()
+  const items = navigationGroups
+    .flatMap((group) => group.items)
+    .filter((item) => MOBILE_TAB_HREFS.includes(item.href) && hasPermission(item.permission))
+    .sort((left, right) => MOBILE_TAB_HREFS.indexOf(left.href) - MOBILE_TAB_HREFS.indexOf(right.href))
+    .slice(0, 4)
+  const activeInTabs = items.some((item) => item.label === active)
+
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg lg:hidden"
+      aria-label="Main"
+    >
+      <div className="mx-auto grid max-w-lg" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }}>
+        {items.map((item) => {
+          const Icon = item.icon
+          const isActive = item.label === active
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium',
+                isActive ? 'text-primary' : 'text-muted-foreground'
+              )}
+            >
+              <span className={cn('flex h-7 w-12 items-center justify-center rounded-full', isActive && 'bg-primary/10')}>
+                <Icon className="h-5 w-5" />
+              </span>
+              {MOBILE_TAB_LABELS[item.href] ?? item.label}
+            </Link>
+          )
+        })}
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          className={cn(
+            'flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium',
+            activeInTabs ? 'text-muted-foreground' : 'text-primary'
+          )}
+        >
+          <span className={cn('flex h-7 w-12 items-center justify-center rounded-full', !activeInTabs && 'bg-primary/10')}>
+            <MoreHorizontal className="h-5 w-5" />
+          </span>
+          More
+        </button>
+      </div>
+    </nav>
   )
 }
 
@@ -362,7 +440,7 @@ function NotificationBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" className="relative rounded-full">
+        <Button variant="ghost" size="icon" className="relative rounded-full" aria-label="Notifications">
           <Bell className="h-4 w-4" />
           {unread.length > 0 ? (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
@@ -371,7 +449,7 @@ function NotificationBell() {
           ) : null}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80 p-0">
+      <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-1.5rem))] p-0">
         <div className="flex items-center justify-between px-3 py-2.5">
           <p className="text-sm font-semibold">Notifications</p>
           {unread.length > 0 ? (
@@ -437,7 +515,7 @@ export function AdminShell({ active, children }: AdminShellProps) {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('admin-sidebar-collapsed') === '1'
   })
-  const { currentUser, data, logout, hasPermission, loading } = useERP()
+  const { currentUser, data, hasPermission, loading } = useERP()
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -473,80 +551,67 @@ export function AdminShell({ active, children }: AdminShellProps) {
 
   return (
     <div className="min-h-screen">
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
+      <div className="flex min-h-screen">
         <aside
           className={cn(
-            'sticky top-0 hidden h-screen shrink-0 border-r border-sidebar-border bg-sidebar shadow-[24px_0_80px_-48px_rgba(15,23,42,0.45)] transition-[width] duration-200 lg:block',
-            collapsed ? 'w-[88px]' : 'w-[320px]'
+            'sticky top-0 hidden h-screen shrink-0 border-r border-sidebar-border bg-sidebar transition-[width] duration-200 lg:block',
+            collapsed ? 'w-[72px]' : 'w-64'
           )}
         >
           <SidebarContent active={active} collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
         </aside>
 
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent side="left" className="w-[280px] border-sidebar-border bg-sidebar p-0 [&>button]:text-sidebar-foreground">
+            <SheetHeader className="sr-only">
+              <SheetTitle>Navigation</SheetTitle>
+              <SheetDescription>Browse the ERP workspace.</SheetDescription>
+            </SheetHeader>
+            <SidebarContent active={active} onNavigate={() => setMobileOpen(false)} />
+          </SheetContent>
+        </Sheet>
+
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur-xl">
-            <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-                    <SheetTrigger asChild>
-                      <Button variant="outline" size="icon" className="lg:hidden">
-                        <Menu className="h-5 w-5" />
-                      </Button>
-                    </SheetTrigger>
-                    <SheetContent side="left" className="w-[320px] border-sidebar-border bg-sidebar p-0">
-                      <SheetHeader className="px-5 pt-6 text-left">
-                        <SheetTitle>Navigation</SheetTitle>
-                        <SheetDescription>Browse the ERP workspace.</SheetDescription>
-                      </SheetHeader>
-                      <div className="mt-4 h-[calc(100%-5rem)]">
-                        <SidebarContent active={active} onNavigate={() => setMobileOpen(false)} />
-                      </div>
-                    </SheetContent>
-                  </Sheet>
-
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]">
-                        {currentPage.label}
-                      </Badge>
-                      <Badge className="rounded-full bg-primary/10 text-primary hover:bg-primary/10">
-                        {roleName}
-                      </Badge>
-                    </div>
-                    <h1 className="mt-2 truncate text-xl font-semibold tracking-tight sm:text-2xl">
-                      {currentPage.description}
-                    </h1>
-                  </div>
+          <header className="sticky top-0 z-30 border-b border-border bg-card/90 backdrop-blur-lg">
+            <div className="flex h-14 items-center justify-between gap-3 px-4 sm:h-16 sm:px-6 lg:px-8">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-ml-2 shrink-0 lg:hidden"
+                  onClick={() => setMobileOpen(true)}
+                  aria-label="Open menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+                <div className="min-w-0">
+                  <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">{currentPage.label}</h1>
+                  <p className="hidden truncate text-xs text-muted-foreground sm:block">{currentPage.description}</p>
                 </div>
+              </div>
 
-                <div className="flex items-center gap-3">
-                  <NotificationBell />
-
-                  <ThemeToggle className="hidden sm:inline-flex" />
-
-                  <div className="hidden text-right text-sm sm:block">
-                    <p className="font-medium text-foreground">{currentUser.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {currentUser.title} · {roleName}
-                    </p>
-                  </div>
-
-                  <Button variant="outline" size="sm" className="rounded-full" onClick={logout}>
-                    <LogOut className="mr-2 h-4 w-4" />
-                    Logout
-                  </Button>
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                <NotificationBell />
+                <ThemeToggle />
+                <div className="ml-1 hidden items-center gap-2.5 border-l border-border pl-3 md:flex">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                    {initialsOf(currentUser.name)}
+                  </span>
+                  <span className="leading-tight">
+                    <span className="block max-w-40 truncate text-sm font-medium">{currentUser.name}</span>
+                    <span className="block max-w-40 truncate text-[11px] text-muted-foreground">{roleName}</span>
+                  </span>
                 </div>
               </div>
             </div>
           </header>
 
-          <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <main className="flex-1 px-3 pb-24 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8">
             <div className="mx-auto w-full max-w-7xl">
               {hasPermission(currentPage.permission) ? (
                 children
               ) : (
-                <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-border/70 bg-card/50 p-10 text-center">
+                <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card p-8 text-center">
                   <Lock className="h-8 w-8 text-muted-foreground" />
                   <p className="text-lg font-semibold">Access restricted</p>
                   <p className="max-w-md text-sm text-muted-foreground">
@@ -558,19 +623,21 @@ export function AdminShell({ active, children }: AdminShellProps) {
             </div>
           </main>
 
-          <footer className="border-t border-border/60 px-4 py-5 text-sm text-muted-foreground sm:px-6 lg:px-8">
-            <div className="mx-auto flex max-w-7xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <footer className="hidden border-t border-border px-4 py-4 text-xs text-muted-foreground sm:px-6 lg:block lg:px-8">
+            <div className="mx-auto flex max-w-7xl items-center justify-between gap-2">
               <p>{data?.settings.companyName ?? 'ERP'} · {data?.settings.timezone ?? 'Asia/Dhaka'}</p>
-             <div className="px-2 pt-4 text-xs leading-5 text-sidebar-foreground/70">
-            Developed by{' '}
-            <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="hover:text-sidebar-foreground hover:underline">
-              hakaluki.dev
-            </a>
-          </div>
+              <p>
+                Developed by{' '}
+                <a href="https://hakaluki.dev" target="_blank" rel="noopener noreferrer" className="hover:text-foreground hover:underline">
+                  hakaluki.dev
+                </a>
+              </p>
             </div>
           </footer>
         </div>
       </div>
+
+      <MobileTabBar active={active} onOpenMenu={() => setMobileOpen(true)} />
     </div>
   )
 }

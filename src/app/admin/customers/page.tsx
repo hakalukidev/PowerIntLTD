@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'rea
 import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { downloadDocumentPdf } from '@/components/admin/credit-sheet/printSheet'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,17 +21,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  divisionList,
-  districtsForDivision,
-  findDivisionForDistrict,
-  thanasForDistrict,
-} from '@/lib/data/bangladeshLocations'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { CustomerCommitment, CustomerInput, CustomerRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { customerZoneId } from '@/lib/erp/zones'
+import { customerZoneId, subZoneKey, subZoneKeyFor, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME, zoneSubZones } from '@/lib/erp/zones'
 import { escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
 
 const CUSTOMER_DOCUMENT_FOLDER = 'customers'
@@ -48,7 +43,7 @@ type CustomerFormState = {
   tradeLicenseNo: string
   nomineeName: string
   nomineeNid: string
-  division: string
+  /** The dealer's sub-zone, one of its zone's sub-zones. Older dealers have a thana here. */
   thana: string
   district: string
   zoneId: string
@@ -106,7 +101,6 @@ const emptyCustomerForm: CustomerFormState = {
   tradeLicenseNo: '',
   nomineeName: '',
   nomineeNid: '',
-  division: '',
   thana: '',
   district: '',
   zoneId: '',
@@ -139,7 +133,6 @@ function formFromCustomer(customer: CustomerRecord): CustomerFormState {
     tradeLicenseNo: customer.tradeLicenseNo,
     nomineeName: customer.nomineeName,
     nomineeNid: customer.nomineeNid,
-    division: findDivisionForDistrict(customer.district) ?? '',
     thana: customer.thana,
     district: customer.district,
     zoneId: customer.zoneId ?? '',
@@ -159,6 +152,11 @@ function formFromCustomer(customer: CustomerRecord): CustomerFormState {
     signatureUrl: customer.signatureUrl,
     signaturePublicId: customer.signaturePublicId,
   }
+}
+
+/** A dealer name made safe for a file name, keeping Bangla letters. */
+function dealerFileSlug(name: string) {
+  return name.trim().replace(/[^\w\u0980-\u09FF]+/g, '-').replace(/^-+|-+$/g, '') || 'dealer'
 }
 
 function customerInitials(name: string) {
@@ -189,9 +187,8 @@ export default function CustomersPage() {
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
   const [query, setQuery] = useState('')
   const [reminderOnly, setReminderOnly] = useState(false)
-  const [filterDivision, setFilterDivision] = useState('all')
-  const [filterDistrict, setFilterDistrict] = useState('all')
-  const [filterThana, setFilterThana] = useState('all')
+  const [filterZone, setFilterZone] = useState('all')
+  const [filterSubZone, setFilterSubZone] = useState('all')
   const [priceMin, setPriceMin] = useState('')
   const [priceMax, setPriceMax] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -212,25 +209,25 @@ export default function CustomersPage() {
   const signaturePadRef = useRef<SignaturePadHandle>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [isExportingImage, setIsExportingImage] = useState(false)
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [detailsExportError, setDetailsExportError] = useState<string | null>(null)
 
-  const districtOptions = useMemo(
-    () => withFallbackOption(districtsForDivision(customerForm.division), customerForm.district),
-    [customerForm.division, customerForm.district]
-  )
-  const thanaOptions = useMemo(
-    () => withFallbackOption(thanasForDistrict(customerForm.division, customerForm.district), customerForm.thana),
-    [customerForm.division, customerForm.district, customerForm.thana]
+  // Sub-zones of the zone picked on the form, keeping an older dealer's thana selectable.
+  const subZoneOptions = useMemo(
+    () => withFallbackOption(zoneSubZones(zones.find((zone) => zone.id === customerForm.zoneId)), customerForm.thana),
+    [zones, customerForm.zoneId, customerForm.thana]
   )
 
-  const filterDistrictOptions = useMemo(
-    () => (filterDivision === 'all' ? [] : districtsForDivision(filterDivision)),
-    [filterDivision]
-  )
-  const filterThanaOptions = useMemo(
-    () => (filterDivision === 'all' || filterDistrict === 'all' ? [] : thanasForDistrict(filterDivision, filterDistrict)),
-    [filterDivision, filterDistrict]
-  )
+  // Sub-zones to filter by: the chosen zone's, or every visible zone's (named with their zone).
+  const filterSubZoneOptions = useMemo(() => {
+    const shownZones = filterZone === 'all' ? zoneOptions : zoneOptions.filter((zone) => zone.id === filterZone)
+    return shownZones.flatMap((zone) =>
+      zoneSubZones(zone).map((name) => ({
+        key: subZoneKeyFor(zone.id, name),
+        label: filterZone === 'all' ? `${name} (${zone.name})` : name,
+      }))
+    )
+  }, [filterZone, zoneOptions])
 
   const customerRows = useMemo(() => {
     return customers
@@ -267,9 +264,8 @@ export default function CustomersPage() {
           .toLowerCase()
           .includes(normalizedQuery)
       const matchesReminder = !reminderOnly || (customer.reminderCustomer && !hasOrders)
-      const matchesDivision = filterDivision === 'all' || findDivisionForDistrict(customer.district) === filterDivision
-      const matchesDistrict = filterDistrict === 'all' || customer.district === filterDistrict
-      const matchesThana = filterThana === 'all' || customer.thana === filterThana
+      const matchesZone = filterZone === 'all' || customerZoneId(customer, zones) === filterZone
+      const matchesSubZone = filterSubZone === 'all' || subZoneKey(customer, zones) === filterSubZone
       const matchesMinPrice = minPrice === null || Number.isNaN(minPrice) || purchaseTotal >= minPrice
       const matchesMaxPrice = maxPrice === null || Number.isNaN(maxPrice) || purchaseTotal <= maxPrice
       const joinedDate = new Date(customer.createdAt)
@@ -279,9 +275,8 @@ export default function CustomersPage() {
       return (
         matchesSearch &&
         matchesReminder &&
-        matchesDivision &&
-        matchesDistrict &&
-        matchesThana &&
+        matchesZone &&
+        matchesSubZone &&
         matchesMinPrice &&
         matchesMaxPrice &&
         matchesFrom &&
@@ -292,9 +287,9 @@ export default function CustomersPage() {
     customerRows,
     query,
     reminderOnly,
-    filterDivision,
-    filterDistrict,
-    filterThana,
+    filterZone,
+    zones,
+    filterSubZone,
     priceMin,
     priceMax,
     dateFrom,
@@ -323,7 +318,9 @@ export default function CustomersPage() {
   function openEditDialog(customer: CustomerRecord) {
     setEditingCustomer(customer)
     const form = formFromCustomer(customer)
-    setCustomerForm(visibleZoneIds && !form.zoneId ? { ...form, zoneId: customerZoneId(customer, zones) } : form)
+    // Show the zone the dealer is actually in, even when it came from their sub-zone rather than being picked.
+    const resolvedZoneId = customerZoneId(customer, zones)
+    setCustomerForm(!form.zoneId && resolvedZoneId !== UNASSIGNED_ZONE_ID ? { ...form, zoneId: resolvedZoneId } : form)
     setDocumentUploads(emptyDocumentUploads())
     setFeedback(null)
     setPdfError(null)
@@ -425,9 +422,9 @@ export default function CustomersPage() {
       setCustomerForm(emptyCustomerForm)
       setDocumentUploads(emptyDocumentUploads())
       setEditingCustomer(null)
-      setFeedback(editingCustomer ? 'Customer details updated.' : 'New customer added.')
+      setFeedback(editingCustomer ? 'Dealer details updated.' : 'New dealer added.')
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to save customer.')
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to save dealer.')
     } finally {
       setIsSaving(false)
     }
@@ -438,9 +435,9 @@ export default function CustomersPage() {
 
     try {
       await deleteCustomer(customer.id)
-      setFeedback(`${customer.name} removed from customer list.`)
+      setFeedback(`${customer.name} removed from dealer list.`)
     } catch (reason) {
-      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete customer.')
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to delete dealer.')
     }
   }
 
@@ -626,7 +623,7 @@ export default function CustomersPage() {
     const paidTotal = customerOrders.reduce((sum, order) => sum + order.paid, 0)
     const orderDue = customerOrders.reduce((sum, order) => sum + order.due, 0)
     const photo = customer.dealerPhotoUrl || customer.passportPhotoUrl
-    const address = [customer.location, customer.thana, customer.district, findDivisionForDistrict(customer.district)]
+    const address = [customer.location, customer.thana, customer.district]
       .filter(Boolean)
       .join(', ')
 
@@ -778,9 +775,10 @@ export default function CustomersPage() {
             variant="outline"
             className="rounded-xl"
             onClick={() => void handleExportSavedCustomer(customer, 'pdf')}
+            disabled={isExportingPdf}
           >
             <FileSignature className="mr-1.5 h-4 w-4" />
-            PDF
+            {isExportingPdf ? 'Preparing PDF...' : 'PDF'}
           </Button>
           <Button
             type="button"
@@ -818,7 +816,7 @@ export default function CustomersPage() {
     autoPrint = true
   ) {
     const documentPreview = (key: DocumentKey) => uploads[key].preview ?? form[`${key}Url`]
-    const addressParts = [form.location, form.thana, form.district, form.division].filter(Boolean)
+    const addressParts = [form.location, form.thana, form.district].filter(Boolean)
     const companyName = data?.settings.companyName ?? 'Power International BD'
     const logoUrl = `${window.location.origin}/power-logo.png`
     const dealerPhotoSrc = documentPreview('dealerPhoto') || documentPreview('passportPhoto')
@@ -837,7 +835,7 @@ export default function CustomersPage() {
       <html>
         <head>
           <meta charset="utf-8" />
-          <title>Customer Information - ${escapeHtml(form.name || 'Customer')}</title>
+          <title>Dealer Information - ${escapeHtml(form.name || 'Dealer')}</title>
           <style>
             * { box-sizing: border-box; }
             @page { size: A4; margin: 0; }
@@ -930,7 +928,7 @@ export default function CustomersPage() {
           <div class="signature-area">
             <div class="signature-box">
               ${signatureDataUrl ? `<img src="${signatureDataUrl}" alt="Signature" />` : ''}
-              <div class="signature-line">Customer Signature</div>
+              <div class="signature-line">Dealer Signature</div>
             </div>
             <div class="signature-box">
               <div class="signature-line">Date</div>
@@ -967,17 +965,17 @@ export default function CustomersPage() {
     return drawnSignature ?? (documentUploads.signature.preview || customerForm.signatureUrl || null)
   }
 
-  // Opens the agreement in a new window and triggers the print dialog (Save as PDF).
-  function openAgreementPdf(html: string): string | null {
-    const popup = window.open('', '_blank', 'width=920,height=720')
-    if (!popup) {
-      return 'Allow popups to generate or save the document as PDF.'
+  // Saves the agreement as a PDF file directly, so no browser print header or footer ends up on it.
+  async function downloadAgreementPdf(html: string, dealerName: string): Promise<string | null> {
+    setIsExportingPdf(true)
+    try {
+      await downloadDocumentPdf(html, `dealer-form-${dealerFileSlug(dealerName)}.pdf`)
+      return null
+    } catch (reason) {
+      return reason instanceof Error ? reason.message : 'Unable to create the PDF.'
+    } finally {
+      setIsExportingPdf(false)
     }
-
-    popup.document.open()
-    popup.document.write(html)
-    popup.document.close()
-    return null
   }
 
   async function downloadAgreementJpg(html: string, dealerName: string) {
@@ -1019,10 +1017,9 @@ export default function CustomersPage() {
         height: body.scrollHeight,
       })
 
-      const slug = dealerName.trim().replace(/[^\w\u0980-\u09FF]+/g, '-').replace(/^-+|-+$/g, '') || 'dealer'
       const link = document.createElement('a')
       link.href = dataUrl
-      link.download = `dealer-form-${slug}.jpg`
+      link.download = `dealer-form-${dealerFileSlug(dealerName)}.jpg`
       link.click()
     } finally {
       iframe.remove()
@@ -1046,11 +1043,11 @@ export default function CustomersPage() {
     }
   }
 
-  function handleGeneratePdf() {
+  async function handleGeneratePdf() {
     const signatureDataUrl = prepareAgreementSignature()
     if (signatureDataUrl === undefined) return
 
-    setPdfError(openAgreementPdf(buildCustomerAgreementHtml(customerForm, documentUploads, signatureDataUrl)))
+    setPdfError(await downloadAgreementPdf(buildCustomerAgreementHtml(customerForm, documentUploads, signatureDataUrl, false), customerForm.name))
   }
 
   async function handleExportSavedCustomer(customer: CustomerRecord, format: 'pdf' | 'jpg') {
@@ -1060,7 +1057,7 @@ export default function CustomersPage() {
     const signature = customer.signatureUrl || null
 
     if (format === 'pdf') {
-      setDetailsExportError(openAgreementPdf(buildCustomerAgreementHtml(form, uploads, signature)))
+      setDetailsExportError(await downloadAgreementPdf(buildCustomerAgreementHtml(form, uploads, signature, false), customer.name))
       return
     }
 
@@ -1075,18 +1072,18 @@ export default function CustomersPage() {
   }
 
   return (
-    <AdminShell active="Customers (CRM)">
+    <AdminShell active="Dealers (CRM)">
       <div className="space-y-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
           {[
-            ['Customers', metrics.totalCustomers.toLocaleString('en-BD'), 'Active CRM records'],
+            ['Dealers', metrics.totalCustomers.toLocaleString('en-BD'), 'Active CRM records'],
             ['Total purchase', formatCurrency(metrics.purchaseTotal, currency), 'From sales history'],
-            ['Due balance', metrics.dueTotal.toLocaleString('en-BD', { maximumFractionDigits: 0 }), 'Customer ledger due'],
+            ['Due balance', metrics.dueTotal.toLocaleString('en-BD', { maximumFractionDigits: 0 }), 'Dealer ledger due'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
-              <CardContent className="p-5">
+              <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
+                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -1102,11 +1099,11 @@ export default function CustomersPage() {
         <Card className="border-border/70 shadow-sm">
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <CardTitle>Customer data table</CardTitle>
+              <CardTitle>Dealer data table</CardTitle>
               <CardDescription>Search by name, phone, company, or location.</CardDescription>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_auto_auto]">
-              <div className="relative">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-[minmax(220px,1fr)_auto_auto]">
+              <div className="relative col-span-2 xl:col-span-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={query}
@@ -1121,73 +1118,50 @@ export default function CustomersPage() {
                 onClick={() => setReminderOnly((current) => !current)}
               >
                 <BellRing className="mr-2 h-4 w-4" />
-                Reminder customers
+                Reminder dealers
               </Button>
               <Button onClick={openCreateDialog} className="h-10 rounded-xl">
                 <Plus className="mr-2 h-4 w-4" />
-                Add customer
+                Add dealer
               </Button>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-4 grid gap-3 rounded-2xl border border-border/70 p-4 sm:grid-cols-2 lg:grid-cols-7">
+            <div className="mb-4 grid grid-cols-2 gap-3 rounded-2xl border border-border/70 p-3 sm:p-4 lg:grid-cols-4 xl:grid-cols-6">
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">Division</p>
+                <p className="text-xs font-medium text-muted-foreground">Zone</p>
                 <Select
-                  value={filterDivision}
+                  value={filterZone}
                   onValueChange={(value) => {
-                    setFilterDivision(value)
-                    setFilterDistrict('all')
-                    setFilterThana('all')
+                    setFilterZone(value)
+                    setFilterSubZone('all')
                   }}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="All divisions" />
+                    <SelectValue placeholder="All zones" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All divisions</SelectItem>
-                    {divisionList.map((division) => (
-                      <SelectItem key={division} value={division}>
-                        {division}
+                    <SelectItem value="all">All zones</SelectItem>
+                    {zoneOptions.map((zone) => (
+                      <SelectItem key={zone.id} value={zone.id}>
+                        {zone.name}
                       </SelectItem>
                     ))}
+                    {visibleZoneIds ? null : <SelectItem value={UNASSIGNED_ZONE_ID}>{UNASSIGNED_ZONE_NAME}</SelectItem>}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">District</p>
-                <Select
-                  value={filterDistrict}
-                  disabled={filterDivision === 'all'}
-                  onValueChange={(value) => {
-                    setFilterDistrict(value)
-                    setFilterThana('all')
-                  }}
-                >
+                <p className="text-xs font-medium text-muted-foreground">Sub-zone</p>
+                <Select value={filterSubZone} disabled={!filterSubZoneOptions.length} onValueChange={setFilterSubZone}>
                   <SelectTrigger>
-                    <SelectValue placeholder="All districts" />
+                    <SelectValue placeholder="All sub-zones" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All districts</SelectItem>
-                    {filterDistrictOptions.map((district) => (
-                      <SelectItem key={district} value={district}>
-                        {district}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">Thana</p>
-                <Select value={filterThana} disabled={filterDistrict === 'all'} onValueChange={setFilterThana}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="All thanas" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All thanas</SelectItem>
-                    {filterThanaOptions.map((thana) => (
-                      <SelectItem key={thana} value={thana}>
-                        {thana}
+                    <SelectItem value="all">All sub-zones</SelectItem>
+                    {filterSubZoneOptions.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1226,7 +1200,7 @@ export default function CustomersPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead>Customer</TableHead>
+                    <TableHead>Dealer</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Joined</TableHead>
@@ -1340,7 +1314,7 @@ export default function CustomersPage() {
                   {filteredRows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
-                        No customers found.
+                        No dealers found.
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -1383,11 +1357,11 @@ export default function CustomersPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto sm:max-h-[calc(100dvh-3rem)]">
           <DialogHeader>
-            <DialogTitle>{editingCustomer ? 'Edit customer' : 'Add new customer'}</DialogTitle>
+            <DialogTitle>{editingCustomer ? 'Edit dealer' : 'Add new dealer'}</DialogTitle>
             <DialogDescription>
               {editingCustomer
                 ? 'Update contact details and due balance.'
-                : 'Just the essentials — you can add due balance later from the customer list.'}
+                : 'Just the essentials — you can add due balance later from the dealer list.'}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-5" onSubmit={handleSubmit}>
@@ -1479,70 +1453,6 @@ export default function CustomersPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
-                    Division <span className="font-normal text-muted-foreground">(optional)</span>
-                  </p>
-                  <Select
-                    value={customerForm.division || undefined}
-                    onValueChange={(value) =>
-                      setCustomerForm((current) => ({ ...current, division: value, district: '', thana: '' }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select division" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {divisionList.map((division) => (
-                        <SelectItem key={division} value={division}>
-                          {division}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">
-                    District <span className="font-normal text-muted-foreground">(optional)</span>
-                  </p>
-                  <Select
-                    value={customerForm.district || undefined}
-                    disabled={!customerForm.division}
-                    onValueChange={(value) => setCustomerForm((current) => ({ ...current, district: value, thana: '' }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={customerForm.division ? 'Select district' : 'Select division first'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {districtOptions.map((district) => (
-                        <SelectItem key={district} value={district}>
-                          {district}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">
-                    Thana <span className="font-normal text-muted-foreground">(optional)</span>
-                  </p>
-                  <Select
-                    value={customerForm.thana || undefined}
-                    disabled={!customerForm.district}
-                    onValueChange={(value) => setCustomerForm((current) => ({ ...current, thana: value }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={customerForm.district ? 'Select thana' : 'Select district first'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {thanaOptions.map((thana) => (
-                        <SelectItem key={thana} value={thana}>
-                          {thana}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">
                     Zone{' '}
                     {visibleZoneIds ? (
                       <span className="ml-0.5 text-rose-500">*</span>
@@ -1551,14 +1461,16 @@ export default function CustomersPage() {
                     )}
                   </p>
                   <Select
-                    value={customerForm.zoneId || 'auto'}
-                    onValueChange={(value) => setCustomerForm((current) => ({ ...current, zoneId: value === 'auto' ? '' : value }))}
+                    value={customerForm.zoneId || 'none'}
+                    onValueChange={(value) =>
+                      setCustomerForm((current) => ({ ...current, zoneId: value === 'none' ? '' : value, thana: '' }))
+                    }
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Auto (from district)" />
+                      <SelectValue placeholder="Select zone" />
                     </SelectTrigger>
                     <SelectContent>
-                      {visibleZoneIds ? null : <SelectItem value="auto">Auto (from district)</SelectItem>}
+                      {visibleZoneIds ? null : <SelectItem value="none">No zone</SelectItem>}
                       {zoneOptions.map((zone) => (
                         <SelectItem key={zone.id} value={zone.id}>
                           {zone.name}
@@ -1566,6 +1478,31 @@ export default function CustomersPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Sub-zone <span className="font-normal text-muted-foreground">(optional)</span>
+                  </p>
+                  <Select
+                    value={customerForm.thana || 'none'}
+                    disabled={!customerForm.zoneId}
+                    onValueChange={(value) => setCustomerForm((current) => ({ ...current, thana: value === 'none' ? '' : value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={customerForm.zoneId ? 'Select sub-zone' : 'Select zone first'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No sub-zone</SelectItem>
+                      {subZoneOptions.map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {customerForm.zoneId && !subZoneOptions.length ? (
+                    <p className="text-xs text-muted-foreground">This zone has no sub-zones yet. An admin can add them under Zones.</p>
+                  ) : null}
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
@@ -1658,9 +1595,16 @@ export default function CustomersPage() {
                   Clear signature
                 </Button>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handleGeneratePdf}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-lg"
+                    onClick={() => void handleGeneratePdf()}
+                    disabled={isExportingPdf}
+                  >
                     <FileSignature className="mr-1.5 h-4 w-4" />
-                    Generate PDF
+                    {isExportingPdf ? 'Preparing PDF...' : 'Download PDF'}
                   </Button>
                   <Button
                     type="button"
@@ -1683,7 +1627,7 @@ export default function CustomersPage() {
                 Cancel
               </Button>
               <Button type="submit" className="rounded-xl" disabled={isSaving}>
-                {isSaving ? 'Saving...' : editingCustomer ? 'Update customer' : 'Save customer'}
+                {isSaving ? 'Saving...' : editingCustomer ? 'Update dealer' : 'Save dealer'}
               </Button>
             </div>
           </form>

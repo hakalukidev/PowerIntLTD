@@ -19,26 +19,48 @@ export function LoginScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Load the dashboard route ahead of time so it opens right after signing in.
+  useEffect(() => {
+    router.prefetch('/admin/dashboard')
+  }, [router])
+
   useEffect(() => {
     if (currentUser) {
       router.replace('/admin/dashboard')
     }
   }, [currentUser, router])
 
+  // The password was accepted but the ERP account was refused (missing or inactive): let them try again.
+  useEffect(() => {
+    if (sessionError) {
+      setSubmitting(false)
+    }
+  }, [sessionError])
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (submitting) return
+
+    // Browser autofill can fill the fields without React seeing a change, so read what is on the form.
+    const form = new FormData(event.currentTarget)
+    const email = String(form.get('email') ?? identifier)
+    const secret = String(form.get('password') ?? password)
+
     setSubmitting(true)
     setError(null)
 
     try {
-      await login(identifier, password)
+      await login(email, secret)
+      // Stay in the signing-in state until the dashboard replaces this screen, so the
+      // button never looks ready for a second click while the dashboard loads.
       router.replace('/admin/dashboard')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to log in.')
-    } finally {
       setSubmitting(false)
     }
   }
+
+  const signedIn = Boolean(currentUser)
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background">
@@ -98,6 +120,7 @@ export function LoginScreen() {
                 <Input
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
+                  name="email"
                   placeholder="name@powerinternationalbd.com"
                   type="email"
                   autoComplete="email"
@@ -112,6 +135,7 @@ export function LoginScreen() {
                   <Input
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
+                    name="password"
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Password"
                     autoComplete="current-password"
@@ -132,8 +156,8 @@ export function LoginScreen() {
 
               {error ?? sessionError ? <p className="text-sm text-rose-600 dark:text-rose-400">{error ?? sessionError}</p> : null}
 
-              <Button type="submit" className="h-11 w-full rounded-xl text-sm font-medium" disabled={submitting || loading}>
-                {submitting ? 'Signing in...' : loading ? 'Loading users...' : (
+              <Button type="submit" className="h-11 w-full rounded-xl text-sm font-medium" disabled={submitting || loading || signedIn}>
+                {signedIn ? 'Opening dashboard...' : submitting ? 'Signing in...' : loading ? 'Loading users...' : (
                   <span className="flex items-center justify-center gap-2">
                     Enter dashboard <ArrowRight className="h-4 w-4" />
                   </span>

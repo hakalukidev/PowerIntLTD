@@ -4,7 +4,7 @@ import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'rea
 import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
-import { downloadDocumentPdf } from '@/components/admin/credit-sheet/printSheet'
+import { downloadDocumentJpg, downloadDocumentPdf } from '@/components/admin/credit-sheet/printSheet'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -979,51 +979,7 @@ export default function CustomersPage() {
   }
 
   async function downloadAgreementJpg(html: string, dealerName: string) {
-    // A4 width at 96 DPI, rendered off-screen so the page layout is not disturbed.
-    const pageWidth = 794
-    const iframe = document.createElement('iframe')
-    iframe.setAttribute('aria-hidden', 'true')
-    iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${pageWidth}px;height:1123px;border:0;`
-    document.body.appendChild(iframe)
-
-    try {
-      await new Promise<void>((resolve) => {
-        iframe.onload = () => resolve()
-        iframe.srcdoc = html
-      })
-
-      const frameDocument = iframe.contentDocument
-      if (!frameDocument) throw new Error('Unable to prepare the image.')
-
-      await frameDocument.fonts?.ready
-      await Promise.all(
-        Array.from(frameDocument.images).map((image) =>
-          image.complete
-            ? Promise.resolve()
-            : new Promise<void>((resolve) => {
-                image.onload = () => resolve()
-                image.onerror = () => resolve()
-              })
-        )
-      )
-
-      const { toJpeg } = await import('html-to-image')
-      const body = frameDocument.body
-      const dataUrl = await toJpeg(body, {
-        quality: 0.95,
-        pixelRatio: 2,
-        backgroundColor: '#ffffff',
-        width: pageWidth,
-        height: body.scrollHeight,
-      })
-
-      const link = document.createElement('a')
-      link.href = dataUrl
-      link.download = `dealer-form-${dealerFileSlug(dealerName)}.jpg`
-      link.click()
-    } finally {
-      iframe.remove()
-    }
+    await downloadDocumentJpg(html, `dealer-form-${dealerFileSlug(dealerName)}.jpg`)
   }
 
   async function handleDownloadJpg() {

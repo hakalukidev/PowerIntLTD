@@ -1,5 +1,6 @@
 import { resolveRoles } from '@/lib/erp/roles'
-import type { RoleRecord } from '@/lib/erp/types'
+import { effectiveRole } from '@/lib/erp/utils'
+import type { RoleRecord, UserRecord } from '@/lib/erp/types'
 import { getAdminAuth, getAdminDatabase } from '@/lib/firebase/admin'
 
 export class AuthorizationError extends Error {
@@ -11,12 +12,8 @@ export class AuthorizationError extends Error {
   }
 }
 
-/**
- * Verifies the caller's Firebase ID token and checks that their role grants
- * `permission`. Roles and permissions are read server-side so a tampered client
- * cannot grant itself access.
- */
-export async function requirePermission(request: Request, permission: string) {
+/** Verifies the caller's Firebase ID token and that their ERP account exists and is active. */
+export async function requireSignedIn(request: Request) {
   const header = request.headers.get('authorization') ?? ''
   const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : ''
 
@@ -34,7 +31,7 @@ export async function requirePermission(request: Request, permission: string) {
 
   const db = getAdminDatabase()
   const callerSnapshot = await db.ref(`erp/users/${uid}`).get()
-  const caller = callerSnapshot.val() as { roleId?: string; status?: string } | null
+  const caller = callerSnapshot.val() as UserRecord | null
 
   if (!caller) {
     throw new AuthorizationError('Your account is no longer available.', 403)
@@ -44,13 +41,25 @@ export async function requirePermission(request: Request, permission: string) {
     throw new AuthorizationError('This account is inactive.', 403)
   }
 
-  // Resolved the same way as in the app: built-in roles, legacy permission ids, and admin = everything.
+  return { uid, db, caller }
+}
+
+/**
+ * Verifies the caller's Firebase ID token and checks that their role grants
+ * `permission`. Roles and permissions are read server-side so a tampered client
+ * cannot grant itself access.
+ */
+export async function requirePermission(request: Request, permission: string) {
+  const { uid, db, caller } = await requireSignedIn(request)
+
+  // Resolved the same way as in the app: built-in roles, legacy permission ids, admin = everything,
+  // and a user with several approved roles gets what all of them grant.
   const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
-  const permissions = (caller.roleId && roles[caller.roleId]?.permissions) || []
+  const permissions = effectiveRole(roles, caller)?.permissions ?? []
 
   if (!permissions.includes(permission)) {
     throw new AuthorizationError('You do not have permission to do that.', 403)
   }
 
-  return { uid, db }
+  return { uid, db, isAdmin: caller.roleId === 'admin' }
 }

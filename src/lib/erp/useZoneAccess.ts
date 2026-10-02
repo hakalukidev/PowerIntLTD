@@ -3,25 +3,27 @@
 import { useMemo } from 'react'
 
 import { useERP } from './provider'
-import { toArray } from './utils'
-import { customerZoneId, visibleZoneIdsFor } from './zones'
+import { effectiveRole, toArray } from './utils'
+import { accessScopeFor, customerInScope, scopeZoneIds } from './zones'
 
 /**
- * The customers and zones the signed-in user may see. Zone managers and users
- * whose role is limited to zones only get those zones' customers; everyone else
- * gets them all (`visibleZoneIds` is then `null`).
+ * The customers and zones the signed-in user may see. Users limited to zones or areas
+ * (Zonal Managers, Area Sales Managers, SRs, zone-limited roles) only get the customers of
+ * their territory and their team's; everyone else gets them all (`visibleZoneIds` is then `null`).
  */
 export function useZoneAccess() {
   const { data, currentUser } = useERP()
 
   const zones = useMemo(() => toArray(data?.zones).sort((left, right) => left.name.localeCompare(right.name)), [data?.zones])
-  const role = currentUser ? data?.roles[currentUser.roleId] : null
-  const visibleZoneIds = useMemo(() => visibleZoneIdsFor(currentUser, zones, role), [currentUser, zones, role])
+  const role = useMemo(() => (currentUser ? effectiveRole(data?.roles, currentUser) : null), [currentUser, data?.roles])
+  const allUsers = useMemo(() => toArray(data?.users), [data?.users])
+  const scope = useMemo(() => accessScopeFor(currentUser, zones, role, allUsers), [currentUser, zones, role, allUsers])
+  const visibleZoneIds = useMemo(() => (scope ? scopeZoneIds(scope) : null), [scope])
 
   const allCustomers = useMemo(() => toArray(data?.customers), [data?.customers])
   const customers = useMemo(
-    () => (visibleZoneIds ? allCustomers.filter((customer) => visibleZoneIds.has(customerZoneId(customer, zones))) : allCustomers),
-    [allCustomers, visibleZoneIds, zones]
+    () => (scope ? allCustomers.filter((customer) => customerInScope(customer, zones, scope)) : allCustomers),
+    [allCustomers, scope, zones]
   )
   const zoneOptions = useMemo(
     () => (visibleZoneIds ? zones.filter((zone) => visibleZoneIds.has(zone.id)) : zones),

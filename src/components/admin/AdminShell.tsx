@@ -10,8 +10,10 @@ import {
   Boxes,
   CheckCheck,
   ClipboardList,
+  Factory,
   FileSpreadsheet,
   Handshake,
+  KeyRound,
   LayoutDashboard,
   Lock,
   LogOut,
@@ -21,9 +23,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ShieldCheck,
+  Store,
   ShoppingCart,
   Target,
   Truck,
+  UserPlus,
   UserRound,
   Users,
   Wallet,
@@ -43,10 +47,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { ChangePasswordDialog } from '@/components/auth/ChangePasswordDialog'
 import { LoginScreen } from '@/components/auth/LoginScreen'
 import { useERP } from '@/lib/erp/provider'
 import { cn } from '@/lib/utils'
-import { formatDateTime } from '@/lib/erp/utils'
+import { formatDateTime, userRoleIds, userRoleNames } from '@/lib/erp/utils'
 
 type NavigationItem = {
   label: string
@@ -94,11 +99,25 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'suppliers.view',
       },
       {
+        label: 'Suppliers (CRM)',
+        description: 'Supplier profiles, bank details, documents, and forms',
+        href: '/admin/supplier-crm',
+        icon: Factory,
+        permission: 'suppliers.view',
+      },
+      {
         label: 'Dealers (CRM)',
         description: 'Dealer history, support, and credit tracking',
         href: '/admin/customers',
         icon: Users,
         permission: 'customers.view',
+      },
+      {
+        label: 'Leads',
+        description: 'Shop visits and potential customers (sales pipeline)',
+        href: '/admin/leads',
+        icon: Store,
+        permission: 'leads.view',
       },
       {
         label: 'Credit Sheet',
@@ -152,6 +171,13 @@ const navigationGroups: NavigationGroup[] = [
         description: 'Profiles, joining date, and probation/confirmation status',
         href: '/admin/employees',
         icon: UserRound,
+        permission: 'employees.view',
+      },
+      {
+        label: 'Employee Joining Form',
+        description: 'Submit joining forms; an admin sets the pay and approves',
+        href: '/admin/employees/joining',
+        icon: UserPlus,
         permission: 'employees.view',
       },
       {
@@ -212,7 +238,7 @@ function SidebarContent({
   onToggleCollapse?: () => void
 }) {
   const { hasPermission, currentUser, data, logout } = useERP()
-  const roleName = currentUser ? data?.roles[currentUser.roleId]?.name ?? currentUser.roleId : ''
+  const roleName = currentUser ? userRoleNames(data?.roles, currentUser) : ''
 
   const visibleGroups = navigationGroups
     .map((group) => ({
@@ -311,6 +337,19 @@ function SidebarContent({
                 <span className="block truncate text-[11px] text-sidebar-foreground/55">{roleName}</span>
               </span>
             ) : null}
+            <ChangePasswordDialog
+              trigger={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white"
+                  title="Change password"
+                  aria-label="Change password"
+                >
+                  <KeyRound className="h-4 w-4" />
+                </Button>
+              }
+            />
             <Button
               variant="ghost"
               size="icon"
@@ -419,7 +458,8 @@ function NotificationBell() {
     .filter((notification) => {
       if (!currentUser || currentUser.roleId === 'admin') return true
       if (!notification.roles || notification.roles.length === 0) return true
-      return notification.roles.includes(currentUser.roleId)
+      const roleIds = userRoleIds(currentUser)
+      return notification.roles.some((role) => roleIds.includes(role))
     })
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
 
@@ -532,7 +572,7 @@ export function AdminShell({ active, children }: AdminShellProps) {
     [active, allNavigationItems]
   )
 
-  const roleName = currentUser ? data?.roles[currentUser.roleId]?.name ?? currentUser.roleId : 'Loading'
+  const roleName = currentUser ? userRoleNames(data?.roles, currentUser) : 'Loading'
 
   if (loading) {
     return (

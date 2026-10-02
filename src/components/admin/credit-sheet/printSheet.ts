@@ -154,6 +154,53 @@ async function loadBanglaFont() {
   }
 }
 
+/** Saves a document as one tall A4-wide JPG, rendered off-screen so the page layout is not disturbed. */
+export async function downloadDocumentJpg(html: string, filename: string) {
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${A4_WIDTH_PX}px;height:${A4_HEIGHT_PX}px;border:0;`
+  document.body.appendChild(iframe)
+
+  try {
+    await new Promise<void>((resolve) => {
+      iframe.onload = () => resolve()
+      iframe.srcdoc = html
+    })
+
+    const frameDocument = iframe.contentDocument
+    if (!frameDocument) throw new Error('Unable to prepare the image.')
+
+    await frameDocument.fonts?.ready
+    await Promise.all(
+      Array.from(frameDocument.images).map((image) =>
+        image.complete
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              image.onload = () => resolve()
+              image.onerror = () => resolve()
+            })
+      )
+    )
+
+    const { toJpeg } = await import('html-to-image')
+    const body = frameDocument.body
+    const dataUrl = await toJpeg(body, {
+      quality: 0.95,
+      pixelRatio: 2,
+      backgroundColor: '#ffffff',
+      width: A4_WIDTH_PX,
+      height: body.scrollHeight,
+    })
+
+    const link = document.createElement('a')
+    link.href = dataUrl
+    link.download = filename
+    link.click()
+  } finally {
+    iframe.remove()
+  }
+}
+
 /**
  * Saves a branded document as an A4 PDF that looks exactly like the printed
  * page: it is rendered off-screen, captured as an image, and split into pages

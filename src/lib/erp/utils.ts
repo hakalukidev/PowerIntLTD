@@ -7,6 +7,7 @@ import type {
   OrderRecord,
   ProductRecord,
   SalaryHoldStatus,
+  RoleRecord,
   SalesTargetRecord,
   UserRecord,
 } from '@/lib/erp/types'
@@ -75,29 +76,76 @@ export function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+/**
+ * A phone number reduced to its local digits, so +8801711-000000, 8801711000000, and
+ * 01711000000 all compare equal. Used for duplicate checks and for signing in by phone.
+ */
+export function normalizePhone(value: unknown) {
+  const digits = typeof value === 'string' || typeof value === 'number' ? String(value).replace(/\D/g, '') : ''
+  return digits ? digits.replace(/^(?:880|88|0)+/, '') : ''
+}
+
+/**
+ * The user's main role and every additional role an admin approved. Roles still waiting
+ * for approval are not included, so they grant nothing.
+ */
+export function userRoleIds(user: Pick<UserRecord, 'roleId' | 'extraRoleIds'>) {
+  return Array.from(new Set([user.roleId, ...(user.extraRoleIds ?? [])].filter(Boolean)))
+}
+
+export function userRoleNames(roles: Record<string, RoleRecord> | undefined, user: Pick<UserRecord, 'roleId' | 'extraRoleIds'>) {
+  return userRoleIds(user)
+    .map((roleId) => roles?.[roleId]?.name ?? roleId)
+    .join(', ')
+}
+
+/**
+ * One role that grants what all of the user's roles grant together: every permission of each,
+ * and the widest data scope. A role that is not limited to zones or to the user's own territory
+ * makes the combination unlimited too.
+ */
+export function effectiveRole(roles: Record<string, RoleRecord> | undefined, user: Pick<UserRecord, 'roleId' | 'extraRoleIds'>): RoleRecord | null {
+  const held = userRoleIds(user)
+    .map((roleId) => roles?.[roleId])
+    .filter((role): role is RoleRecord => Boolean(role))
+  if (!held.length) return null
+  if (held.length === 1) return held[0]
+
+  const isLimited = (role: RoleRecord) => role.dataScope === 'assigned' || (role.zoneIds?.length ?? 0) > 0
+  const allLimited = held.every(isLimited)
+  return {
+    id: held[0].id,
+    name: held.map((role) => role.name).join(', '),
+    description: '',
+    permissions: Array.from(new Set(held.flatMap((role) => role.permissions ?? []))),
+    zoneIds: allLimited ? Array.from(new Set(held.flatMap((role) => role.zoneIds ?? []))) : [],
+    dataScope: allLimited && held.some((role) => role.dataScope === 'assigned') ? 'assigned' : 'all',
+  }
+}
+
 export function getPermissions(data: ERPData | null, user: UserRecord | null) {
   if (!data || !user) {
     return []
   }
 
-  return data.roles[user.roleId]?.permissions ?? []
+  return effectiveRole(data.roles, user)?.permissions ?? []
 }
 
 export function hasPermission(data: ERPData | null, user: UserRecord | null, permission: string) {
   return getPermissions(data, user).includes(permission)
 }
 
-export function buildDashboardSnapshot(data: ERPData | null, roleId?: string) {
+export function buildDashboardSnapshot(data: ERPData | null, roleIds?: string[]) {
   const orders = sortByCreatedAtDesc(toArray(data?.orders))
   const purchases = sortByCreatedAtDesc(toArray(data?.purchases))
   const products = toArray(data?.products)
   const tasks = toArray(data?.tasks)
   const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
   const notifications = rawNotifications.filter((item) => {
-    if (!roleId) return true
-    if (roleId === 'admin') return true
+    if (!roleIds) return true
+    if (roleIds.includes('admin')) return true
     if (!item.roles || item.roles.length === 0) return true
-    return item.roles.includes(roleId)
+    return item.roles.some((role) => roleIds.includes(role))
   })
   const activities = sortByCreatedAtDesc(toArray(data?.activities))
 
@@ -300,7 +348,7 @@ export function buildUserReport(data: ERPData | null) {
     return {
       id: user.id,
       name: user.name,
-      role: data?.roles[user.roleId]?.name ?? user.roleId,
+      role: userRoleNames(data?.roles, user),
       totalOrders: userOrders.length,
       pendingOrders: userOrders.filter((order) => order.status === 'pending').length,
       completedOrders: userOrders.filter((order) => order.status === 'completed').length,
@@ -466,7 +514,8 @@ export function computeCommission(unitsSold: number, commissionPerUnit: number) 
 }
 
 export function computeSalaryFigures(
-  employee: Pick<EmployeeRecord, 'baseSalary' | 'commissionPerUnit'>,
+  employee: Pick<EmployeeRecord, 'baseSalary' | 'commissionPerUnit'> &
+    Partial<Pick<EmployeeRecord, 'taDa' | 'houseRent' | 'mobileBill'>>,
   target: Pick<SalesTargetRecord, 'unitsSold' | 'unitTarget' | 'amountSold' | 'amountTarget'> | null
 ) {
   const unitsSold = target?.unitsSold ?? 0
@@ -475,7 +524,8 @@ export function computeSalaryFigures(
     : { achievementPercent: 0 }
   const commissionAmount = computeCommission(unitsSold, employee.commissionPerUnit)
   const holdStatus = getSalaryHoldStatus(achievementPercent)
-  const grossPayable = employee.baseSalary + commissionAmount
+  const allowances = (employee.taDa ?? 0) + (employee.houseRent ?? 0) + (employee.mobileBill ?? 0)
+  const grossPayable = employee.baseSalary + allowances + commissionAmount
 
   return { unitsSold, achievementPercent, commissionAmount, holdStatus, grossPayable }
 }

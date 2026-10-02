@@ -40,7 +40,7 @@ export function permissionCatalog() {
 }
 
 /**
- * The roles as the ERP uses them: the built-in roles (such as Zone Manager) with any
+ * The roles as the ERP uses them: the built-in roles (such as Zonal Manager) with any
  * stored changes on top, legacy permission ids translated, and the admin role always
  * holding every permission. The app and the server-side permission checks both use
  * this, so a role means the same thing on both sides.
@@ -55,7 +55,7 @@ export function resolveRoles(stored?: Record<string, RoleRecord> | null): Record
   return Object.fromEntries(
     Object.entries(merged).map(([id, role]) => {
       if (id === 'admin') {
-        return [id, { ...role, permissions: Object.keys(catalog) }]
+        return [id, { ...role, permissions: Object.keys(catalog), dataScope: 'all' }]
       }
 
       const resolved = new Set<string>()
@@ -68,7 +68,7 @@ export function resolveRoles(stored?: Record<string, RoleRecord> | null): Record
         }
       }
 
-      return [id, { ...role, permissions: Array.from(resolved), zoneIds: role.zoneIds ?? [] }]
+      return [id, { ...role, permissions: Array.from(resolved), zoneIds: role.zoneIds ?? [], dataScope: role.dataScope ?? 'all' }]
     })
   )
 }

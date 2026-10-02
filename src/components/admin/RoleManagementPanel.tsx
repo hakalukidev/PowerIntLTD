@@ -20,13 +20,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
-import type { PermissionDefinition, RoleRecord, UserRecord } from '@/lib/erp/types'
+import type { PermissionDefinition, RoleDataScope, RoleRecord, UserRecord } from '@/lib/erp/types'
 
 const initialForm = {
   name: '',
   description: '',
   permissions: [] as string[],
   zoneIds: [] as string[],
+  dataScope: 'all' as RoleDataScope,
 }
 
 function groupByCategory(permissions: PermissionDefinition[]) {
@@ -353,6 +354,7 @@ export function RoleManagementPanel() {
       description: role.description,
       permissions: [...role.permissions],
       zoneIds: [...(role.zoneIds ?? [])],
+      dataScope: role.dataScope ?? 'all',
     })
     setMessage(null)
     setError(null)
@@ -479,6 +481,28 @@ export function RoleManagementPanel() {
 
                 {editingRole?.id !== 'admin' ? (
                   <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">Data scope</p>
+                    <Select
+                      value={form.dataScope}
+                      onValueChange={(value) => setForm((current) => ({ ...current, dataScope: value as RoleDataScope }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All records</SelectItem>
+                        <SelectItem value="assigned">Only the user&apos;s own zone or area, and their team</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      For Zonal Managers, Area Sales Managers, and SRs: each user only sees the customers and transactions of the
+                      zones or areas assigned to them on the Users tab, and the officers who report to them.
+                    </p>
+                  </div>
+                ) : null}
+
+                {editingRole?.id !== 'admin' ? (
+                  <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">Zone access</p>
                     {zones.length ? (
                       <div className="grid gap-1.5 rounded-xl border border-border/70 p-3 sm:grid-cols-3">
@@ -564,7 +588,9 @@ export function RoleManagementPanel() {
                         <TableCell className="text-sm text-muted-foreground">
                           {role.zoneIds?.length
                             ? role.zoneIds.map((zoneId) => data?.zones[zoneId]?.name ?? 'Deleted zone').join(', ')
-                            : 'All zones'}
+                            : role.dataScope === 'assigned'
+                              ? "User's own zone/area"
+                              : 'All zones'}
                         </TableCell>
                         <TableCell>{userCount}</TableCell>
                         <TableCell className="text-right">

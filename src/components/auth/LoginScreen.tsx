@@ -43,14 +43,14 @@ export function LoginScreen() {
 
     // Browser autofill can fill the fields without React seeing a change, so read what is on the form.
     const form = new FormData(event.currentTarget)
-    const email = String(form.get('email') ?? identifier)
+    const loginName = String(form.get('identifier') ?? identifier)
     const secret = String(form.get('password') ?? password)
 
     setSubmitting(true)
     setError(null)
 
     try {
-      await login(email, secret)
+      await login(loginName, secret)
       // Stay in the signing-in state until the dashboard replaces this screen, so the
       // button never looks ready for a second click while the dashboard loads.
       router.replace('/admin/dashboard')
@@ -111,19 +111,25 @@ export function LoginScreen() {
           <section className="mx-auto w-full max-w-sm">
             <div className="space-y-2">
               <h2 className="text-3xl font-semibold tracking-tight text-foreground">Sign in</h2>
-              <p className="text-sm text-muted-foreground">Use your phone number or login ID with the password set by admin.</p>
+              <p className="text-sm text-muted-foreground">Use your email address or phone number with your password.</p>
             </div>
 
             <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Email address</label>
+                <label htmlFor="login-identifier" className="text-sm font-medium text-foreground">
+                  Email or phone number
+                </label>
                 <Input
+                  id="login-identifier"
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
-                  name="email"
-                  placeholder="name@powerinternationalbd.com"
-                  type="email"
-                  autoComplete="email"
+                  name="identifier"
+                  placeholder="name@powerinternationalbd.com or 01711-000000"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  autoComplete="username"
                   className="h-11 rounded-xl"
                   required
                 />
@@ -166,8 +172,8 @@ export function LoginScreen() {
             </form>
 
             <div className="mt-8 border-t border-border/60 pt-6 text-sm leading-6 text-muted-foreground">
-              <p>Sign in with your work email address.</p>
-              <p className="mt-1">Lost your password? Ask an administrator to reset it for you.</p>
+              <p>Your account and first password are set up by an administrator.</p>
+              <p className="mt-1">Once signed in, you can change your password from the menu. Lost it? Ask an administrator to reset it.</p>
             </div>
           </section>
         </div>

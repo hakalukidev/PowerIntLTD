@@ -52,7 +52,7 @@ export default function SalesTargetPage() {
 
   const rows = useMemo(() => {
     return employees
-      .filter((employee) => employee.employmentStatus === 'active')
+      .filter((employee) => employee.employmentStatus === 'active' && employee.approvalStatus === 'approved')
       .map((employee) => {
         const target = salesTargets.find((entry) => entry.employeeId === employee.id && entry.month === selectedMonth)
         const unitTarget = target?.unitTarget ?? employee.monthlyUnitTarget

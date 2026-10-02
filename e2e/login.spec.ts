@@ -15,7 +15,7 @@ test.describe('Login', () => {
     const submit = page.getByRole('button', { name: /Enter dashboard|Signing in|Loading users|Opening dashboard/ })
     await expect(submit).toHaveText(/Enter dashboard/)
 
-    await page.locator('input[type="email"]').fill(ADMIN_EMAIL)
+    await page.locator('input[name="identifier"]').fill(ADMIN_EMAIL)
     await page.locator('input[type="password"]').fill(ADMIN_PASSWORD)
 
     const started = Date.now()
@@ -48,7 +48,7 @@ test.describe('Login', () => {
     // Chrome autofill puts values in the fields without the input events React listens to.
     await page.evaluate(
       ([email, password]) => {
-        ;(document.querySelector('input[type="email"]') as HTMLInputElement).value = email
+        ;(document.querySelector('input[name="identifier"]') as HTMLInputElement).value = email
         ;(document.querySelector('input[type="password"]') as HTMLInputElement).value = password
       },
       [ADMIN_EMAIL, ADMIN_PASSWORD]
@@ -61,11 +61,11 @@ test.describe('Login', () => {
 
   test('TC-L.3 a wrong password shows an error and the button can be used again', async ({ page }, testInfo) => {
     await page.goto('/')
-    await page.locator('input[type="email"]').fill(ADMIN_EMAIL)
+    await page.locator('input[name="identifier"]').fill(ADMIN_EMAIL)
     await page.locator('input[type="password"]').fill('definitely-wrong-password')
     await page.locator('button[type="submit"]').click()
 
-    await expect(page.getByText('Invalid email address or password.')).toBeVisible()
+    await expect(page.getByText('Invalid email, phone number, or password.')).toBeVisible()
     await expect(page.locator('button[type="submit"]')).toBeEnabled()
     await expect(page.locator('button[type="submit"]')).toHaveText(/Enter dashboard/)
     await screenshot(page, 'login-wrong-password', testInfo)

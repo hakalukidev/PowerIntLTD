@@ -21,6 +21,8 @@ import type {
   CustomerRecord,
   DamageProductInput,
   DamageProductRecord,
+  LeadInput,
+  EmployeeApprovalInput,
   EmployeeInput,
   EmployeeRecord,
   ERPData,
@@ -45,6 +47,7 @@ import type {
   TaskInput,
   TaskRecord,
   UserInput,
+  LoginHistoryEntry,
   UserRecord,
   WarehouseInput,
   ZoneInput,
@@ -69,7 +72,7 @@ import {
   onAuthStateChanged,
   onIdTokenChanged,
   setPersistence,
-  signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut,
   type User as FirebaseUser,
 } from 'firebase/auth'
@@ -87,14 +90,17 @@ type ERPContextValue = {
   users: UserRecord[]
   currentUser: UserRecord | null
   currentPermissions: string[]
-  login: (email: string, password: string) => Promise<void>
+  login: (identifier: string, password: string) => Promise<void>
   logout: () => Promise<void>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>
+  fetchLoginHistory: (userId: string) => Promise<LoginHistoryEntry[]>
   createUser: (input: UserInput) => Promise<void>
   updateUser: (userId: string, input: UserInput) => Promise<void>
   deleteUser: (userId: string) => Promise<void>
   createRole: (input: RoleInput) => Promise<void>
   updateRole: (roleId: string, input: RoleInput) => Promise<void>
   deleteRole: (roleId: string, reassignRoleId?: string) => Promise<void>
+  reviewRoleRequest: (userId: string, roleId: string, decision: 'approve' | 'reject') => Promise<void>
   hasPermission: (permission: string) => boolean
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
@@ -130,7 +136,11 @@ type ERPContextValue = {
   saveDamageProduct: (input: DamageProductInput, damageProductId?: string) => Promise<void>
   updateDamageProductStatus: (damageProductId: string, status: DamageProductRecord['status']) => Promise<void>
   deleteDamageProduct: (damageProductId: string) => Promise<void>
-  saveEmployee: (input: EmployeeInput, employeeId?: string) => Promise<string>
+  saveLead: (input: LeadInput, leadId?: string) => Promise<void>
+  deleteLead: (leadId: string) => Promise<void>
+  /** `submitForApproval` saves a new entry as a pending joining form even when an admin fills it in. */
+  saveEmployee: (input: EmployeeInput, employeeId?: string, options?: { submitForApproval?: boolean }) => Promise<string>
+  reviewEmployee: (employeeId: string, decision: 'approve' | 'reject', input?: EmployeeApprovalInput) => Promise<void>
   deleteEmployee: (employeeId: string) => Promise<void>
   recordSale: (input: RecordSaleInput) => Promise<void>
   saveSalaryPayment: (input: SalaryPaymentInput) => Promise<void>
@@ -138,10 +148,6 @@ type ERPContextValue = {
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
 const CURRENT_USER_STORAGE_KEY = 'ims-current-user'
-
-function normalizeLookup(value: unknown) {
-  return typeof value === 'string' ? value.trim().toLowerCase() : ''
-}
 
 function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
   const now = new Date().toISOString()
@@ -222,6 +228,30 @@ function normalizeSupplierRecord(supplier: SupplierRecord): SupplierRecord {
     notes: supplier.notes || '',
     // Firebase drops empty arrays, so older suppliers come back without this.
     suppliedProducts: Array.isArray(supplier.suppliedProducts) ? supplier.suppliedProducts : [],
+    bankAccountName: supplier.bankAccountName || '',
+    bankAccountNumber: supplier.bankAccountNumber || '',
+    bankName: supplier.bankName || '',
+    bankBranch: supplier.bankBranch || '',
+    bankRoutingNumber: supplier.bankRoutingNumber || '',
+    bankSwiftCode: supplier.bankSwiftCode || '',
+    mobileBankingNumber: supplier.mobileBankingNumber || '',
+    nid: supplier.nid || '',
+    tradeLicenseNo: supplier.tradeLicenseNo || '',
+    nomineeName: supplier.nomineeName || '',
+    nomineeNid: supplier.nomineeNid || '',
+    chequeNumber: supplier.chequeNumber || '',
+    supplierPhotoUrl: supplier.supplierPhotoUrl || '',
+    supplierPhotoPublicId: supplier.supplierPhotoPublicId || '',
+    bankDocumentUrl: supplier.bankDocumentUrl || '',
+    bankDocumentPublicId: supplier.bankDocumentPublicId || '',
+    nidCopyUrl: supplier.nidCopyUrl || '',
+    nidCopyPublicId: supplier.nidCopyPublicId || '',
+    tradeLicenseCopyUrl: supplier.tradeLicenseCopyUrl || '',
+    tradeLicenseCopyPublicId: supplier.tradeLicenseCopyPublicId || '',
+    passportPhotoUrl: supplier.passportPhotoUrl || '',
+    passportPhotoPublicId: supplier.passportPhotoPublicId || '',
+    signatureUrl: supplier.signatureUrl || '',
+    signaturePublicId: supplier.signaturePublicId || '',
     createdAt: supplier.createdAt || now,
     updatedAt: supplier.updatedAt || supplier.createdAt || now,
   }
@@ -231,6 +261,30 @@ function normalizeSupplierMap(suppliers?: Record<string, SupplierRecord> | null)
   return Object.fromEntries(
     Object.entries(suppliers ?? {}).map(([id, supplier]) => [id, normalizeSupplierRecord(supplier)])
   )
+}
+
+function normalizeEmployeeRecord(employee: EmployeeRecord): EmployeeRecord {
+  return {
+    ...employee,
+    zoneId: employee.zoneId || '',
+    area: employee.area || '',
+    fatherName: employee.fatherName || '',
+    motherName: employee.motherName || '',
+    dateOfBirth: employee.dateOfBirth || '',
+    nid: employee.nid || '',
+    experience: employee.experience || '',
+    compensationType: employee.compensationType ?? 'salary',
+    // Employees saved before the joining-form approval step existed are already on the payroll.
+    approvalStatus: employee.approvalStatus ?? 'approved',
+    submittedBy: employee.submittedBy || '',
+    approvedBy: employee.approvedBy || '',
+    approvedAt: employee.approvedAt || '',
+    baseSalary: Number(employee.baseSalary ?? 0),
+    taDa: Number(employee.taDa ?? 0),
+    houseRent: Number(employee.houseRent ?? 0),
+    mobileBill: Number(employee.mobileBill ?? 0),
+    commissionPerUnit: Number(employee.commissionPerUnit ?? 0),
+  }
 }
 
 function normalizeProductRecord(product: ProductRecord): ProductRecord {
@@ -288,8 +342,11 @@ function normalizeERPData(data: ERPData | null): ERPData {
     creditLedgerEntries: source.creditLedgerEntries ?? {},
     couriers: source.couriers ?? {},
     damageProducts: source.damageProducts ?? {},
+    leads: source.leads ?? {},
     investors: source.investors ?? {},
-    employees: source.employees ?? {},
+    employees: Object.fromEntries(
+      Object.entries(source.employees ?? {}).map(([id, employee]) => [id, normalizeEmployeeRecord(employee)])
+    ),
     salesTargets: source.salesTargets ?? {},
     salaries: source.salaries ?? {},
     settings: {
@@ -391,7 +448,10 @@ function normalizeCustomerInput(input: CustomerInput) {
   }
 }
 
-function normalizeSupplierInput(input: SupplierInput) {
+function normalizeSupplierInput(input: SupplierInput, existing?: SupplierRecord | null) {
+  // Bank and document fields left out of the input (quick create, LC status changes) keep their stored value.
+  const bankField = (value: string | undefined, current: string | undefined) => value?.trim() ?? current ?? ''
+
   return {
     name: input.name.trim(),
     company: input.company?.trim() || input.name.trim(),
@@ -409,6 +469,30 @@ function normalizeSupplierInput(input: SupplierInput) {
     currency: input.currency?.trim().toUpperCase() || 'BDT',
     notes: input.notes?.trim() ?? '',
     suppliedProducts: Array.from(new Set((input.suppliedProducts ?? []).map((name) => name.trim()).filter(Boolean))),
+    bankAccountName: bankField(input.bankAccountName, existing?.bankAccountName),
+    bankAccountNumber: bankField(input.bankAccountNumber, existing?.bankAccountNumber),
+    bankName: bankField(input.bankName, existing?.bankName),
+    bankBranch: bankField(input.bankBranch, existing?.bankBranch),
+    bankRoutingNumber: bankField(input.bankRoutingNumber, existing?.bankRoutingNumber),
+    bankSwiftCode: bankField(input.bankSwiftCode, existing?.bankSwiftCode).toUpperCase(),
+    mobileBankingNumber: bankField(input.mobileBankingNumber, existing?.mobileBankingNumber),
+    nid: bankField(input.nid, existing?.nid),
+    tradeLicenseNo: bankField(input.tradeLicenseNo, existing?.tradeLicenseNo),
+    nomineeName: bankField(input.nomineeName, existing?.nomineeName),
+    nomineeNid: bankField(input.nomineeNid, existing?.nomineeNid),
+    chequeNumber: bankField(input.chequeNumber, existing?.chequeNumber),
+    supplierPhotoUrl: bankField(input.supplierPhotoUrl, existing?.supplierPhotoUrl),
+    supplierPhotoPublicId: bankField(input.supplierPhotoPublicId, existing?.supplierPhotoPublicId),
+    bankDocumentUrl: bankField(input.bankDocumentUrl, existing?.bankDocumentUrl),
+    bankDocumentPublicId: bankField(input.bankDocumentPublicId, existing?.bankDocumentPublicId),
+    nidCopyUrl: bankField(input.nidCopyUrl, existing?.nidCopyUrl),
+    nidCopyPublicId: bankField(input.nidCopyPublicId, existing?.nidCopyPublicId),
+    tradeLicenseCopyUrl: bankField(input.tradeLicenseCopyUrl, existing?.tradeLicenseCopyUrl),
+    tradeLicenseCopyPublicId: bankField(input.tradeLicenseCopyPublicId, existing?.tradeLicenseCopyPublicId),
+    passportPhotoUrl: bankField(input.passportPhotoUrl, existing?.passportPhotoUrl),
+    passportPhotoPublicId: bankField(input.passportPhotoPublicId, existing?.passportPhotoPublicId),
+    signatureUrl: bankField(input.signatureUrl, existing?.signatureUrl),
+    signaturePublicId: bankField(input.signaturePublicId, existing?.signaturePublicId),
   }
 }
 
@@ -559,39 +643,69 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.orders])
 
-  async function login(email: string, password: string) {
-    const normalizedEmail = normalizeLookup(email)
+  async function login(identifier: string, password: string) {
+    const trimmed = identifier.trim()
 
-    if (!normalizedEmail) {
-      throw new Error('Enter your email address.')
+    if (!trimmed) {
+      throw new Error('Enter your email address or phone number.')
     }
 
+    // The server finds the account for an email or phone number and checks the password, so
+    // the browser never learns which email belongs to a phone number. It also records the login.
+    let response: Response
     try {
-      await signInWithEmailAndPassword(getAuthOrThrow(), normalizedEmail, password)
-    } catch (reason) {
-      const code = (reason as { code?: string } | null)?.code ?? ''
-
-      // Firebase distinguishes "no such user" from "wrong password"; we do not,
-      // so an attacker cannot use the error to discover valid addresses.
-      if (
-        code === 'auth/invalid-credential' ||
-        code === 'auth/user-not-found' ||
-        code === 'auth/wrong-password' ||
-        code === 'auth/invalid-email'
-      ) {
-        throw new Error('Invalid email address or password.')
-      }
-
-      // Anything else is a setup or network problem, not a bad password.
-      console.error('Firebase sign-in failed:', reason)
-      if (code === 'auth/too-many-requests') {
-        throw new Error('Too many failed attempts. Wait a few minutes and try again.')
-      }
-      if (code === 'auth/network-request-failed') {
-        throw new Error('Network error. Check your connection and try again.')
-      }
-      throw new Error(`Sign-in is unavailable (${code || 'unknown error'}). Check the Firebase Authentication setup.`)
+      response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: trimmed, password }),
+      })
+    } catch {
+      throw new Error('Network error. Check your connection and try again.')
     }
+
+    const result = (await response.json().catch(() => null)) as { token?: string; error?: string } | null
+    if (!response.ok || !result?.token) {
+      throw new Error(result?.error ?? 'Unable to log in.')
+    }
+
+    await signInWithCustomToken(getAuthOrThrow(), result.token)
+  }
+
+  async function changePassword(currentPassword: string, newPassword: string) {
+    const signedInUser = getAuthOrThrow().currentUser
+    if (!signedInUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const response = await fetch('/api/account/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await signedInUser.getIdToken()}` },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    })
+    const result = (await response.json().catch(() => null)) as { token?: string; error?: string } | null
+    if (!response.ok || !result?.token) {
+      throw new Error(result?.error ?? 'Unable to change the password.')
+    }
+
+    // A new password ends the old session; carry on with a fresh one.
+    await signInWithCustomToken(getAuthOrThrow(), result.token)
+    await writeActivity('password_changed', 'admin', `${currentUser?.name ?? 'A user'} changed their password.`)
+  }
+
+  async function fetchLoginHistory(userId: string) {
+    const signedInUser = getAuthOrThrow().currentUser
+    if (!signedInUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const response = await fetch(`/api/admin/users/logins?userId=${encodeURIComponent(userId)}`, {
+      headers: { Authorization: `Bearer ${await signedInUser.getIdToken()}` },
+    })
+    const result = (await response.json().catch(() => null)) as { entries?: LoginHistoryEntry[]; error?: string } | null
+    if (!response.ok) {
+      throw new Error(result?.error ?? 'Unable to load the login history.')
+    }
+    return result?.entries ?? []
   }
 
   async function logout() {
@@ -600,7 +714,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   /** Attaches the caller's ID token so the API route can authorize the request. */
-  async function callUserApi(method: 'POST' | 'PATCH' | 'DELETE', payload: Record<string, unknown>) {
+  async function callUserApi(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', payload: Record<string, unknown>) {
     const signedInUser = getAuthOrThrow().currentUser
 
     if (!signedInUser) {
@@ -616,7 +730,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify(payload),
     })
 
-    const result = (await response.json().catch(() => null)) as { error?: string } | null
+    const result = (await response.json().catch(() => null)) as { error?: string; user?: UserRecord } | null
 
     if (!response.ok) {
       throw new Error(result?.error ?? 'Unable to save user.')
@@ -1020,7 +1134,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('ERP data not loaded yet.')
     }
 
-    const normalized = normalizeSupplierInput(input)
+    const existingSupplier = supplierId ? data.suppliers[supplierId] : null
+    const normalized = normalizeSupplierInput(input, existingSupplier)
 
     if (!normalized.name) {
       throw new Error('Supplier name is required.')
@@ -1031,7 +1146,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const db = getDatabaseOrThrow()
-    const existingSupplier = supplierId ? data.suppliers[supplierId] : null
     const id = existingSupplier?.id ?? createId('supplier')
     const now = new Date().toISOString()
     const supplier = {
@@ -1320,7 +1434,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You do not have permission to create users.')
     }
 
-    await callUserApi('POST', {
+    const created = await callUserApi('POST', {
       name: input.name,
       loginId: input.loginId,
       email: input.email,
@@ -1328,6 +1442,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       password: input.password,
       roleId: input.roleId,
       title: input.title,
+      zoneIds: input.zoneIds ?? [],
+      areaKeys: input.areaKeys ?? [],
+      reportsTo: input.reportsTo ?? '',
+      extraRoleIds: input.extraRoleIds ?? [],
     })
 
     await writeActivity(
@@ -1341,6 +1459,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'info',
       ['admin']
     )
+    await notifyRoleRequests(created?.user, [])
   }
 
   async function updateUser(userId: string, input: UserInput) {
@@ -1352,7 +1471,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You do not have permission to update users.')
     }
 
-    await callUserApi('PATCH', {
+    const previousRequests = data.users[userId]?.pendingRoleIds ?? []
+    const updated = await callUserApi('PATCH', {
       userId,
       name: input.name,
       loginId: input.loginId,
@@ -1361,9 +1481,48 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       password: input.password,
       roleId: input.roleId,
       title: input.title,
+      zoneIds: input.zoneIds ?? [],
+      areaKeys: input.areaKeys ?? [],
+      reportsTo: input.reportsTo ?? '',
+      extraRoleIds: input.extraRoleIds ?? [],
     })
 
     await writeActivity('user_updated', 'admin', `Updated user ${input.name.trim()}.`)
+    await notifyRoleRequests(updated?.user, previousRequests)
+  }
+
+  /** Lets the admins know a user was put forward for roles that wait for their approval. */
+  async function notifyRoleRequests(user: UserRecord | undefined, previousRequests: string[]) {
+    const requested = (user?.pendingRoleIds ?? []).filter((roleId) => !previousRequests.includes(roleId))
+    if (!user || !requested.length || !data) return
+
+    const names = requested.map((roleId) => data.roles[roleId]?.name ?? roleId).join(', ')
+    await writeActivity('role_requested', 'admin', `Requested ${names} for ${user.name}.`)
+    await writeNotification(
+      'Role approval needed',
+      `${currentUser?.name ?? 'Someone'} asked to give ${user.name} the ${names} role. Approve or reject it under User & Role Management.`,
+      'warning',
+      ['admin']
+    )
+  }
+
+  async function reviewRoleRequest(userId: string, roleId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before reviewing role requests.')
+    }
+
+    // The API route re-checks this server-side.
+    if (currentUser.roleId !== 'admin') {
+      throw new Error('Only an admin can approve or reject role requests.')
+    }
+
+    const user = data.users[userId]
+    await callUserApi('PUT', { userId, roleId, decision })
+    await writeActivity(
+      decision === 'approve' ? 'role_request_approved' : 'role_request_rejected',
+      'admin',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${data.roles[roleId]?.name ?? roleId} role for ${user?.name ?? userId}.`
+    )
   }
 
   async function deleteUser(userId: string) {
@@ -1422,6 +1581,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       description: input.description?.trim() ?? '',
       permissions,
       zoneIds,
+      dataScope: input.dataScope === 'assigned' ? 'assigned' : 'all',
     }
 
     await update(ref(db, 'erp/roles'), { [id]: role })
@@ -1466,6 +1626,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       description: input.description?.trim() ?? '',
       permissions,
       zoneIds,
+      // The admin role always sees everything.
+      dataScope: roleId !== 'admin' && input.dataScope === 'assigned' ? 'assigned' : 'all',
     }
 
     await update(ref(db, `erp/roles/${roleId}`), updatedRole)
@@ -1953,7 +2115,71 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('damage_product_deleted', 'damage_products', `Deleted damage report for ${damageProduct.productName}.`)
   }
 
-  async function saveEmployee(input: EmployeeInput, employeeId?: string) {
+  async function saveLead(input: LeadInput, leadId?: string) {
+    if (!data) {
+      return
+    }
+
+    const shopName = input.shopName.trim()
+    if (!shopName) {
+      throw new Error('Shop name is required.')
+    }
+
+    const phone = input.phone.trim()
+    if (!phone) {
+      throw new Error('Phone number is required.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const existing = leadId ? data.leads[leadId] : null
+    const id = existing?.id ?? createId('lead')
+    const now = new Date().toISOString()
+    const lead = {
+      id,
+      shopName,
+      ownerName: input.ownerName.trim(),
+      businessType: input.businessType,
+      address: input.address.trim(),
+      phone,
+      whatsapp: input.whatsapp?.trim() ?? '',
+      bannerPhotoUrl: input.bannerPhotoUrl ?? '',
+      bannerPhotoPublicId: input.bannerPhotoPublicId ?? '',
+      visitingCardUrl: input.visitingCardUrl ?? '',
+      visitingCardPublicId: input.visitingCardPublicId ?? '',
+      reputation: input.reputation?.trim() ?? '',
+      potential: input.potential,
+      notes: input.notes?.trim() ?? '',
+      zoneId: input.zoneId ?? '',
+      createdById: existing?.createdById ?? currentUser?.id ?? '',
+      createdByName: existing?.createdByName ?? currentUser?.name ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    await update(ref(db, 'erp/leads'), { [id]: lead })
+    await writeActivity(
+      existing ? 'lead_updated' : 'lead_created',
+      'leads',
+      existing ? `Updated lead ${lead.shopName}.` : `Added lead ${lead.shopName} (${lead.potential} potential).`
+    )
+  }
+
+  async function deleteLead(leadId: string) {
+    if (!data) {
+      return
+    }
+
+    const lead = data.leads[leadId]
+    if (!lead) {
+      throw new Error('Lead not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), { [`leads/${leadId}`]: null })
+    await writeActivity('lead_deleted', 'leads', `Deleted lead ${lead.shopName}.`)
+  }
+
+  async function saveEmployee(input: EmployeeInput, employeeId?: string, options?: { submitForApproval?: boolean }) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
@@ -1981,6 +2207,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const existingEmployee = employeeId ? data.employees[employeeId] : null
     const id = existingEmployee?.id ?? createId('employee')
     const now = new Date().toISOString()
+    const isAdmin = currentUser?.roleId === 'admin'
+    // Only an admin sets pay. Anyone else submits the joining form and it waits for approval;
+    // an admin's own new entry is approved as it is saved.
+    const approvalStatus =
+      existingEmployee?.approvalStatus ?? (isAdmin && !options?.submitForApproval ? 'approved' : 'pending')
+    // A pending form gets its pay when an admin approves it.
+    const canSetPay = isAdmin && approvalStatus === 'approved'
+    const compensationType = input.compensationType ?? existingEmployee?.compensationType ?? 'salary'
+    const salaryBased = compensationType === 'salary'
+    const pay = (value: number | undefined, current: number | undefined) =>
+      canSetPay ? Math.max(value ?? current ?? 0, 0) : current ?? 0
+    const salaryPay = (value: number | undefined, current: number | undefined) => (salaryBased ? pay(value, current) : 0)
+
     const employee: EmployeeRecord = {
       id,
       name,
@@ -1988,12 +2227,27 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       phone,
       designation,
       joiningDate: input.joiningDate,
+      zoneId: input.zoneId ?? existingEmployee?.zoneId ?? '',
+      area: input.area?.trim() ?? existingEmployee?.area ?? '',
+      fatherName: input.fatherName?.trim() ?? existingEmployee?.fatherName ?? '',
+      motherName: input.motherName?.trim() ?? existingEmployee?.motherName ?? '',
+      dateOfBirth: input.dateOfBirth ?? existingEmployee?.dateOfBirth ?? '',
+      nid: input.nid?.trim() ?? existingEmployee?.nid ?? '',
+      experience: input.experience?.trim() ?? existingEmployee?.experience ?? '',
+      compensationType,
+      approvalStatus,
+      submittedBy: existingEmployee?.submittedBy || currentUser?.id || '',
+      approvedBy: existingEmployee?.approvedBy || (approvalStatus === 'approved' && isAdmin ? currentUser?.id ?? '' : ''),
+      approvedAt: existingEmployee?.approvedAt || (approvalStatus === 'approved' ? now : ''),
       probationMonths: Math.max(
         input.probationMonths ?? existingEmployee?.probationMonths ?? DEFAULT_PROBATION_MONTHS,
         0
       ),
       employmentStatus: input.employmentStatus ?? existingEmployee?.employmentStatus ?? 'active',
-      baseSalary: Math.max(input.baseSalary ?? existingEmployee?.baseSalary ?? 0, 0),
+      baseSalary: salaryPay(input.baseSalary, existingEmployee?.baseSalary),
+      taDa: salaryPay(input.taDa, existingEmployee?.taDa),
+      houseRent: salaryPay(input.houseRent, existingEmployee?.houseRent),
+      mobileBill: salaryPay(input.mobileBill, existingEmployee?.mobileBill),
       monthlyUnitTarget: Math.max(
         input.monthlyUnitTarget ?? existingEmployee?.monthlyUnitTarget ?? DEFAULT_MONTHLY_UNIT_TARGET,
         0
@@ -2002,10 +2256,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         input.monthlyAmountTarget ?? existingEmployee?.monthlyAmountTarget ?? DEFAULT_MONTHLY_AMOUNT_TARGET,
         0
       ),
-      commissionPerUnit: Math.max(
-        input.commissionPerUnit ?? existingEmployee?.commissionPerUnit ?? DEFAULT_COMMISSION_PER_UNIT,
-        0
-      ),
+      commissionPerUnit: canSetPay
+        ? Math.max(input.commissionPerUnit ?? existingEmployee?.commissionPerUnit ?? DEFAULT_COMMISSION_PER_UNIT, 0)
+        : existingEmployee?.commissionPerUnit ?? 0,
       userId: input.userId?.trim() || existingEmployee?.userId || '',
       notes: input.notes?.trim() ?? existingEmployee?.notes ?? '',
       createdAt: existingEmployee?.createdAt ?? now,
@@ -2014,23 +2267,89 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp/employees'), { [id]: employee })
     await writeActivity(
-      existingEmployee ? 'employee_updated' : 'employee_created',
+      existingEmployee ? 'employee_updated' : approvalStatus === 'pending' ? 'employee_submitted' : 'employee_created',
       'employees',
       existingEmployee
         ? `Updated ${employee.name}'s employee profile.`
-        : `Added employee ${employee.name} (${employee.designation}).`
+        : approvalStatus === 'pending'
+          ? `Submitted a joining form for ${employee.name} (${employee.designation}) for approval.`
+          : `Added employee ${employee.name} (${employee.designation}).`
     )
 
     if (!existingEmployee) {
       await writeNotification(
-        'New employee added',
-        `${employee.name} joined as ${employee.designation}. Probation ends after ${employee.probationMonths} month(s).`,
-        'info',
+        approvalStatus === 'pending' ? 'Joining form awaiting approval' : 'New employee added',
+        approvalStatus === 'pending'
+          ? `${currentUser?.name ?? 'A user'} submitted ${employee.name}'s joining form as ${employee.designation}. Set the pay and approve it.`
+          : `${employee.name} joined as ${employee.designation}. Probation ends after ${employee.probationMonths} month(s).`,
+        approvalStatus === 'pending' ? 'warning' : 'info',
         ['admin']
       )
     }
 
     return id
+  }
+
+  /** An admin sets the pay on a pending joining form and approves it, or rejects it. */
+  async function reviewEmployee(employeeId: string, decision: 'approve' | 'reject', input?: EmployeeApprovalInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before reviewing joining forms.')
+    }
+
+    if (currentUser.roleId !== 'admin') {
+      throw new Error('Only an admin can approve or reject joining forms.')
+    }
+
+    const employee = data.employees[employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    const now = new Date().toISOString()
+    let next: EmployeeRecord
+
+    if (decision === 'reject') {
+      next = { ...employee, approvalStatus: 'rejected', approvedBy: currentUser.id, approvedAt: now, updatedAt: now }
+    } else {
+      if (!input) {
+        throw new Error('Set the pay before approving.')
+      }
+
+      const salaryBased = input.compensationType === 'salary'
+      const amount = (value?: number) => (salaryBased ? Math.max(value ?? 0, 0) : 0)
+      const commissionPerUnit = Math.max(input.commissionPerUnit ?? 0, 0)
+
+      if (salaryBased && amount(input.baseSalary) <= 0) {
+        throw new Error('Enter a salary greater than zero for a salary-based employee.')
+      }
+
+      if (!salaryBased && commissionPerUnit <= 0) {
+        throw new Error('Enter the commission for a commission-based employee.')
+      }
+
+      next = {
+        ...employee,
+        compensationType: input.compensationType,
+        baseSalary: amount(input.baseSalary),
+        taDa: amount(input.taDa),
+        houseRent: amount(input.houseRent),
+        mobileBill: amount(input.mobileBill),
+        commissionPerUnit,
+        notes: input.notes?.trim() ?? employee.notes,
+        approvalStatus: 'approved',
+        approvedBy: currentUser.id,
+        approvedAt: now,
+        updatedAt: now,
+      }
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/employees'), { [employeeId]: next })
+    await writeActivity(
+      decision === 'approve' ? 'employee_approved' : 'employee_rejected',
+      'employees',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} ${employee.name}'s joining form.`
+    )
   }
 
   async function deleteEmployee(employeeId: string) {
@@ -2063,6 +2382,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const employee = data.employees[input.employeeId]
     if (!employee) {
       throw new Error('Employee not found.')
+    }
+
+    if (employee.approvalStatus !== 'approved') {
+      throw new Error(`${employee.name}'s joining form has not been approved yet.`)
     }
 
     const units = Math.max(input.units ?? 0, 0)
@@ -2228,12 +2551,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       currentPermissions,
       login,
       logout,
+      changePassword,
+      fetchLoginHistory,
       createUser,
       updateUser,
       deleteUser,
       createRole,
       updateRole,
       deleteRole,
+      reviewRoleRequest,
       hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
       saveProduct,
       deleteProduct,
@@ -2269,7 +2595,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveDamageProduct,
       updateDamageProductStatus,
       deleteDamageProduct,
+      saveLead,
+      deleteLead,
       saveEmployee,
+      reviewEmployee,
       deleteEmployee,
       recordSale,
       saveSalaryPayment,

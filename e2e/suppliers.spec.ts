@@ -47,6 +47,10 @@ test.describe.serial('Suppliers & Imports', () => {
 
     await dialog.getByPlaceholder('e.g. Shenzhen Auto Parts Co.').fill(supplierName)
     await dialog.getByPlaceholder('e.g. 01711-000000').fill('01888-000222')
+    await dialog.getByPlaceholder('Name on the bank account').fill(supplierName)
+    await dialog.getByPlaceholder('e.g. 1234 5678 9012').fill('1234567890')
+    await dialog.getByPlaceholder('e.g. Dutch-Bangla Bank').fill('Dutch-Bangla Bank')
+    await dialog.getByPlaceholder('e.g. Motijheel').fill('Motijheel')
 
     // One product added with the Add button, one left typed in the box when saving.
     const productBox = dialog.getByPlaceholder('e.g. 12V Car Battery')

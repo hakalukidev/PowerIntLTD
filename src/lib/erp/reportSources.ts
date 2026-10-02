@@ -1,5 +1,5 @@
 import type { ERPData } from '@/lib/erp/types'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, toArray, userRoleNames } from '@/lib/erp/utils'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
 
@@ -296,7 +296,7 @@ export const REPORT_SOURCES: ReportSource[] = [
         name: user.name,
         loginId: user.loginId,
         phone: user.phone,
-        role: data.roles[user.roleId]?.name ?? user.roleId,
+        role: userRoleNames(data.roles, user),
         title: user.title,
         status: user.status,
       })),
@@ -319,7 +319,7 @@ export const REPORT_SOURCES: ReportSource[] = [
         const userOrders = orders.filter((order) => order.salesPersonId === user.id)
         return {
           name: user.name,
-          role: data.roles[user.roleId]?.name ?? user.roleId,
+          role: userRoleNames(data.roles, user),
           totalOrders: userOrders.length,
           pendingOrders: userOrders.filter((order) => order.status === 'pending').length,
           completedOrders: userOrders.filter((order) => order.status === 'completed').length,

@@ -13,13 +13,22 @@ export type RoleRecord = {
   permissions: string[]
   /** Zones this role is limited to. Users with the role only see those zones' customers. Empty means no limit. */
   zoneIds?: string[]
+  /**
+   * `assigned` limits each user of the role to the zones and areas assigned to them (and to
+   * their subordinates), so a user with nothing assigned sees no customers. `all` (the default)
+   * only limits a user who has zones or areas assigned.
+   */
+  dataScope?: RoleDataScope
 }
+
+export type RoleDataScope = 'all' | 'assigned'
 
 export type RoleInput = {
   name: string
   description?: string
   permissions: string[]
   zoneIds?: string[]
+  dataScope?: RoleDataScope
 }
 
 /**
@@ -35,6 +44,32 @@ export type UserRecord = {
   roleId: string
   title: string
   status: 'active' | 'inactive'
+  /** Zones the user works in, e.g. a Zonal Manager's zone. */
+  zoneIds?: string[]
+  /** Areas (sub-zones) the user works in, as `subZoneKeyFor(zoneId, subZone)` keys, e.g. an Area Sales Manager's area. */
+  areaKeys?: string[]
+  /** The user's supervisor. Supervisors also see their subordinates' territories and officer records. */
+  reportsTo?: string
+  /** Additional roles an admin approved. The user gets the access of `roleId` and all of these. */
+  extraRoleIds?: string[]
+  /** Additional roles requested by a non-admin, which grant nothing until an admin approves them. */
+  pendingRoleIds?: string[]
+  /** Who last requested a pending role. */
+  roleRequestedBy?: string
+  /** Login info kept by the server. The password itself only lives in Firebase Authentication. */
+  lastLoginAt?: string
+  loginCount?: number
+  passwordChangedAt?: string
+  /** The user's own id when they changed it themselves, otherwise the admin who set it. */
+  passwordChangedBy?: string
+}
+
+/** One sign-in, as the server recorded it. */
+export type LoginHistoryEntry = {
+  at: string
+  method: 'email' | 'phone' | 'loginId'
+  ip: string
+  userAgent: string
 }
 
 export type WarehouseRecord = {
@@ -62,6 +97,31 @@ export type SupplierRecord = {
   notes: string
   /** Products this supplier deals in, by name, as entered on the supplier form. */
   suppliedProducts: string[]
+  bankAccountName: string
+  bankAccountNumber: string
+  bankName: string
+  bankBranch: string
+  bankRoutingNumber: string
+  bankSwiftCode: string
+  /** bKash / Nagad / Rocket number, when the supplier takes mobile payments. */
+  mobileBankingNumber: string
+  nid: string
+  tradeLicenseNo: string
+  nomineeName: string
+  nomineeNid: string
+  chequeNumber: string
+  supplierPhotoUrl: string
+  supplierPhotoPublicId: string
+  bankDocumentUrl: string
+  bankDocumentPublicId: string
+  nidCopyUrl: string
+  nidCopyPublicId: string
+  tradeLicenseCopyUrl: string
+  tradeLicenseCopyPublicId: string
+  passportPhotoUrl: string
+  passportPhotoPublicId: string
+  signatureUrl: string
+  signaturePublicId: string
   createdAt: string
   updatedAt: string
 }
@@ -333,6 +393,34 @@ export type DamageProductRecord = {
   updatedAt: string
 }
 
+export type LeadBusinessType = 'retailer' | 'wholesaler' | 'distributor' | 'other'
+
+export type LeadPotential = 'high' | 'medium' | 'low'
+
+/** A shop or area an officer visited: a possible future customer (the sales pipeline). */
+export type LeadRecord = {
+  id: string
+  shopName: string
+  ownerName: string
+  businessType: LeadBusinessType
+  address: string
+  phone: string
+  whatsapp: string
+  bannerPhotoUrl: string
+  bannerPhotoPublicId: string
+  visitingCardUrl: string
+  visitingCardPublicId: string
+  /** The shop's reputation in the market. */
+  reputation: string
+  potential: LeadPotential
+  notes: string
+  zoneId?: string
+  createdById: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
 export type CourierStatus = 'in-transit' | 'delivered' | 'returned' | 'cod-collected'
 
 export type CourierRecord = {
@@ -370,6 +458,7 @@ export type ERPData = {
   creditLedgerEntries: Record<string, CreditLedgerEntryRecord>
   couriers: Record<string, CourierRecord>
   damageProducts: Record<string, DamageProductRecord>
+  leads: Record<string, LeadRecord>
   investors: Record<string, InvestorRecord>
   employees: Record<string, EmployeeRecord>
   salesTargets: Record<string, SalesTargetRecord>
@@ -468,6 +557,30 @@ export type SupplierInput = {
   currency?: string
   notes?: string
   suppliedProducts?: string[]
+  bankAccountName?: string
+  bankAccountNumber?: string
+  bankName?: string
+  bankBranch?: string
+  bankRoutingNumber?: string
+  bankSwiftCode?: string
+  mobileBankingNumber?: string
+  nid?: string
+  tradeLicenseNo?: string
+  nomineeName?: string
+  nomineeNid?: string
+  chequeNumber?: string
+  supplierPhotoUrl?: string
+  supplierPhotoPublicId?: string
+  bankDocumentUrl?: string
+  bankDocumentPublicId?: string
+  nidCopyUrl?: string
+  nidCopyPublicId?: string
+  tradeLicenseCopyUrl?: string
+  tradeLicenseCopyPublicId?: string
+  passportPhotoUrl?: string
+  passportPhotoPublicId?: string
+  signatureUrl?: string
+  signaturePublicId?: string
 }
 
 export type PurchaseInput = {
@@ -558,6 +671,23 @@ export type DamageProductInput = {
   notes?: string
 }
 
+export type LeadInput = {
+  shopName: string
+  ownerName: string
+  businessType: LeadBusinessType
+  address: string
+  phone: string
+  whatsapp?: string
+  bannerPhotoUrl?: string
+  bannerPhotoPublicId?: string
+  visitingCardUrl?: string
+  visitingCardPublicId?: string
+  reputation?: string
+  potential: LeadPotential
+  notes?: string
+  zoneId?: string
+}
+
 export type TaskInput = {
   title: string
   description: string
@@ -575,11 +705,22 @@ export type UserInput = {
   password: string
   roleId: string
   title: string
+  zoneIds?: string[]
+  areaKeys?: string[]
+  reportsTo?: string
+  /** Additional roles: an admin's choice applies at once, anyone else's waits for an admin's approval. */
+  extraRoleIds?: string[]
 }
 
 // ---- Employee Management ----
 
 export type EmploymentStatus = 'active' | 'resigned' | 'terminated'
+
+/** Salary-based staff get a salary plus allowances; commission-based staff are paid commission only. */
+export type EmployeeCompensationType = 'salary' | 'commission'
+
+/** A joining form waits as `pending` until an admin sets the pay and approves it. */
+export type EmployeeApprovalStatus = 'pending' | 'approved' | 'rejected'
 
 export type EmployeeRecord = {
   id: string
@@ -588,9 +729,24 @@ export type EmployeeRecord = {
   phone: string
   designation: string
   joiningDate: string
+  zoneId: string
+  area: string
+  fatherName: string
+  motherName: string
+  dateOfBirth: string
+  nid: string
+  experience: string
+  compensationType: EmployeeCompensationType
+  approvalStatus: EmployeeApprovalStatus
+  submittedBy: string
+  approvedBy: string
+  approvedAt: string
   probationMonths: number
   employmentStatus: EmploymentStatus
   baseSalary: number
+  taDa: number
+  houseRent: number
+  mobileBill: number
   monthlyUnitTarget: number
   monthlyAmountTarget: number
   commissionPerUnit: number
@@ -606,13 +762,35 @@ export type EmployeeInput = {
   phone: string
   designation: string
   joiningDate: string
+  zoneId?: string
+  area?: string
+  fatherName?: string
+  motherName?: string
+  dateOfBirth?: string
+  nid?: string
+  experience?: string
+  compensationType?: EmployeeCompensationType
   probationMonths?: number
   employmentStatus?: EmploymentStatus
   baseSalary?: number
+  taDa?: number
+  houseRent?: number
+  mobileBill?: number
   monthlyUnitTarget?: number
   monthlyAmountTarget?: number
   commissionPerUnit?: number
   userId?: string
+  notes?: string
+}
+
+/** The pay an admin sets on a joining form before approving it. */
+export type EmployeeApprovalInput = {
+  compensationType: EmployeeCompensationType
+  baseSalary?: number
+  taDa?: number
+  houseRent?: number
+  mobileBill?: number
+  commissionPerUnit?: number
   notes?: string
 }
 

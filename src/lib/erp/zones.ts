@@ -1,4 +1,5 @@
 import type { CustomerRecord, ERPData, RoleRecord, UserRecord, ZoneRecord } from './types'
+import { effectiveRole } from './utils'
 
 export const UNASSIGNED_ZONE_ID = 'unassigned'
 export const UNASSIGNED_ZONE_NAME = 'Unassigned zone'
@@ -65,28 +66,92 @@ export function customerZoneName(customer: CustomerRecord, zones: ZoneRecord[]) 
 }
 
 /**
- * Zone ids the user may see, or `null` when they are not limited to any zone.
- * Admins always see everything. Anyone else whose role is limited to zones, or
- * who is responsible for at least one zone, only sees the customers of those zones.
+ * What a limited user may see: whole zones, single areas (sub-zones) inside a zone, and the
+ * users whose officer records (employee profile, targets, salary) are theirs to see.
  */
-export function visibleZoneIdsFor(user: UserRecord | null, zones: ZoneRecord[], role?: RoleRecord | null): Set<string> | null {
+export type AccessScope = {
+  /** Zones the user sees completely. */
+  zoneIds: Set<string>
+  /** Areas the user sees, as `subZoneKeyFor` keys. */
+  areaKeys: Set<string>
+  /** The user and everyone who reports to them, directly or further down. */
+  userIds: Set<string>
+}
+
+/** The user and everyone below them in the reporting chain. */
+export function teamUserIds(userId: string, users: UserRecord[]) {
+  const team = new Set([userId])
+  // Walk down level by level; the `team` check also stops a reporting loop.
+  let frontier = [userId]
+  while (frontier.length) {
+    const next = users.filter((user) => user.reportsTo && frontier.includes(user.reportsTo) && !team.has(user.id))
+    next.forEach((user) => team.add(user.id))
+    frontier = next.map((user) => user.id)
+  }
+  return team
+}
+
+/**
+ * The scope the user is limited to, or `null` when they see everything. Admins always see
+ * everything. Anyone else is limited when their role is limited to zones, their role's data
+ * scope is `assigned`, or zones or areas are assigned to them (directly, or by being a zone's
+ * manager). A limited user sees their own territory plus that of everyone who reports to them.
+ */
+export function accessScopeFor(
+  user: UserRecord | null,
+  zones: ZoneRecord[],
+  role: RoleRecord | null | undefined,
+  users: UserRecord[] = []
+): AccessScope | null {
   if (!user || user.roleId === 'admin') return null
 
-  const roleZoneIds = role?.zoneIds ?? []
-  const managed = zones.filter((zone) => zone.managerIds.includes(user.id)).map((zone) => zone.id)
+  const userIds = teamUserIds(user.id, users.some((other) => other.id === user.id) ? users : [...users, user])
+  const zoneIds = new Set(role?.zoneIds ?? [])
+  const areaKeys = new Set<string>()
+  for (const member of userIds) {
+    const record = member === user.id ? user : users.find((other) => other.id === member)
+    record?.zoneIds?.forEach((zoneId) => zoneIds.add(zoneId))
+    record?.areaKeys?.forEach((key) => areaKeys.add(key))
+    zones.filter((zone) => zone.managerIds?.includes(member)).forEach((zone) => zoneIds.add(zone.id))
+  }
+
   // A zone-limited role stays limited even if its zones were later deleted.
-  return roleZoneIds.length || managed.length ? new Set([...roleZoneIds, ...managed]) : null
+  const limited = role?.dataScope === 'assigned' || (role?.zoneIds?.length ?? 0) > 0 || zoneIds.size > 0 || areaKeys.size > 0
+  return limited ? { zoneIds, areaKeys, userIds } : null
+}
+
+export function customerInScope(customer: CustomerRecord, zones: ZoneRecord[], scope: AccessScope) {
+  return scope.zoneIds.has(customerZoneId(customer, zones)) || (scope.areaKeys.size > 0 && scope.areaKeys.has(subZoneKey(customer, zones)))
+}
+
+/** Zones the user sees at least part of: their whole zones plus the zones of their areas. */
+export function scopeZoneIds(scope: AccessScope) {
+  return new Set([...scope.zoneIds, ...Array.from(scope.areaKeys, (key) => key.split('|')[0])])
+}
+
+/**
+ * Zone ids the user may see at least part of, or `null` when they are not limited to any zone.
+ */
+export function visibleZoneIdsFor(
+  user: UserRecord | null,
+  zones: ZoneRecord[],
+  role?: RoleRecord | null,
+  users: UserRecord[] = []
+): Set<string> | null {
+  const scope = accessScopeFor(user, zones, role, users)
+  return scope ? scopeZoneIds(scope) : null
 }
 
 export function filterCustomersForUser(
   customers: CustomerRecord[],
   user: UserRecord | null,
   zones: ZoneRecord[],
-  role?: RoleRecord | null
+  role?: RoleRecord | null,
+  users: UserRecord[] = []
 ) {
-  const visible = visibleZoneIdsFor(user, zones, role)
-  if (!visible) return customers
-  return customers.filter((customer) => visible.has(customerZoneId(customer, zones)))
+  const scope = accessScopeFor(user, zones, role, users)
+  if (!scope) return customers
+  return customers.filter((customer) => customerInScope(customer, zones, scope))
 }
 
 function pickRecords<T>(records: Record<string, T>, keep: (record: T) => boolean) {
@@ -94,23 +159,27 @@ function pickRecords<T>(records: Record<string, T>, keep: (record: T) => boolean
 }
 
 /**
- * The ERP data as a zone-limited user may see it: only their zones' customers,
- * the orders, credit ledger entries, and courier parcels of those customers,
- * and their zones' damage reports. Users who are not limited to zones get the data unchanged.
+ * The ERP data as a limited user may see it: only their territory's customers, the orders,
+ * credit ledger entries, and courier parcels of those customers (plus orders their team booked),
+ * their zones' damage reports, their team's and zones' leads, and the officer records (employee profile, sales targets,
+ * salary) of themselves and the people who report to them. Users who are not limited get the
+ * data unchanged.
  */
 export function scopeDataToUserZones(data: ERPData, user: UserRecord | null): ERPData {
   const zones = Object.values(data.zones ?? {})
-  const visible = visibleZoneIdsFor(user, zones, user ? data.roles[user.roleId] : null)
-  if (!visible) return data
+  const scope = accessScopeFor(user, zones, user ? effectiveRole(data.roles, user) : null, Object.values(data.users ?? {}))
+  if (!scope) return data
 
-  const customers = pickRecords(data.customers, (customer) => visible.has(customerZoneId(customer, zones)))
-  const zoneNames = new Set(zones.filter((zone) => visible.has(zone.id)).map((zone) => normalizeName(zone.name)))
+  const visibleZones = scopeZoneIds(scope)
+  const customers = pickRecords(data.customers, (customer) => customerInScope(customer, zones, scope))
+  const zoneNames = new Set(zones.filter((zone) => visibleZones.has(zone.id)).map((zone) => normalizeName(zone.name)))
   const customerNames = new Set(Object.values(customers).map((customer) => customer.name.trim().toLowerCase()))
+  const employees = pickRecords(data.employees, (employee) => Boolean(employee.userId && scope.userIds.has(employee.userId)))
 
   return {
     ...data,
     customers,
-    orders: pickRecords(data.orders, (order) => Boolean(customers[order.customerId])),
+    orders: pickRecords(data.orders, (order) => Boolean(customers[order.customerId]) || scope.userIds.has(order.salesPersonId)),
     creditLedgerEntries: pickRecords(data.creditLedgerEntries, (entry) => Boolean(customers[entry.customerId])),
     // Older parcels were saved with only the customer's name.
     couriers: pickRecords(data.couriers, (courier) =>
@@ -118,5 +187,10 @@ export function scopeDataToUserZones(data: ERPData, user: UserRecord | null): ER
     ),
     // Damage reports name their zone rather than linking to it.
     damageProducts: pickRecords(data.damageProducts, (record) => zoneNames.has(normalizeName(record.zone ?? ''))),
+    // Leads are seen by the team that collected them and by whoever covers their zone.
+    leads: pickRecords(data.leads, (lead) => scope.userIds.has(lead.createdById) || Boolean(lead.zoneId && visibleZones.has(lead.zoneId))),
+    employees,
+    salesTargets: pickRecords(data.salesTargets, (target) => Boolean(employees[target.employeeId])),
+    salaries: pickRecords(data.salaries, (salary) => Boolean(employees[salary.employeeId])),
   }
 }

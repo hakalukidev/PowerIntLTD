@@ -256,6 +256,8 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     )
       .map((element) => element.getBoundingClientRect().top)
       .sort((left, right) => left - right)
+    // A document laid out as whole A4 sheets (`.a4-page`, like the dealer agreement) is cut exactly at each sheet with no added margins.
+    const sheetTops = Array.from(body.querySelectorAll<HTMLElement>('.a4-page')).map((element) => element.getBoundingClientRect().top)
     const runs = collectTextRuns(frameDocument)
 
     const { toCanvas } = await import('html-to-image')
@@ -286,11 +288,11 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     let first = true
     while (start < height - 1) {
       // The first page already has its top padding in the rendered content.
-      const offset = first ? 0 : PAGE_TOP_PX
-      const limit = start + A4_HEIGHT_PX - offset - PAGE_BOTTOM_PX
+      const offset = first || sheetTops.length ? 0 : PAGE_TOP_PX
+      const limit = sheetTops.length ? start + A4_HEIGHT_PX : start + A4_HEIGHT_PX - offset - PAGE_BOTTOM_PX
       let end = height
       if (limit < height) {
-        const fitting = breaks.filter((point) => point > start + 1 && point <= limit)
+        const fitting = (sheetTops.length ? sheetTops : breaks).filter((point) => point > start + 1 && point <= limit)
         end = fitting.length ? fitting[fitting.length - 1] : limit
       }
 

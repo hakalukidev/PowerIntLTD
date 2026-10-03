@@ -37,6 +37,11 @@ export function formatAmount(value: number) {
   return new Intl.NumberFormat('en-BD', { maximumFractionDigits: 0 }).format(value)
 }
 
+/** Amount for table cells: the base BDT is implied, so only a foreign currency keeps its code. */
+export function formatTableAmount(value: number, currency?: string) {
+  return !currency || currency === 'BDT' ? formatAmount(value) : formatCurrency(value, currency)
+}
+
 export function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-BD', {
     dateStyle: 'medium',

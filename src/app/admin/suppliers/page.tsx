@@ -26,7 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, getProductStatus, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatTableAmount, getProductStatus, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function getLandedCost(supplier: SupplierRecord) {
@@ -507,18 +507,18 @@ export default function SuppliersPage() {
                       </TableCell>
                       <TableCell className="min-w-40">
                         <div className="space-y-1 text-xs text-muted-foreground">
-                          <p>Product: {formatCurrency(supplier.productCost, supplier.currency)}</p>
-                          <p>Shipping: {formatCurrency(supplier.shippingCost, supplier.currency)}</p>
-                          <p>Customs: {formatCurrency(supplier.customsDuty, supplier.currency)}</p>
-                          <p>Other: {formatCurrency(supplier.otherCost, supplier.currency)}</p>
+                          <p>Product: {formatTableAmount(supplier.productCost, supplier.currency)}</p>
+                          <p>Shipping: {formatTableAmount(supplier.shippingCost, supplier.currency)}</p>
+                          <p>Customs: {formatTableAmount(supplier.customsDuty, supplier.currency)}</p>
+                          <p>Other: {formatTableAmount(supplier.otherCost, supplier.currency)}</p>
                         </div>
                       </TableCell>
                       <TableCell className="min-w-32">
-                        <p className="font-semibold">{formatCurrency(landedCost, supplier.currency)}</p>
+                        <p className="font-semibold">{formatTableAmount(landedCost, supplier.currency)}</p>
                         <p className="text-xs text-muted-foreground">Total until warehouse</p>
                       </TableCell>
                       <TableCell className="min-w-36">
-                        <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>
+                        <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                         <p className="text-xs text-muted-foreground">
                           {purchaseCount} purchases, {assignedProducts} products
                         </p>

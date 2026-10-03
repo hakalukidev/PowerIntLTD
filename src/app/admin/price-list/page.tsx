@@ -14,7 +14,7 @@ import { dealerPrice, generalPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricin
 import { useERP } from '@/lib/erp/provider'
 import type { ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, partyCode, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatTableAmount, partyCode, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneId } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -145,8 +145,8 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
                   <span className="block font-medium">{product.name}</span>
                   <span className="block text-xs text-muted-foreground">{product.sku}</span>
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{formatCurrency(product.sellingPrice)}</TableCell>
-                <TableCell className="text-right font-medium tabular-nums">{formatCurrency(generalPrice(product))}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatTableAmount(product.sellingPrice)}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{formatTableAmount(generalPrice(product))}</TableCell>
                 <TableCell>
                   <PriceInput
                     value={drafts[product.id] ?? ''}
@@ -267,7 +267,7 @@ function ZonePrices({ products, canEdit }: { products: ProductRecord[]; canEdit:
                       <span className="block font-medium">{product.name}</span>
                       <span className="block text-xs text-muted-foreground">{product.sku}</span>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(generalPrice(product))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatTableAmount(generalPrice(product))}</TableCell>
                     <TableCell>
                       <PriceInput
                         value={drafts[product.id] ?? ''}
@@ -384,7 +384,7 @@ function DealerPrices({ products, canEdit }: { products: ProductRecord[]; canEdi
                       <span className="block font-medium">{product.name}</span>
                       <span className="block text-xs text-muted-foreground">{product.sku}</span>
                     </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">{formatCurrency(current.price)}</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{formatTableAmount(current.price)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{PRICE_SOURCE_LABELS[current.source]}</TableCell>
                     <TableCell>
                       <PriceInput

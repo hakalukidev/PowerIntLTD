@@ -18,7 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { SellerInput, SellerRecord, SellerTransactionInput } from '@/lib/erp/types'
-import { exportPdf, exportXlsx, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { exportPdf, exportXlsx, formatCurrency, formatDate, formatTableAmount, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type SellerFormState = {
@@ -323,10 +323,10 @@ export default function SellerListPage() {
                         </div>
                       </TableCell>
                       <TableCell className={cn(owedToMe > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : '')}>
-                        {formatCurrency(owedToMe, currency)}
+                        {formatTableAmount(owedToMe, currency)}
                       </TableCell>
                       <TableCell className={cn(owedByMe > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : '')}>
-                        {formatCurrency(owedByMe, currency)}
+                        {formatTableAmount(owedByMe, currency)}
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
@@ -406,11 +406,11 @@ export default function SellerListPage() {
                       <TableCell className="min-w-40">{txn.sellerName}</TableCell>
                       <TableCell className="min-w-48 text-xs text-muted-foreground">
                         {txn.itemsTaken || '-'}
-                        {txn.takenValue ? <p className="font-medium text-foreground">{formatCurrency(txn.takenValue, currency)}</p> : null}
+                        {txn.takenValue ? <p className="font-medium text-foreground">{formatTableAmount(txn.takenValue, currency)}</p> : null}
                       </TableCell>
-                      <TableCell>{formatCurrency(txn.cashGiven, currency)}</TableCell>
-                      <TableCell>{formatCurrency(txn.iReceiveAmount, currency)}</TableCell>
-                      <TableCell>{formatCurrency(txn.theyReceiveAmount, currency)}</TableCell>
+                      <TableCell>{formatTableAmount(txn.cashGiven, currency)}</TableCell>
+                      <TableCell>{formatTableAmount(txn.iReceiveAmount, currency)}</TableCell>
+                      <TableCell>{formatTableAmount(txn.theyReceiveAmount, currency)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end">
                           <Button

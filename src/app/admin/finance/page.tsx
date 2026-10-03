@@ -25,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, getExpenseCategories, isApprovedExpense, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatTableAmount, getExpenseCategories, isApprovedExpense, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function dateInputValue(date = new Date()) {
@@ -448,10 +448,10 @@ export default function FinancePage() {
                             <TableCell className="font-medium">{order.id}</TableCell>
                             <TableCell>{formatDate(order.createdAt)}</TableCell>
                             <TableCell>{order.customerName}</TableCell>
-                            <TableCell>{formatCurrency(order.total, currency)}</TableCell>
-                            <TableCell>{formatCurrency(order.paid, currency)}</TableCell>
-                            <TableCell>{formatCurrency(order.due, currency)}</TableCell>
-                            <TableCell>{formatCurrency(profit, currency)}</TableCell>
+                            <TableCell>{formatTableAmount(order.total, currency)}</TableCell>
+                            <TableCell>{formatTableAmount(order.paid, currency)}</TableCell>
+                            <TableCell>{formatTableAmount(order.due, currency)}</TableCell>
+                            <TableCell>{formatTableAmount(profit, currency)}</TableCell>
                             <TableCell>
                               <div className="flex justify-end gap-2">
                                 <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => printInvoice(order)} aria-label={`Print invoice ${order.id}`}>
@@ -612,7 +612,7 @@ export default function FinancePage() {
                         <TableRow key={expense.id}>
                           <TableCell>{formatDate(expense.date)}</TableCell>
                           <TableCell className="font-medium">{expense.category}</TableCell>
-                          <TableCell>{formatCurrency(expense.amount, currency)}</TableCell>
+                          <TableCell>{formatTableAmount(expense.amount, currency)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{expense.note || '-'}</TableCell>
                           <TableCell>
                             <div className="flex justify-end">
@@ -675,12 +675,12 @@ export default function FinancePage() {
                       <TableRow key={row.key}>
                         <TableCell className="font-medium">{row.month}</TableCell>
                         <TableCell>{row.invoices}</TableCell>
-                        <TableCell>{formatCurrency(row.revenue, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.cash, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.due, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.cogs, currency)}</TableCell>
-                        <TableCell>{formatCurrency(row.expense, currency)}</TableCell>
-                        <TableCell className={cn(row.profit < 0 && 'text-destructive')}>{formatCurrency(row.profit, currency)}</TableCell>
+                        <TableCell>{formatTableAmount(row.revenue, currency)}</TableCell>
+                        <TableCell>{formatTableAmount(row.cash, currency)}</TableCell>
+                        <TableCell>{formatTableAmount(row.due, currency)}</TableCell>
+                        <TableCell>{formatTableAmount(row.cogs, currency)}</TableCell>
+                        <TableCell>{formatTableAmount(row.expense, currency)}</TableCell>
+                        <TableCell className={cn(row.profit < 0 && 'text-destructive')}>{formatTableAmount(row.profit, currency)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

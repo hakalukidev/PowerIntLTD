@@ -27,7 +27,7 @@ import type { CustomerCommitment, CustomerInput, CustomerRecord, DocumentPhoto }
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { groupRemindersByDate, localToday, pendingCommitmentReminders } from '@/lib/erp/commitmentReminders'
 import { customerZoneId, subZoneKey, subZoneKeyFor, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME, zoneSubZones } from '@/lib/erp/zones'
-import { escapeHtml, formatCurrency, formatDate, isCommitmentApproved, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatCurrency, formatDate, formatTableAmount, isCommitmentApproved, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
 
 const CUSTOMER_DOCUMENT_FOLDER = 'customers'
 
@@ -946,8 +946,8 @@ export default function CustomersPage() {
                       <TableCell className="font-medium">{order.billNumber}</TableCell>
                       <TableCell>{formatDate(order.createdAt)}</TableCell>
                       <TableCell className="capitalize">{order.status}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(order.total, currency)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(order.due, currency)}</TableCell>
+                      <TableCell className="text-right">{formatTableAmount(order.total, currency)}</TableCell>
+                      <TableCell className="text-right">{formatTableAmount(order.due, currency)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1006,11 +1006,12 @@ export default function CustomersPage() {
     uploads: Record<DocumentKey, DocumentUploadState>,
     autoPrint = true
   ) {
-    const documentPreview = (key: DocumentKey) => uploads[key].photos[0]?.url ?? ''
-    const addressParts = [form.location, form.thana, form.district].filter(Boolean)
+    const origin = window.location.origin
     const companyName = data?.settings.companyName ?? 'Power International BD'
-    const logoUrl = `${window.location.origin}/power-logo.png`
-    const dealerPhotoSrc = documentPreview('dealerPhoto') || documentPreview('passportPhoto')
+    const signatureSrc = uploads.signature.photos[0]?.url ?? ''
+    // A dotted blank like the paper form's, filled in with whatever the dealer form already has.
+    const blank = (value: string, size: 'sm' | 'md' | 'lg' | 'inline' = 'md') =>
+      `<span class="fill ${size}">${escapeHtml(value.trim())}</span>`
     const documentRow = (label: string, key: DocumentKey) => {
       const sources = uploads[key].photos.map((photo) => photo.url)
       return `
@@ -1026,114 +1027,183 @@ export default function CustomersPage() {
         </div>
       `
     }
+    const attachmentKeys: DocumentKey[] = ['dealerPhoto', 'passportPhoto', 'bankDocument', 'nidCopy', 'tradeLicenseCopy']
+    const hasAttachments = attachmentKeys.some((key) => uploads[key].photos.length > 0)
+
+    // The header and footer carry the company's contact details exactly as on its printed dealer agreement.
+    const header = `
+      <header class="letterhead">
+        <div class="brand">
+          <img src="${origin}/power-logo.png" alt="${escapeHtml(companyName)}" />
+          <p class="brand-bn">পাওয়ার ইন্টারন্যাশনাল বিডি</p>
+        </div>
+        <div class="office">
+          <p class="office-title">CHUADANGA HEAD OFFICE:</p>
+          <p class="office-line"><span class="dot"></span>Sadar, Chuadanga</p>
+          <p class="office-title">HOTLINE:</p>
+          <p class="hotline">01986-276705</p>
+          <p class="office-line small">powerinternationalbd10@gmail.com</p>
+        </div>
+      </header>
+      <div class="orange-rule"></div>
+    `
+    const footer = `
+      <footer class="footer">
+        <div class="depots">
+          <p><strong>KHULNA DIVISION DEPOT :</strong><span>Monihar, Jashore</span></p>
+          <p><strong>RAJSHAHI DIVISION DEPOT :</strong><span>Ishwardi, Pabna</span></p>
+        </div>
+        <div class="contacts">
+          <p><span>01711-320939</span><span>Owner</span></p>
+          <p><span>01309-831316</span><span>Managing Director</span></p>
+          <p><span>01341-613073</span><span>Manager</span></p>
+        </div>
+      </footer>
+    `
 
     return `
       <!doctype html>
       <html>
         <head>
           <meta charset="utf-8" />
-          <title>Dealer Information - ${escapeHtml(form.name || 'Dealer')}</title>
+          <title>ডিলার নিয়োগ চুক্তিনামা - ${escapeHtml(form.name || 'Dealer')}</title>
           <style>
             * { box-sizing: border-box; }
             @page { size: A4; margin: 0; }
-            body { color: #111827; font-family: 'Noto Sans Bengali', Arial, sans-serif; margin: 0; padding: 12mm 12mm 14mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            .header { align-items: center; border-bottom: 3px solid #1d4f91; display: flex; gap: 16px; justify-content: space-between; padding-bottom: 12px; }
-            .brand { align-items: center; display: flex; gap: 14px; }
-            .brand img { height: 64px; object-fit: contain; }
-            .form-title { flex: 1; text-align: center; }
-            .form-title h1 { color: #1d4f91; font-size: 17px; letter-spacing: .04em; margin: 0; text-transform: uppercase; }
-            .form-title p { color: #f28c1b; font-size: 11px; font-weight: 600; letter-spacing: .08em; margin: 4px 0 0; }
-            .photo-frame { align-items: center; border: 1.5px solid #1d4f91; border-radius: 6px; display: flex; flex-shrink: 0; height: 120px; justify-content: center; overflow: hidden; width: 100px; }
-            .photo-frame img { height: 100%; object-fit: cover; width: 100%; }
-            .photo-frame span { color: #9ca3af; font-size: 10px; padding: 6px; text-align: center; }
-            .section { margin-top: 16px; }
-            .section h2 { border-bottom: 1px solid #d1d5db; color: #1d4f91; font-size: 12px; letter-spacing: .06em; margin: 0; padding-bottom: 5px; text-transform: uppercase; }
-            .grid { display: grid; gap: 10px 20px; grid-template-columns: 1fr 1fr; margin-top: 10px; }
-            .grid.three { grid-template-columns: 1fr 1fr 1fr; }
-            .field span { color: #6b7280; display: block; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
-            .field strong { display: block; font-size: 13px; margin-top: 2px; }
-            .field.wide { grid-column: 1 / -1; }
-            .documents { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-top: 10px; }
+            html, body { margin: 0; padding: 0; }
+            body { color: #111827; font-family: 'Noto Sans Bengali', Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .a4-page { background: #fff; display: flex; flex-direction: column; height: 1123px; overflow: hidden; page-break-after: always; position: relative; width: 794px; }
+            .a4-page:last-child { page-break-after: auto; }
+            .watermark { height: 440px; left: 50%; object-fit: contain; opacity: .07; pointer-events: none; position: absolute; top: 50%; transform: translate(-50%, -45%); width: 440px; }
+            .letterhead { align-items: center; display: flex; justify-content: space-between; padding: 26px 40px 12px; position: relative; }
+            .brand img { display: block; height: 88px; margin: -6px 0 -12px; object-fit: contain; }
+            .brand-bn { color: #1d4f91; font-size: 18px; font-weight: 700; margin: 0 0 0 96px; }
+            .office { border-left: 1.5px solid #9ca3af; padding-left: 14px; }
+            .office p { margin: 0; }
+            .office-title { font-family: Georgia, 'Times New Roman', serif; font-size: 12px; font-weight: 700; margin-top: 4px !important; }
+            .office-line { align-items: center; display: flex; font-family: Georgia, serif; font-size: 12px; gap: 6px; }
+            .office-line.small { font-size: 9.5px; }
+            .dot { background: #f26b1d; border-radius: 50% 50% 50% 0; display: inline-block; height: 10px; transform: rotate(-45deg); width: 10px; }
+            .hotline { font-family: Georgia, serif; font-size: 17px; font-weight: 700; }
+            .orange-rule { background: #f26b1d; height: 7px; margin: 0 26px; }
+            .content { flex: 1; font-size: 12.5px; line-height: 1.8; padding: 10px 46px 0; position: relative; }
+            .title { color: #dc2626; font-size: 21px; font-weight: 700; margin: 4px 0 10px; text-align: center; }
+            .intro { margin: 0 0 10px; text-align: center; }
+            .subtitle { font-size: 14px; font-weight: 700; margin: 0 0 6px; text-align: center; text-decoration: underline; text-underline-offset: 4px; }
+            .row { align-items: flex-end; display: flex; flex-wrap: wrap; gap: 0 6px; margin: 4px 0; }
+            .row label { white-space: nowrap; }
+            .fill { border-bottom: 1px dotted #111827; display: inline-block; flex: 1; font-weight: 600; min-height: 18px; min-width: 90px; padding: 0 4px; }
+            .fill.sm { flex: .6; }
+            .fill.lg { flex: 2; }
+            .clause h2 { font-size: 13.5px; font-weight: 700; margin: 12px 0 2px; }
+            .clause p { margin: 0; text-align: justify; }
+            .clause .fill, .fill.inline { flex: none; min-width: 150px; }
+            .clause.documents-clause p { text-align: left; }
+            .signatures { display: grid; grid-template-columns: 1.7fr 1fr; margin-top: 26px; }
+            .signatures h3 { font-size: 12.5px; font-weight: 700; margin: 0; text-align: center; text-decoration: underline; text-underline-offset: 4px; }
+            .company-sign { border-right: 1.5px solid #9ca3af; display: flex; flex-direction: column; padding-right: 16px; }
+            .sign-lines { display: flex; gap: 18px; justify-content: space-between; margin-top: auto; padding-top: 90px; }
+            .sign-lines span { border-top: 2.5px solid #111827; flex: 1; font-family: Georgia, serif; font-size: 10.5px; font-weight: 700; padding-top: 3px; text-align: center; }
+            .dealer-sign { padding-left: 18px; }
+            .dealer-sign ul { list-style: disc; margin: 10px 0 0; padding-left: 18px; }
+            .dealer-sign li { margin: 4px 0; }
+            .dealer-sign li .row { margin: 0; }
+            .dealer-sign img { display: block; height: 40px; object-fit: contain; }
+            .footer { align-items: center; background: #1c1c1e; border-top: 4px solid #e8a33a; color: #fff; display: flex; font-family: Georgia, serif; gap: 22px; margin: 0 26px 18px; padding: 10px 18px; }
+            .footer p { margin: 0; }
+            .depots { border-right: 1.5px solid #e5e7eb; display: grid; gap: 6px; padding-right: 22px; }
+            .depots strong { display: block; font-size: 11.5px; }
+            .depots span { display: block; font-size: 10.5px; padding-left: 16px; }
+            .contacts { display: grid; gap: 3px; }
+            .contacts p { display: grid; font-size: 12px; gap: 18px; grid-template-columns: 110px auto; }
+            .section-title { border-bottom: 1px solid #d1d5db; color: #1d4f91; font-size: 13px; letter-spacing: .04em; margin: 8px 0 0; padding-bottom: 5px; }
+            .documents { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); margin-top: 12px; }
             .document { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
             .document h3 { color: #374151; font-size: 11px; margin: 0 0 6px; }
-            .document img { background: #f9fafb; border-radius: 4px; display: block; height: 110px; object-fit: contain; width: 100%; }
+            .document img { background: #f9fafb; border-radius: 4px; display: block; height: 170px; object-fit: contain; width: 100%; }
             .document-photos.multi { display: grid; gap: 4px; grid-template-columns: 1fr 1fr; }
-            .document-photos.multi img { height: 53px; }
-            .document .missing { align-items: center; background: #f9fafb; border-radius: 4px; color: #9ca3af; display: flex; font-size: 11px; height: 110px; justify-content: center; margin: 0; }
-            .declaration { background: #fff7ed; border: 1px solid #fed7aa; border-left: 4px solid #f28c1b; border-radius: 6px; font-size: 12.5px; line-height: 1.7; margin-top: 18px; padding: 12px 14px; }
-            .signature-area { display: flex; justify-content: space-between; margin-top: 40px; }
-            .signature-box { text-align: center; width: 240px; }
-            .signature-box img { height: 64px; object-fit: contain; }
-            .signature-line { border-top: 1px solid #111827; font-size: 12px; margin-top: 60px; padding-top: 6px; }
-            .signature-box img + .signature-line { margin-top: 8px; }
-            .print-date { color: #6b7280; font-size: 10px; margin-top: 24px; text-align: right; }
-            @media screen { body { margin: 0 auto; max-width: 210mm; padding: 32px; } }
+            .document-photos.multi img { height: 83px; }
+            .document .missing { align-items: center; background: #f9fafb; border-radius: 4px; color: #9ca3af; display: flex; font-size: 11px; height: 170px; justify-content: center; margin: 0; }
+            @media screen { body { background: #e5e7eb; } .a4-page { box-shadow: 0 2px 12px rgba(0,0,0,.15); margin: 24px auto; } }
+            @media print { .a4-page { height: 297mm; width: 210mm; } }
           </style>
         </head>
         <body>
-          <div class="header">
-            <div class="brand">
-              <img src="${logoUrl}" alt="${escapeHtml(companyName)}" />
-            </div>
-            <div class="form-title">
-              <h1>Dealer Information Form</h1>
-              <p>${escapeHtml(companyName)}</p>
-            </div>
-            <div class="photo-frame">
-              ${dealerPhotoSrc ? `<img src="${dealerPhotoSrc}" alt="Dealer photo" />` : '<span>Dealer photo</span>'}
-            </div>
-          </div>
+          <section class="a4-page">
+            <img class="watermark" src="${origin}/power-icon.png" alt="" />
+            ${header}
+            <main class="content">
+              <h1 class="title">ডিলার নিয়োগ চুক্তিনামা</h1>
+              <p class="intro">এই চুক্তিনামাটি আজ ${blank('', 'inline')} ইং তারিখে উভয় পক্ষের মধ্যে স্বেচ্ছায় ও সজ্ঞানে সম্পাদিত হইল।</p>
 
-          <div class="section">
-            <h2>Dealer details</h2>
-            <div class="grid">
-              <div class="field"><span>Dealer name</span><strong>${escapeHtml(form.name || 'N/A')}</strong></div>
-              <div class="field"><span>Owner</span><strong>${escapeHtml(form.company || 'N/A')}</strong></div>
-              <div class="field"><span>Mobile No</span><strong>${escapeHtml(form.phone || 'N/A')}</strong></div>
-              <div class="field"><span>Email</span><strong>${escapeHtml(form.email || 'N/A')}</strong></div>
-              <div class="field"><span>NID No</span><strong>${escapeHtml(form.nid || 'N/A')}</strong></div>
-              <div class="field"><span>Trade License No</span><strong>${escapeHtml(form.tradeLicenseNo || 'N/A')}</strong></div>
-              <div class="field"><span>Nominee name</span><strong>${escapeHtml(form.nomineeName || 'N/A')}</strong></div>
-              <div class="field"><span>Nominee NID</span><strong>${escapeHtml(form.nomineeNid || 'N/A')}</strong></div>
-              <div class="field wide"><span>Address</span><strong>${escapeHtml(addressParts.join(', ') || 'N/A')}</strong></div>
-            </div>
-          </div>
+              <p class="subtitle">ডিলারের বিবরণ:</p>
+              <div class="row"><label>ডিলারের নাম:</label>${blank(form.name, 'lg')}<label>মালিক:</label>${blank(form.company)}</div>
+              <div class="row"><label>এনআইডি নম্বর (NID No):</label>${blank(form.nid)}<label>ট্রেড লাইসেন্স নম্বর (Trade License No):</label>${blank(form.tradeLicenseNo)}</div>
+              <div class="row"><label>মোবাইল নম্বর (Mobile No):</label>${blank(form.phone)}<label>নমিনীর নাম (Nominee Name):</label>${blank(form.nomineeName)}</div>
+              <div class="row"><label>নমিনীর এনআইডি (Nominee NID):</label>${blank(form.nomineeNid)}<label>থানা:</label>${blank(form.thana, 'sm')}<label>জেলা:</label>${blank(form.district, 'sm')}</div>
+              <div class="row"><label>ডিলার এরিয়া:</label>${blank(form.location, 'lg')}</div>
 
-          <div class="section">
-            <h2>Bank cheque</h2>
-            <div class="grid three">
-              <div class="field"><span>Cheque number</span><strong>${escapeHtml(form.chequeNumber || 'N/A')}</strong></div>
-              <div class="field"><span>Bank name</span><strong>${escapeHtml(form.bankName || 'N/A')}</strong></div>
-              <div class="field"><span>Branch</span><strong>${escapeHtml(form.branchName || 'N/A')}</strong></div>
-            </div>
-          </div>
+              <div class="clause">
+                <h2>১. বাকিতে ব্যবসায়িক পদ্ধতি:</h2>
+                <p>কোম্পানি ডিলারকে বাকিতে পণ্য সরবরাহ করিবে, তবে পূর্বের বকেয়া সম্পূর্ণ পরিশোধ না করা পর্যন্ত নতুন অর্ডার দেওয়া যাইবে না (বিশেষ অনুমতি ব্যতীত)। পণ্য নেওয়ার পর নির্ধারিত দিনের মধ্যে সমস্ত পাওনা অনুযায়ী কোম্পানির ব্যাংক অ্যাকাউন্টের মাধ্যমে পরিশোধ করিতে হইবে।</p>
+              </div>
+              <div class="clause documents-clause">
+                <h2>২. Documents:</h2>
+                <p>ব্যাংক হিসাবের একটি স্বাক্ষরকৃত ব্যাংক চেক (চেক নম্বর ${blank(form.chequeNumber)} ব্যাংক ${blank(form.bankName)} শাখা ${blank(form.branchName)}), জাতীয় পরিচয়পত্র ও ট্রেড লাইসেন্সের কপি এবং ১ কপি পাসপোর্ট সাইজের ছবি কোম্পানির নিকট জমা প্রদান করিতে হইবে।</p>
+              </div>
+              <div class="clause">
+                <h2>৩. পণ্যের দাম ও বিক্রয়মূল্য:</h2>
+                <p>ডিলারকে অবশ্যই নির্ধারিত সর্বোচ্চ খুচরা মূল্যে (MRP) পণ্য বিক্রয় করিতে হইবে এবং পণ্যের সঠিক সংরক্ষণ নিশ্চিত করিতে হইবে, তবে কোনো উৎপাদনজনিত ত্রুটি থাকিলে কোম্পানি ওয়ারেন্টি নীতি অনুযায়ী তাহা পরিবর্তন বা মেরামত করিয়া দিতে বাধ্য থাকিবে।</p>
+              </div>
+              <div class="clause">
+                <h2>৪. বিরোধ নিষ্পত্তি:</h2>
+                <p>চুক্তির কোনো শর্ত বা লেনদেন নিয়ে বিরোধ দেখা দিলে উভয় পক্ষ প্রথমে আলোচনার মাধ্যমে তাহা সমাধানের চেষ্টা করিবেন।</p>
+              </div>
+              <div class="clause">
+                <h2>৫. চুক্তির মেয়াদ ও বাতিলকরণ:</h2>
+                <p>এই চুক্তির মেয়াদ ১ (এক) বছর বলবৎ থাকিবে এবং উভয় পক্ষের সম্মতিতে তাহা নবায়নযোগ্য। চুক্তি বাতিল করিতে চাইলে কমপক্ষে ৩০ দিন পূর্বে জানাতে হইবে এবং বকেয়া পরিশোধ না করিলে কোম্পানি আইনি ব্যবস্থা গ্রহণ করিতে পারিবে।</p>
+              </div>
 
-          <div class="section">
-            <h2>Attached documents</h2>
-            <div class="documents">
-              ${documentRow('Bank cheque / document', 'bankDocument')}
-              ${documentRow('NID copy', 'nidCopy')}
-              ${documentRow('Trade license copy', 'tradeLicenseCopy')}
-              ${documentRow('Passport size photo', 'passportPhoto')}
-            </div>
-          </div>
-
-          <div class="declaration">
-            ব্যাংক হিসাবের একটি স্বাক্ষরকৃত ব্যাংক চেক (চেক নম্বর: ${escapeHtml(form.chequeNumber || '.......')},
-            ব্যাংক: ${escapeHtml(form.bankName || '.......')}, শাখা: ${escapeHtml(form.branchName || '.......')}),
-            জাতীয় পরিচয়পত্র ও ট্রেড লাইসেন্সের কপি এবং ১ কপি পাসপোর্ট সাইজের ছবি কোম্পানির নিকট জমা প্রদান করিতে হইবে।
-          </div>
-
-          <div class="signature-area">
-            <div class="signature-box">
-              <div class="signature-line">Dealer Signature</div>
-            </div>
-            <div class="signature-box">
-              <div class="signature-line">Date</div>
-            </div>
-          </div>
-
-          <p class="print-date">${formatDate(new Date().toISOString())}</p>
+              <div class="signatures">
+                <div class="company-sign">
+                  <h3>কোম্পানির পক্ষে স্বাক্ষর ও সীল</h3>
+                  <div class="sign-lines">
+                    <span>Signature of S.R</span>
+                    <span>Signature of MD</span>
+                    <span>Signature of Chairman</span>
+                  </div>
+                </div>
+                <div class="dealer-sign">
+                  <h3>স্বাক্ষর ও সীল</h3>
+                  <ul>
+                    <li><div class="row"><label>স্বাক্ষর:</label>${signatureSrc ? `<img src="${signatureSrc}" alt="Dealer signature" />` : blank('')}</div></li>
+                    <li><div class="row"><label>নাম:</label>${blank(form.name)}</div></li>
+                    <li>পদবি: অনুমোদিত ডিলার</li>
+                    <li><div class="row"><label>তারিখ:</label>${blank('')}</div></li>
+                  </ul>
+                </div>
+              </div>
+            </main>
+            ${footer}
+          </section>
+          ${
+            hasAttachments
+              ? `<section class="a4-page">
+            ${header}
+            <main class="content">
+              <h2 class="section-title">সংযুক্ত কাগজপত্র (Attached documents) — ${escapeHtml(form.name || 'Dealer')}</h2>
+              <div class="documents">
+                ${documentRow('Dealer photo', 'dealerPhoto')}
+                ${documentRow('Passport size photo', 'passportPhoto')}
+                ${documentRow('Bank cheque / document', 'bankDocument')}
+                ${documentRow('NID copy', 'nidCopy')}
+                ${documentRow('Trade license copy', 'tradeLicenseCopy')}
+              </div>
+            </main>
+            ${footer}
+          </section>`
+              : ''
+          }
           ${
             autoPrint
               ? `<script>
@@ -1420,12 +1490,12 @@ export default function CustomersPage() {
                       </TableCell>
                       <TableCell className="min-w-32">{formatDate(customer.createdAt)}</TableCell>
                       <TableCell className="min-w-44">
-                        <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>
+                        <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                         <p className="text-xs text-muted-foreground">
                           {orderCount} orders, last {formatDate(lastPurchaseDate)}
                         </p>
                       </TableCell>
-                      <TableCell>{formatCurrency(customer.due || dueTotal, currency)}</TableCell>
+                      <TableCell>{formatTableAmount(customer.due || dueTotal, currency)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
                           <Button

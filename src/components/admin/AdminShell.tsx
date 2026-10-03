@@ -2,7 +2,7 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
-import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Banknote,
@@ -466,6 +466,9 @@ function initialsOf(name: string) {
   )
 }
 
+// Every page mounts its own AdminShell, so the sidebar's scroll offset is kept here to survive navigation.
+const sidebarScrollKey = 'admin-sidebar-scroll'
+
 function SidebarContent({
   active,
   onNavigate,
@@ -479,6 +482,30 @@ function SidebarContent({
 }) {
   const { hasPermission, currentUser, data, logout } = useERP()
   const roleName = currentUser ? userRoleNames(data?.roles, currentUser) : ''
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const container = scrollRef.current
+    if (!container) return
+    let saved: string | null = null
+    try {
+      saved = window.sessionStorage.getItem(sidebarScrollKey)
+    } catch {}
+    if (saved !== null) container.scrollTop = Number(saved) || 0
+    // Fall back to revealing the active link when the saved offset does not show it.
+    const activeLink = container.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!activeLink) return
+    const top = activeLink.getBoundingClientRect().top - container.getBoundingClientRect().top
+    if (top < 0 || top + activeLink.offsetHeight > container.clientHeight) {
+      container.scrollTop += top - container.clientHeight / 2 + activeLink.offsetHeight / 2
+    }
+  }, [])
+
+  const saveScroll = () => {
+    try {
+      window.sessionStorage.setItem(sidebarScrollKey, String(scrollRef.current?.scrollTop ?? 0))
+    } catch {}
+  }
 
   const visibleGroups = navigationGroups
     .map((group) => ({
@@ -518,7 +545,11 @@ function SidebarContent({
         ) : null}
       </div>
 
-      <div className={cn('flex-1 space-y-5 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}>
+      <div
+        ref={scrollRef}
+        onScroll={saveScroll}
+        className={cn('flex-1 space-y-5 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}
+      >
         {onToggleCollapse && collapsed ? (
           <Button
             variant="ghost"

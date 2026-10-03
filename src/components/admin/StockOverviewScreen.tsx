@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import { formatCurrency, formatDateTime, getProductStatus, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatCurrency, formatDateTime, formatTableAmount, getProductStatus, toArray, userRoleIds } from '@/lib/erp/utils'
 import { uploadImageToCloudinary, deleteCloudinaryImage } from '@/lib/cloudinary'
 
 const SUPPLIER_NONE = '__none__'
@@ -708,8 +708,8 @@ export function StockOverviewScreen() {
                           <TableCell className="font-medium"><p>{product.sku}</p>{product.serialNumber ? <p className="text-xs font-normal text-muted-foreground">SN: {product.serialNumber}</p> : null}{product.warrantyMonths ? <p className="text-xs font-normal text-muted-foreground">{product.warrantyMonths}mo warranty</p> : null}</TableCell>
                           <TableCell><div><p className="font-medium">{warehouse?.name ?? 'Unknown warehouse'}</p><p className="text-xs text-muted-foreground">{warehouse?.location ?? 'Location unavailable'}</p></div></TableCell>
                           <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} units</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
-                          <TableCell>{formatCurrency(product.purchasePrice, currency)}</TableCell>
-                          <TableCell>{formatCurrency(product.sellingPrice, currency)}</TableCell>
+                          <TableCell>{formatTableAmount(product.purchasePrice, currency)}</TableCell>
+                          <TableCell>{formatTableAmount(product.sellingPrice, currency)}</TableCell>
                           <TableCell>{supplier?.name ?? 'Not assigned'}</TableCell>
                           <TableCell>{formatDateTime(product.updatedAt)}</TableCell>
                           <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
@@ -743,8 +743,8 @@ export function StockOverviewScreen() {
                         <TableCell className="font-semibold">{purchase.productName}</TableCell>
                         <TableCell>{purchase.supplierName}</TableCell>
                         <TableCell>{purchase.quantity}</TableCell>
-                        <TableCell>{formatCurrency(purchase.unitCost, purchase.currency)}</TableCell>
-                        <TableCell>{formatCurrency(purchase.total, purchase.currency)}</TableCell>
+                        <TableCell>{formatTableAmount(purchase.unitCost, purchase.currency)}</TableCell>
+                        <TableCell>{formatTableAmount(purchase.total, purchase.currency)}</TableCell>
                         <TableCell>{formatDateTime(purchase.createdAt)}</TableCell>
                       </TableRow>
                     ))}

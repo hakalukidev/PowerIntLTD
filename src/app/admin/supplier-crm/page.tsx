@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierRecord } from '@/lib/erp/types'
-import { computeSupplierPayables, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
+import { computeSupplierPayables, formatCurrency, formatDate, formatTableAmount, partyCode, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const DOCUMENT_FIELDS = [
@@ -311,16 +311,16 @@ export default function SupplierCrmPage() {
                         </TableCell>
                         <TableCell className="min-w-28 text-sm">{formatDate(supplier.createdAt)}</TableCell>
                         <TableCell className="min-w-32">
-                          <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>
+                          <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                           <p className="text-xs text-muted-foreground">{purchaseCount} purchases</p>
                         </TableCell>
                         <TableCell className="min-w-32">
                           <p className={cn('font-medium', payable > 0 && 'text-rose-600 dark:text-rose-400')}>
-                            {formatCurrency(Math.abs(payable), currency)}
+                            {formatTableAmount(Math.abs(payable), currency)}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {payable < 0 ? 'Paid in advance' : payable === 0 ? 'Settled' : 'Due'}
-                            {pendingPayment > 0 ? ` · ${formatCurrency(pendingPayment, currency)} pending` : ''}
+                            {pendingPayment > 0 ? ` · ${formatTableAmount(pendingPayment, currency)} pending` : ''}
                           </p>
                         </TableCell>
                         <TableCell>

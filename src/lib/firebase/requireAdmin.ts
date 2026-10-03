@@ -1,6 +1,6 @@
 import { resolveRoles } from '@/lib/erp/roles'
-import { effectiveRole } from '@/lib/erp/utils'
-import type { RoleRecord, UserRecord } from '@/lib/erp/types'
+import { effectiveRole, zoneInChargePermissions } from '@/lib/erp/utils'
+import type { RoleRecord, UserRecord, ZoneRecord } from '@/lib/erp/types'
 import { getAdminAuth, getAdminDatabase } from '@/lib/firebase/admin'
 
 export class AuthorizationError extends Error {
@@ -63,9 +63,11 @@ export async function requirePermission(request: Request, permission: string) {
 /**
  * Everything the caller's roles grant, resolved the same way as in the app: built-in roles,
  * legacy permission ids, admin = everything, and a user with several approved roles gets what
- * all of them grant.
+ * all of them grant. A zone in charge only keeps their view grants.
  */
 export async function callerPermissions(db: ReturnType<typeof getAdminDatabase>, caller: UserRecord) {
-  const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
-  return effectiveRole(roles, caller)?.permissions ?? []
+  const [rolesSnapshot, zonesSnapshot] = await Promise.all([db.ref('erp/roles').get(), db.ref('erp/zones').get()])
+  const roles = resolveRoles(rolesSnapshot.val() as Record<string, RoleRecord> | null)
+  const zones = Object.values((zonesSnapshot.val() as Record<string, ZoneRecord> | null) ?? {})
+  return zoneInChargePermissions(effectiveRole(roles, caller)?.permissions ?? [], caller, zones)
 }

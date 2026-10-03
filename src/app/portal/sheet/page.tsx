@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { balanceSide } from '@/lib/erp/ledger'
-import { formatCurrency, formatDate } from '@/lib/erp/utils'
+import { formatAmount, formatDate } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -27,7 +27,7 @@ export default function PortalSheetPage() {
   if (!overview) return null
 
   const { company, party, ledger, replacements } = overview
-  const money = (amount: number) => formatCurrency(amount, company.currency)
+  const money = (amount: number) => formatAmount(amount)
   const fileName = `statement-${ledgerFileSlug(party.name)}`
 
   function documentHtml(autoPrint: boolean) {
@@ -100,17 +100,25 @@ export default function PortalSheetPage() {
                   <td className={infoLabel}>Account of</td>
                   <td className={cn(infoValue, 'text-center')}>{party.name}</td>
                   <td className={infoLabel}>Owner Name</td>
-                  <td className={cn(infoValue, 'text-center')} colSpan={3}>
-                    {party.ownerName || 'N/A'}
-                  </td>
+                  <td className={cn(infoValue, 'text-center')}>{party.ownerName || 'N/A'}</td>
+                  <td className={infoLabel}>SL. No.</td>
+                  <td className={cn(infoValue, 'text-center')}>{party.serial || ''}</td>
                 </tr>
                 <tr>
                   <td className={infoLabel}>Add</td>
                   <td className={infoValue}>{party.address || 'N/A'}</td>
                   <td className={infoLabel}>{overview.account.partyKind === 'customer' ? 'Zone' : 'Country'}</td>
-                  <td className={infoValue}>{party.zoneName || 'N/A'}</td>
-                  <td className={infoLabel}>SL. No.</td>
-                  <td className={cn(infoValue, 'text-center')}>{party.serial || ''}</td>
+                  {party.subZoneName === undefined ? (
+                    <td className={infoValue} colSpan={3}>
+                      {party.zoneName || 'N/A'}
+                    </td>
+                  ) : (
+                    <>
+                      <td className={infoValue}>{party.zoneName || 'N/A'}</td>
+                      <td className={infoLabel}>Sub-zone</td>
+                      <td className={infoValue}>{party.subZoneName || 'N/A'}</td>
+                    </>
+                  )}
                 </tr>
                 <tr>
                   <td className={infoLabel}>Contact No.</td>

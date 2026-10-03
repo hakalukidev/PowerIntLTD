@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from 'react'
-import { Check, ImagePlus, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import { Check, FileCheck, FileX, ImagePlus, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,7 +9,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { CustomerCommitment, CustomerRecord } from '@/lib/erp/types'
-import { formatDate } from '@/lib/erp/utils'
+import { formatDate, isCommitmentApproved } from '@/lib/erp/utils'
+
+import { CommitmentApprovalBadge, CommitmentReviewActions } from './CommitmentApproval'
 
 const COMMITMENT_IMAGE_FOLDER = 'commitments'
 
@@ -20,7 +22,32 @@ export function sortedCommitments(customer: CustomerRecord): CustomerCommitment[
   })
 }
 
-export function CommitmentsPanel({ customer, canEdit }: { customer: CustomerRecord; canEdit: boolean }) {
+export type CommitmentPdfStatus = 'all' | 'pending' | 'fulfilled' | 'none'
+
+export type CommitmentPdfOptions = {
+  status: CommitmentPdfStatus
+  /** yyyy-mm-dd bounds on the commitment date (or the day it was added, when it has no date). */
+  from: string
+  to: string
+}
+
+export const defaultCommitmentPdfOptions: CommitmentPdfOptions = { status: 'all', from: '', to: '' }
+
+/** The commitments that go on the printed ledger: approved, not hidden from the PDF, and inside the chosen status and dates. */
+export function commitmentsForPdf(customer: CustomerRecord, options: CommitmentPdfOptions): CustomerCommitment[] {
+  if (options.status === 'none') return []
+  return sortedCommitments(customer).filter((commitment) => {
+    if (!isCommitmentApproved(commitment) || commitment.showOnPdf === false) return false
+    if (options.status !== 'all' && commitment.status !== options.status) return false
+    const day = commitment.dueDate || commitment.createdAt.slice(0, 10)
+    if (options.from && day < options.from) return false
+    if (options.to && day > options.to) return false
+    return true
+  })
+}
+
+/** `canAdd` without `canEdit` (a zone in charge) may only add commitments; each waits for the Authorizer and the Chairman. */
+export function CommitmentsPanel({ customer, canEdit, canAdd = canEdit }: { customer: CustomerRecord; canEdit: boolean; canAdd?: boolean }) {
   const { saveCustomerCommitment, deleteCustomerCommitment } = useERP()
   const [note, setNote] = useState('')
   const [dueDate, setDueDate] = useState('')
@@ -85,8 +112,9 @@ export function CommitmentsPanel({ customer, canEdit }: { customer: CustomerReco
       {commitments.length ? (
         <div className="space-y-2">
           {commitments.map((commitment) => {
+            const approved = isCommitmentApproved(commitment)
             const fulfilled = commitment.status === 'fulfilled'
-            const overdue = !fulfilled && Boolean(commitment.dueDate) && commitment.dueDate < today
+            const overdue = approved && !fulfilled && Boolean(commitment.dueDate) && commitment.dueDate < today
             return (
               <div
                 key={commitment.id}
@@ -103,26 +131,55 @@ export function CommitmentsPanel({ customer, canEdit }: { customer: CustomerReco
                     {commitment.note}
                   </p>
                   <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                    <span
-                      className={`rounded-md px-2 py-0.5 font-semibold ${
-                        fulfilled
-                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                          : overdue
-                            ? 'bg-red-500/15 text-red-700 dark:text-red-300'
-                            : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                      }`}
-                    >
-                      {fulfilled ? 'Fulfilled' : overdue ? 'Overdue' : 'Pending'}
-                    </span>
+                    {!approved ? (
+                      <CommitmentApprovalBadge commitment={commitment} />
+                    ) : (
+                      <span
+                        className={`rounded-md px-2 py-0.5 font-semibold ${
+                          fulfilled
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : overdue
+                              ? 'bg-red-500/15 text-red-700 dark:text-red-300'
+                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        }`}
+                      >
+                        {fulfilled ? 'Fulfilled' : overdue ? 'Overdue' : 'Pending'}
+                      </span>
+                    )}
                     {commitment.dueDate ? <span>Due {formatDate(commitment.dueDate)}</span> : null}
                     <span>
                       · Added {formatDate(commitment.createdAt)}
                       {commitment.createdBy ? ` by ${commitment.createdBy}` : ''}
                     </span>
+                    {approved && commitment.showOnPdf === false ? <span>· Not on PDF</span> : null}
                   </div>
                 </div>
+                <CommitmentReviewActions customerId={customer.id} commitment={commitment} onError={setError} />
                 {canEdit ? (
                   <div className="flex shrink-0 gap-1.5">
+                    {approved ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() =>
+                            saveCustomerCommitment(
+                              customer.id,
+                              { note: commitment.note, showOnPdf: commitment.showOnPdf === false },
+                              commitment.id
+                            )
+                          )
+                        }
+                        aria-label={commitment.showOnPdf === false ? 'Show on PDF' : 'Hide from PDF'}
+                        title={commitment.showOnPdf === false ? 'Show on PDF' : 'Hide from PDF'}
+                      >
+                        {commitment.showOnPdf === false ? <FileX className="h-4 w-4" /> : <FileCheck className="h-4 w-4" />}
+                      </Button>
+                    ) : null}
+                    {approved ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -143,6 +200,7 @@ export function CommitmentsPanel({ customer, canEdit }: { customer: CustomerReco
                     >
                       {fulfilled ? <RotateCcw className="h-4 w-4" /> : <Check className="h-4 w-4" />}
                     </Button>
+                    ) : null}
                     <Button
                       type="button"
                       variant="outline"
@@ -165,8 +223,11 @@ export function CommitmentsPanel({ customer, canEdit }: { customer: CustomerReco
         <p className="text-sm text-muted-foreground">No commitment notes yet.</p>
       )}
 
-      {canEdit ? (
+      {canAdd ? (
         <div className="space-y-3 rounded-xl bg-muted/30 p-3">
+          {!canEdit ? (
+            <p className="text-xs text-muted-foreground">Your commitment goes to the Authorizer, then to the Chairman for approval.</p>
+          ) : null}
           <Textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}

@@ -21,8 +21,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // Lets the bottom navigation sit clear of the iPhone home indicator.
+  viewportFit: 'cover',
+  // Tints the phone browser's address bar in the brand green.
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f5f7f9' },
+    { media: '(prefers-color-scheme: light)', color: '#10b981' },
     { media: '(prefers-color-scheme: dark)', color: '#0d1117' },
   ],
 }

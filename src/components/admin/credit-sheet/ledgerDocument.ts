@@ -1,7 +1,7 @@
 import { brandedDocument } from '@/components/admin/credit-sheet/printSheet'
 import { balanceSide, type LedgerRowWithBalance, type LedgerTotals, type ReplacementHistoryRow } from '@/lib/erp/ledger'
 import type { CustomerRecord, SupplierRecord } from '@/lib/erp/types'
-import { escapeHtml, formatCurrency, formatDate, partyCode } from '@/lib/erp/utils'
+import { escapeHtml, formatAmount, formatDate, partyCode } from '@/lib/erp/utils'
 
 export type LedgerDocumentParty = {
   /** The client's or supplier's system code. */
@@ -10,6 +10,8 @@ export type LedgerDocumentParty = {
   ownerName: string
   address: string
   zoneName: string
+  /** The dealer's sub-zone (thana). Suppliers have none. */
+  subZoneName?: string
   serial?: number
   phone: string
   email: string
@@ -30,6 +32,7 @@ export function customerDocumentParty(
     ownerName: customer.company,
     address: [customer.location, customer.thana, customer.district].filter(Boolean).join(', '),
     zoneName,
+    subZoneName: customer.thana?.trim() ?? '',
     serial,
     phone: customer.phone,
     email: customer.email,
@@ -73,8 +76,8 @@ type LedgerDocumentOptions = {
  * sheet, the statement image sent to a dealer, and the dealer's own portal all use it, so the
  * dealer always sees the same sheet the office does.
  */
-export function buildLedgerDocument({ party, rows, totals, currency, extraHtml = '', replacementHistory, autoPrint }: LedgerDocumentOptions) {
-  const money = (amount: number) => escapeHtml(formatCurrency(amount, currency))
+export function buildLedgerDocument({ party, rows, extraHtml = '', replacementHistory, autoPrint }: LedgerDocumentOptions) {
+  const money = (amount: number) => escapeHtml(formatAmount(amount))
   const orNA = (value: string | undefined) => escapeHtml(value || 'N/A')
 
   const rowsHtml = rows
@@ -133,15 +136,21 @@ export function buildLedgerDocument({ party, rows, totals, currency, extraHtml =
           <td class="label">Account of</td>
           <td class="center">${orNA(party.name)}</td>
           <td class="label">Owner Name</td>
-          <td class="center" colspan="3">${orNA(party.ownerName)}</td>
+          <td class="center">${orNA(party.ownerName)}</td>
+          <td class="label">SL. No.</td>
+          <td class="center">${party.serial ? party.serial : ''}</td>
         </tr>
         <tr>
           <td class="label">Add</td>
           <td>${orNA(party.address)}</td>
           <td class="label">Zone</td>
-          <td>${orNA(party.zoneName)}</td>
-          <td class="label">SL. No.</td>
-          <td class="center">${party.serial ? party.serial : ''}</td>
+          ${
+            party.subZoneName === undefined
+              ? `<td colspan="3">${orNA(party.zoneName)}</td>`
+              : `<td>${orNA(party.zoneName)}</td>
+          <td class="label">Sub-zone</td>
+          <td>${orNA(party.subZoneName)}</td>`
+          }
         </tr>
         <tr>
           <td class="label">Contact No.</td>
@@ -150,14 +159,6 @@ export function buildLedgerDocument({ party, rows, totals, currency, extraHtml =
           <td>${orNA(party.email)}</td>
           <td class="label">ID</td>
           <td class="center">${orNA(party.code)}</td>
-        </tr>
-        <tr>
-          <td class="label">NID No.</td>
-          <td>${orNA(party.nid)}</td>
-          <td class="label">Trade License</td>
-          <td>${orNA(party.tradeLicenseNo)}</td>
-          <td class="label">Bank</td>
-          <td>${orNA(party.bank)}</td>
         </tr>
       </table>
 
@@ -177,15 +178,6 @@ export function buildLedgerDocument({ party, rows, totals, currency, extraHtml =
         </thead>
         <tbody>
           ${rowsHtml}
-          <tr class="grand">
-            <td colspan="3">Total</td>
-            <td class="numeric">${totals.qty}</td>
-            <td></td>
-            <td class="numeric">${money(totals.debit)}</td>
-            <td class="numeric">${money(totals.credit)}</td>
-            <td>${balanceSide(totals.balance)}</td>
-            <td class="numeric">${money(Math.abs(totals.balance))}</td>
-          </tr>
         </tbody>
       </table>
       ${extraHtml}
@@ -195,7 +187,6 @@ export function buildLedgerDocument({ party, rows, totals, currency, extraHtml =
   return brandedDocument({
     title: `Ledger - ${party.name}`,
     heading: 'Ledger',
-    badge: 'Index',
     body,
     autoPrint,
   })

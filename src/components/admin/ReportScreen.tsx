@@ -189,7 +189,7 @@ export function ReportScreen() {
           <style>
             * { box-sizing: border-box; }
             /* No page margin, so the browser does not print its own title and URL on the page. */
-            @page { margin: 0; }
+            @page { size: A4; margin: 0; }
             body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 24px; }
             h1 { font-size: 22px; margin: 0; }
             p { color: #4b5563; font-size: 12px; margin: 6px 0 0; }

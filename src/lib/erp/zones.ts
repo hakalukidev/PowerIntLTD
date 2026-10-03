@@ -207,6 +207,7 @@ export function scopeDataToUserZones(data: ERPData, user: UserRecord | null): ER
     orders: pickRecords(data.orders, (order) => Boolean(customers[order.customerId]) || scope.userIds.has(order.salesPersonId)),
     creditLedgerEntries: pickRecords(data.creditLedgerEntries, (entry) => Boolean(customers[entry.customerId])),
     deposits: pickRecords(data.deposits, (deposit) => Boolean(customers[deposit.customerId])),
+    ledgerEntryRequests: pickRecords(data.ledgerEntryRequests, (request) => Boolean(customers[request.customerId]) || scope.userIds.has(request.submittedById)),
     orderRequests: pickRecords(data.orderRequests, (request) => Boolean(customers[request.customerId]) || scope.userIds.has(request.submittedById)),
     complaints: pickRecords(data.complaints, (complaint) => Boolean(customers[complaint.customerId]) || scope.userIds.has(complaint.submittedById)),
     replacements: pickRecords(data.replacements, (replacement) => Boolean(customers[replacement.customerId]) || scope.userIds.has(replacement.submittedById)),

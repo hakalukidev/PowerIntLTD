@@ -1,5 +1,6 @@
 import type {
   ActivityRecord,
+  CustomerCommitment,
   EmployeeRecord,
   EmploymentStatus,
   ERPData,
@@ -12,6 +13,7 @@ import type {
   SalaryRecord,
   SalesTargetRecord,
   UserRecord,
+  ZoneRecord,
 } from '@/lib/erp/types'
 
 export function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[]) {
@@ -28,6 +30,11 @@ export function formatCurrency(value: number, currency = 'BDT') {
     currency,
     maximumFractionDigits: 0,
   }).format(value)
+}
+
+/** Plain grouped amount with no currency label, for sheets where the unit is implied. */
+export function formatAmount(value: number) {
+  return new Intl.NumberFormat('en-BD', { maximumFractionDigits: 0 }).format(value)
 }
 
 export function formatDate(value: string) {
@@ -207,12 +214,31 @@ export function changesNeedApproval(roles: Record<string, RoleRecord> | undefine
   return Boolean(effectiveRole(roles, user)?.requiresApproval)
 }
 
+/**
+ * Whether the user is in charge of a zone: they hold the Zonal Manager role or an admin made
+ * them a zone's manager. They may see their zone's client data but not change any of it.
+ */
+export function isZoneInCharge(user: Pick<UserRecord, 'id' | 'roleId' | 'extraRoleIds'> | null, zones: Pick<ZoneRecord, 'managerIds'>[]) {
+  if (!user || userRoleIds(user).includes('admin')) return false
+  return userRoleIds(user).includes('zone_manager') || zones.some((zone) => zone.managerIds?.includes(user.id))
+}
+
+/** A commitment counts once it is approved; one still waiting or rejected does not. */
+export function isCommitmentApproved(commitment: Pick<CustomerCommitment, 'approvalStage'>) {
+  return !commitment.approvalStage || commitment.approvalStage === 'approved'
+}
+
+/** A zone in charge only keeps the `.view` grants of their roles; everyone else keeps them all. */
+export function zoneInChargePermissions(permissions: string[], user: UserRecord | null, zones: Pick<ZoneRecord, 'managerIds'>[]) {
+  return isZoneInCharge(user, zones) ? permissions.filter((permission) => permission.endsWith('.view')) : permissions
+}
+
 export function getPermissions(data: ERPData | null, user: UserRecord | null) {
   if (!data || !user) {
     return []
   }
 
-  return effectiveRole(data.roles, user)?.permissions ?? []
+  return zoneInChargePermissions(effectiveRole(data.roles, user)?.permissions ?? [], user, toArray(data.zones))
 }
 
 export function hasPermission(data: ERPData | null, user: UserRecord | null, permission: string) {
@@ -517,7 +543,7 @@ export async function exportXlsx(filename: string, sheetName: string, headers: s
 export async function exportPdf(filename: string, title: string, headers: string[], rows: (string | number)[][]) {
   const { default: JsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
-  const doc = new JsPDF({ orientation: rows.length && headers.length > 6 ? 'landscape' : 'portrait' })
+  const doc = new JsPDF({ unit: 'mm', format: 'a4', orientation: rows.length && headers.length > 6 ? 'landscape' : 'portrait' })
 
   doc.setFontSize(14)
   doc.text(title, 14, 16)
@@ -816,4 +842,27 @@ export function canAuthorizeCommission(user: Pick<UserRecord, 'roleId' | 'extraR
   if (!user) return false
   const roles = userRoleIds(user)
   return roles.includes('owner') || roles.includes('admin')
+}
+
+export type ApprovalStage = 'authorizer' | 'chairman'
+
+/**
+ * Deposits and order-form orders go to the zone's Authorizer first and, once accepted, to the
+ * Chairman for final approval. `null` once the record is approved or rejected.
+ */
+export function approvalStage(record: { status?: string; authorizedAt?: string }): ApprovalStage | null {
+  if (record.status !== 'pending') return null
+  return record.authorizedAt ? 'chairman' : 'authorizer'
+}
+
+/** Whether the user may act at that approval stage. An admin can act at either stage. */
+export function canActAtStage(user: Pick<UserRecord, 'roleId' | 'extraRoleIds'> | null | undefined, stage: ApprovalStage | null) {
+  if (!user || !stage) return false
+  const roles = userRoleIds(user)
+  return roles.includes('admin') || roles.includes(stage)
+}
+
+export const APPROVAL_STAGE_LABELS: Record<ApprovalStage, string> = {
+  authorizer: 'Waiting for Authorizer',
+  chairman: 'Waiting for Chairman',
 }

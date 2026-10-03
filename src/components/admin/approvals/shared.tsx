@@ -1,10 +1,10 @@
 "use client"
 
-import { MessageCircle, MessageSquareText, PencilLine } from 'lucide-react'
+import { MessageCircle, MessageSquareText, PencilLine, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import type { DepositStatus, SubmissionEdit } from '@/lib/erp/types'
-import { formatDateTime, smsLink, whatsappLink } from '@/lib/erp/utils'
+import { APPROVAL_STAGE_LABELS, approvalStage, formatDateTime, smsLink, whatsappLink } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 export const STATUS_STYLES: Record<DepositStatus, string> = {
@@ -15,6 +15,25 @@ export const STATUS_STYLES: Record<DepositStatus, string> = {
 
 export function StatusPill({ status }: { status: DepositStatus }) {
   return <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_STYLES[status])}>{status}</span>
+}
+
+/** Where a deposit or order stands between the Authorizer and the Chairman. */
+export function ApprovalStageNote({ record }: { record: { status: string; authorizedAt?: string; authorizedByName?: string } }) {
+  const stage = approvalStage(record)
+  if (!stage) return null
+  return (
+    <p className="flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-medium text-amber-700 dark:text-amber-300">
+        <ShieldCheck className="h-3.5 w-3.5" />
+        {APPROVAL_STAGE_LABELS[stage]}
+      </span>
+      {record.authorizedAt ? (
+        <span className="text-muted-foreground">
+          Authorized by <span className="font-medium text-foreground">{record.authorizedByName}</span> · {formatDateTime(record.authorizedAt)}
+        </span>
+      ) : null}
+    </p>
+  )
 }
 
 export function todayInput() {

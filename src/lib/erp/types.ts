@@ -136,6 +136,11 @@ export type SupplierRecord = {
   updatedAt: string
 }
 
+export type DocumentPhoto = {
+  url: string
+  publicId: string
+}
+
 export type CustomerRecord = {
   id: string
   /** System-generated client code (`PIL-CUS-0001`), given when the client form is opened. */
@@ -169,6 +174,8 @@ export type CustomerRecord = {
   dealerPhotoPublicId: string
   signatureUrl: string
   signaturePublicId: string
+  /** Photos after the first for each document (keyed like `nidCopy`); the first stays in the `…Url` field. */
+  extraPhotos?: Record<string, DocumentPhoto[]>
   /** Explicit zone. When empty the zone is resolved from the customer's district. */
   zoneId?: string
   /** Most this dealer may owe; 0 or unset means no limit. Order form blocks or marks orders above it. */
@@ -184,11 +191,26 @@ export type CustomerRecord = {
 
 export type CustomerCommitmentStatus = 'pending' | 'fulfilled'
 
+/**
+ * Where a commitment stands in its approval: a zone in charge's commitment waits for the
+ * Authorizer, then for the Chairman. Unset means approved (everyone else's, and older records).
+ */
+export type CustomerCommitmentApproval = 'authorizer' | 'chairman' | 'approved' | 'rejected'
+
 export type CustomerCommitment = {
   id: string
   note: string
   dueDate: string
   status: CustomerCommitmentStatus
+  approvalStage?: CustomerCommitmentApproval
+  /** False keeps the note off the printed ledger and its PDF/JPG. Unset means it is shown. */
+  showOnPdf?: boolean
+  authorizedBy?: string
+  authorizedAt?: string
+  approvedBy?: string
+  approvedAt?: string
+  rejectedBy?: string
+  rejectedAt?: string
   imageUrl?: string
   imagePublicId?: string
   createdBy: string
@@ -200,6 +222,7 @@ export type CustomerCommitmentInput = {
   note: string
   dueDate?: string
   status?: CustomerCommitmentStatus
+  showOnPdf?: boolean
   imageUrl?: string
   imagePublicId?: string
 }
@@ -531,6 +554,38 @@ export type CreditLedgerEntryRecord = {
 
 export type DepositStatus = 'pending' | 'approved' | 'rejected'
 
+/**
+ * A ledger entry a zone in charge made for a client of their zone. It goes to the zone's
+ * Authorizer, then the Chairman, and only lands on the client's sheet once approved.
+ */
+export type LedgerEntryRequestRecord = {
+  id: string
+  customerId: string
+  customerName: string
+  date: string
+  particulars: string
+  qty: number
+  unitPrice: number
+  debit: number
+  credit: number
+  status: DepositStatus
+  submittedById: string
+  submittedByName: string
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  /** The dealer's zone when it was submitted, so it goes to that zone's Authorizer. */
+  zoneId?: string
+  reviewedById?: string
+  reviewedByName?: string
+  reviewedAt?: string
+  /** The ledger entry written on approval. */
+  entryId?: string
+  createdAt: string
+  updatedAt: string
+}
+
 /** One admin edit of a submission before approval: who changed it and what each field was. */
 export type SubmissionEdit = {
   byId: string
@@ -559,6 +614,12 @@ export type OrderRequestRecord = {
   submittedById: string
   submittedByName: string
   submittedByRole: string
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  /** The dealer's zone when it was submitted, so it goes to that zone's Authorizer. */
+  zoneId?: string
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
@@ -650,6 +711,12 @@ export type DepositRecord = {
   status: DepositStatus
   submittedById: string
   submittedByName: string
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  /** The dealer's zone when it was submitted, so it goes to that zone's Authorizer. */
+  zoneId?: string
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
@@ -927,6 +994,7 @@ export type ERPData = {
   sellers: Record<string, SellerRecord>
   sellerTransactions: Record<string, SellerTransactionRecord>
   creditLedgerEntries: Record<string, CreditLedgerEntryRecord>
+  ledgerEntryRequests: Record<string, LedgerEntryRequestRecord>
   deposits: Record<string, DepositRecord>
   complaints: Record<string, ComplaintRecord>
   replacements: Record<string, ReplacementRecord>
@@ -1025,6 +1093,7 @@ export type CustomerInput = {
   dealerPhotoPublicId?: string
   signatureUrl?: string
   signaturePublicId?: string
+  extraPhotos?: Record<string, DocumentPhoto[]>
   zoneId?: string
   creditLimit?: number
   depotId?: string

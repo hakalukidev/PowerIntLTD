@@ -188,12 +188,16 @@ export function DashboardScreen() {
               <Card
                 key={item.key}
                 className="overflow-hidden border-border/70 shadow-sm transition-transform hover:-translate-y-0.5"
-                style={{ borderTopWidth: 3, borderTopColor: `hsl(var(--${item.tone}))` }}
+                style={{
+                  borderTopWidth: 3,
+                  borderTopColor: `hsl(var(--${item.tone}))`,
+                  backgroundImage: `linear-gradient(135deg, hsl(var(--${item.tone}) / 0.14), hsl(var(--${item.tone}) / 0.02) 70%)`,
+                }}
               >
-                <CardContent className="flex items-center gap-3 p-3 sm:p-4">
+                <CardContent className="flex items-center gap-2.5 p-3 sm:gap-3 sm:p-4">
                   <div
-                    className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl sm:flex"
-                    style={{ backgroundColor: `hsl(var(--${item.tone}) / 0.15)`, color: `hsl(var(--${item.tone}))` }}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white shadow-sm sm:h-10 sm:w-10"
+                    style={{ backgroundColor: `hsl(var(--${item.tone}))` }}
                   >
                     <Icon className="h-5 w-5" />
                   </div>
@@ -219,11 +223,11 @@ export function DashboardScreen() {
             <CardContent className="space-y-3">
               {investors.length ? investors.slice(0, 5).map((investor) => (
                 <div key={investor.id} className="rounded-xl border border-border/70 p-3">
-                  <div className="flex justify-between gap-3">
-                    <div><p className="font-semibold">{investor.name}</p><p className="text-xs text-muted-foreground">{investor.mobile} · {investor.location || 'No location'}</p></div>
-                    <p className="font-semibold">{formatCurrency(investor.amount, data?.settings.currency)}</p>
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
+                    <div className="min-w-0 break-words"><p className="font-semibold">{investor.name}</p><p className="text-xs text-muted-foreground">{investor.mobile} · {investor.location || 'No location'}</p></div>
+                    <p className="break-all font-semibold text-emerald-600 dark:text-emerald-400">{formatCurrency(investor.amount, data?.settings.currency)}</p>
                   </div>
-                  <p className="mt-2 text-sm">Products: {investor.products || 'N/A'}</p>
+                  <p className="mt-2 break-words text-sm">Products: {investor.products || 'N/A'}</p>
                   {investor.note ? <p className="mt-1 text-xs text-muted-foreground">{investor.note}</p> : null}
                 </div>
               )) : <p className="text-sm text-muted-foreground">No investors added yet.</p>}

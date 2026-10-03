@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositRecord, DepositStatus } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
+import { APPROVAL_STAGE_LABELS, approvalStage, canActAtStage, formatCurrency, formatDate, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -44,7 +44,9 @@ export default function DepositPage() {
   const [reviewingId, setReviewingId] = useState<string | null>(null)
   const [newMethod, setNewMethod] = useState('')
 
-  const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
+  const roleIds = currentUser ? userRoleIds(currentUser) : []
+  const isAdmin = roleIds.includes('admin')
+  const isApprover = isAdmin || roleIds.includes('authorizer') || roleIds.includes('chairman')
   const canEdit = hasPermission('credit_sheet.edit')
   const methods = data?.settings.depositMethods ?? []
 
@@ -78,7 +80,7 @@ export default function DepositPage() {
     setIsSaving(true)
     try {
       await submitDeposit({ customerId: customer.id, date: new Date(date).toISOString(), amount: value, method, note })
-      setFeedback({ tone: 'success', text: `Deposit of ${formatCurrency(value)} for ${customer.name} sent for approval.` })
+      setFeedback({ tone: 'success', text: `Deposit of ${formatCurrency(value)} for ${customer.name} sent to the Authorizer, then the Chairman for approval.` })
       setCustomerId('')
       setDate(todayInput())
       setAmount('')
@@ -128,7 +130,7 @@ export default function DepositPage() {
           <Card>
             <CardHeader>
               <CardTitle>New deposit</CardTitle>
-              <CardDescription>The dealer’s due goes down once an admin approves the deposit.</CardDescription>
+              <CardDescription>Goes to your zone’s Authorizer, then the Chairman. The dealer’s due goes down once the Chairman approves it.</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
@@ -312,11 +314,13 @@ export default function DepositPage() {
                     <TableHead>Note</TableHead>
                     <TableHead>Submitted by</TableHead>
                     <TableHead>Status</TableHead>
-                    {isAdmin ? <TableHead className="text-right">Action</TableHead> : null}
+                    {isApprover ? <TableHead className="text-right">Action</TableHead> : null}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleDeposits.map((deposit) => (
+                  {visibleDeposits.map((deposit) => {
+                    const stage = approvalStage(deposit)
+                    return (
                     <TableRow key={deposit.id}>
                       <TableCell className="whitespace-nowrap">{formatDate(deposit.date)}</TableCell>
                       <TableCell>
@@ -331,12 +335,15 @@ export default function DepositPage() {
                       <TableCell>{deposit.submittedByName}</TableCell>
                       <TableCell>
                         <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_STYLES[deposit.status])}>
-                          {deposit.status}
+                          {stage ? APPROVAL_STAGE_LABELS[stage] : deposit.status}
                         </span>
+                        {deposit.authorizedByName ? (
+                          <span className="mt-0.5 block text-xs text-muted-foreground">Authorized by {deposit.authorizedByName}</span>
+                        ) : null}
                       </TableCell>
-                      {isAdmin ? (
+                      {isApprover ? (
                         <TableCell className="text-right">
-                          {deposit.status === 'pending' ? (
+                          {canActAtStage(currentUser, stage) ? (
                             <div className="flex justify-end gap-1.5">
                               <Button
                                 size="sm"
@@ -345,7 +352,7 @@ export default function DepositPage() {
                                 onClick={() => void handleReview(deposit, 'approve')}
                               >
                                 <Check className="h-3.5 w-3.5" />
-                                Approve
+                                {stage === 'authorizer' ? 'Authorize' : 'Final approve'}
                               </Button>
                               <Button
                                 size="sm"
@@ -362,7 +369,8 @@ export default function DepositPage() {
                         </TableCell>
                       ) : null}
                     </TableRow>
-                  ))}
+                    )
+                  })}
                 </TableBody>
               </Table>
             )}

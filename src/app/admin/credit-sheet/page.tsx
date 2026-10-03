@@ -5,11 +5,18 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { ArrowLeft, BellRing, Eye, FileImage, FileText, MapPinned, Plus, Printer, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
-import { CommitmentsPanel, sortedCommitments } from '@/components/admin/credit-sheet/CommitmentsPanel'
+import {
+  CommitmentsPanel,
+  commitmentsForPdf,
+  defaultCommitmentPdfOptions,
+  type CommitmentPdfOptions,
+  type CommitmentPdfStatus,
+} from '@/components/admin/credit-sheet/CommitmentsPanel'
 import { brandedDocument, downloadDocumentJpg, downloadDocumentPdf, downloadSheetPdf, openPrintWindow, type SheetPdfTable } from '@/components/admin/credit-sheet/printSheet'
 import { buildLedgerDocument, customerDocumentParty, ledgerFileSlug } from '@/components/admin/credit-sheet/ledgerDocument'
 import { PartyNotifyDialog } from '@/components/admin/portal/PartyNotifyDialog'
 import { ZoneManagerDialog } from '@/components/admin/credit-sheet/ZoneManagerDialog'
+import { LedgerEntryApprovals } from '@/components/admin/approvals/LedgerEntryApprovals'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -26,7 +33,7 @@ import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
 import { buildCustomerLedger, ledgerTotalsOf, withRunningBalance } from '@/lib/erp/ledger'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { escapeHtml, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatAmount, formatDate, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
 import {
   customerZoneId,
   customerZoneName,
@@ -42,15 +49,23 @@ type LedgerEntryFormState = {
   particulars: string
   qty: string
   unitPrice: string
-  debit: string
-  credit: string
+  entryType: LedgerEntryType
+  amount: string
 }
+
+type LedgerEntryType = 'debit' | 'credit'
+
+const LEDGER_ENTRY_TYPE_OPTIONS: Array<{ value: LedgerEntryType; label: string; hint: string }> = [
+  { value: 'debit', label: 'Debit', hint: 'Payments, deposits, or returns that reduce the balance.' },
+  { value: 'credit', label: 'Credit', hint: 'Goods taken or charges that increase the balance.' },
+]
 
 type GroupBy = 'zone' | 'subzone'
 
 type SheetRow = {
   customer: CustomerRecord
   purchaseTotal: number
+  quantity: number
   paid: number
   zoneId: string
   zoneName: string
@@ -58,7 +73,7 @@ type SheetRow = {
   subZoneName: string
 }
 
-type Totals = { dealers: number; purchase: number; paid: number; due: number }
+type Totals = { dealers: number; quantity: number; purchase: number; paid: number; due: number }
 
 const GROUP_BY_OPTIONS: Array<{ value: GroupBy; label: string }> = [
   { value: 'zone', label: 'Zone' },
@@ -71,14 +86,23 @@ function emptyLedgerEntryForm(): LedgerEntryFormState {
     particulars: '',
     qty: '',
     unitPrice: '',
-    debit: '0',
-    credit: '0',
+    entryType: 'debit',
+    amount: '0',
   }
+}
+
+// Qty × unit price fills the amount automatically; the amount stays editable for overrides.
+function withAutoAmount(form: LedgerEntryFormState): LedgerEntryFormState {
+  const qty = Number(form.qty)
+  const unitPrice = Number(form.unitPrice)
+  if (!form.qty || !form.unitPrice || !Number.isFinite(qty) || !Number.isFinite(unitPrice)) return form
+  return { ...form, amount: String(Math.round(qty * unitPrice * 100) / 100) }
 }
 
 function totalsOf(rows: SheetRow[]): Totals {
   return {
     dealers: rows.length,
+    quantity: rows.reduce((sum, row) => sum + row.quantity, 0),
     purchase: rows.reduce((sum, row) => sum + row.purchaseTotal, 0),
     paid: rows.reduce((sum, row) => sum + row.paid, 0),
     due: rows.reduce((sum, row) => sum + row.customer.due, 0),
@@ -138,6 +162,11 @@ export default function CreditSheetPage() {
   const { data, currentUser, hasPermission, recordCreditLedgerEntry, deleteCreditLedgerEntry, changesNeedApproval } = useERP()
   const currency = data?.settings.currency
   const canEdit = hasPermission('credit_sheet.edit')
+  // A zone in charge cannot change the sheet but may add a commitment or a ledger entry for their zone's
+  // clients; each goes to the Authorizer, then the Chairman.
+  const zoneInCharge = isZoneInCharge(currentUser, toArray(data?.zones))
+  const canAddCommitment = canEdit || zoneInCharge
+  const canAddEntry = canEdit || zoneInCharge
   const canManageZones = hasPermission('zones.edit')
   // Zone managers and zone-limited roles are limited to their own zones; everyone else sees all zones.
   const { zones, zoneOptions, visibleZoneIds, customers } = useZoneAccess()
@@ -164,6 +193,7 @@ export default function CreditSheetPage() {
   const [isSavingLedgerPdf, setIsSavingLedgerPdf] = useState(false)
   const [isSavingLedgerJpg, setIsSavingLedgerJpg] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
+  const [commitmentPdf, setCommitmentPdf] = useState<CommitmentPdfOptions>(defaultCommitmentPdfOptions)
   const [sheetFeedback, setSheetFeedback] = useState<string | null>(null)
 
   const customerRows = useMemo<SheetRow[]>(() => {
@@ -171,15 +201,18 @@ export default function CreditSheetPage() {
     // (credit = goods given, debit = payment received).
     const purchases = new Map<string, number>()
     const payments = new Map<string, number>()
+    const quantities = new Map<string, number>()
     const add = (totals: Map<string, number>, customerId: string, amount: number) =>
       totals.set(customerId, (totals.get(customerId) ?? 0) + amount)
     for (const order of orders) {
       add(purchases, order.customerId, order.total)
       add(payments, order.customerId, order.paid)
+      add(quantities, order.customerId, (order.items ?? []).reduce((sum, item) => sum + (item.quantity || 0), 0))
     }
     for (const entry of creditLedgerEntries) {
       add(purchases, entry.customerId, entry.credit)
       add(payments, entry.customerId, entry.debit)
+      add(quantities, entry.customerId, entry.qty || 0)
     }
 
     return customers.map((customer) => {
@@ -187,6 +220,7 @@ export default function CreditSheetPage() {
       return {
         customer,
         purchaseTotal,
+        quantity: quantities.get(customer.id) ?? 0,
         paid: payments.get(customer.id) ?? 0,
         zoneId: customerZoneId(customer, zones),
         zoneName: customerZoneName(customer, zones),
@@ -322,9 +356,11 @@ export default function CreditSheetPage() {
   }
 
   function sheetPdfTables(): SheetPdfTable[] {
-    const money = (amount: number) => formatCurrency(amount, currency)
+    const money = (amount: number) => formatAmount(amount)
+    const qty = (amount: number) => amount.toLocaleString('en-BD')
     const extraHeaders = [
       ...(showSubZoneColumn ? ['Sub-zone'] : []),
+      'Quantity',
     ]
     const amountStart = 4 + extraHeaders.length
 
@@ -332,7 +368,7 @@ export default function CreditSheetPage() {
       title: group.name,
       titleKind: 'group',
       head: ['SL', 'Dealer', 'Owner', 'Mobile', ...extraHeaders, 'Total purchase', 'Paid', 'Due (credit)'],
-      numeric: [amountStart, amountStart + 1, amountStart + 2],
+      numeric: [amountStart - 1, amountStart, amountStart + 1, amountStart + 2],
       rows: [
         ...group.rows.map((row, index) => ({
           cells: [
@@ -341,6 +377,7 @@ export default function CreditSheetPage() {
             row.customer.company,
             row.customer.phone,
             ...(showSubZoneColumn ? [row.customer.thana || '-'] : []),
+            qty(row.quantity),
             money(row.purchaseTotal),
             money(row.paid),
             money(row.customer.due),
@@ -349,7 +386,8 @@ export default function CreditSheetPage() {
         {
           tone: 'subtotal' as const,
           cells: [
-            { content: `${group.name} total (${group.totals.dealers} dealers)`, colSpan: amountStart },
+            { content: `${group.name} total (${group.totals.dealers} dealers)`, colSpan: amountStart - 1 },
+            qty(group.totals.quantity),
             money(group.totals.purchase),
             money(group.totals.paid),
             money(group.totals.due),
@@ -361,15 +399,15 @@ export default function CreditSheetPage() {
     const summaryTable: SheetPdfTable = {
       title: `${groupLabel}-wise summary`,
       titleKind: 'section',
-      head: [groupLabel, 'Dealers', 'Total purchase', 'Paid', 'Due (credit)'],
-      numeric: [1, 2, 3, 4],
+      head: [groupLabel, 'Dealers', 'Quantity', 'Total purchase', 'Paid', 'Due (credit)'],
+      numeric: [1, 2, 3, 4, 5],
       rows: [
         ...creditSheetGroups.map((group) => ({
-          cells: [group.name, String(group.totals.dealers), money(group.totals.purchase), money(group.totals.paid), money(group.totals.due)],
+          cells: [group.name, String(group.totals.dealers), qty(group.totals.quantity), money(group.totals.purchase), money(group.totals.paid), money(group.totals.due)],
         })),
         {
           tone: 'grand' as const,
-          cells: ['Grand total', String(metrics.dealers), money(metrics.purchase), money(metrics.paid), money(metrics.due)],
+          cells: ['Grand total', String(metrics.dealers), qty(metrics.quantity), money(metrics.purchase), money(metrics.paid), money(metrics.due)],
         },
       ],
     }
@@ -378,7 +416,8 @@ export default function CreditSheetPage() {
   }
 
   function buildSheetHtml(autoPrint: boolean) {
-    const money = (amount: number) => escapeHtml(formatCurrency(amount, currency))
+    const money = (amount: number) => escapeHtml(formatAmount(amount))
+    const qty = (amount: number) => escapeHtml(amount.toLocaleString('en-BD'))
     const extraHeaders = showSubZoneColumn ? '<th>Sub-zone</th>' : ''
     const extraCount = Number(showSubZoneColumn)
 
@@ -389,7 +428,7 @@ export default function CreditSheetPage() {
           <table>
             <thead>
               <tr>
-                <th>SL</th><th>Dealer</th><th>Owner</th><th>Mobile</th>${extraHeaders}
+                <th>SL</th><th>Dealer</th><th>Owner</th><th>Mobile</th>${extraHeaders}<th class="numeric">Quantity</th>
                 <th class="numeric">Total purchase</th><th class="numeric">Paid</th><th class="numeric">Due (credit)</th>
               </tr>
             </thead>
@@ -403,6 +442,7 @@ export default function CreditSheetPage() {
                       <td>${escapeHtml(row.customer.company)}</td>
                       <td>${escapeHtml(row.customer.phone)}</td>
                       ${showSubZoneColumn ? `<td>${escapeHtml(row.customer.thana || '-')}</td>` : ''}
+                      <td class="numeric">${qty(row.quantity)}</td>
                       <td class="numeric">${money(row.purchaseTotal)}</td>
                       <td class="numeric">${money(row.paid)}</td>
                       <td class="numeric">${money(row.customer.due)}</td>
@@ -412,6 +452,7 @@ export default function CreditSheetPage() {
                 .join('')}
               <tr class="subtotal">
                 <td colspan="${4 + extraCount}">${escapeHtml(group.name)} total (${group.totals.dealers} dealers)</td>
+                <td class="numeric">${qty(group.totals.quantity)}</td>
                 <td class="numeric">${money(group.totals.purchase)}</td>
                 <td class="numeric">${money(group.totals.paid)}</td>
                 <td class="numeric">${money(group.totals.due)}</td>
@@ -426,7 +467,7 @@ export default function CreditSheetPage() {
       <p class="section-title">${escapeHtml(groupLabel)}-wise summary</p>
       <table>
         <thead>
-          <tr><th>${escapeHtml(groupLabel)}</th><th class="numeric">Dealers</th><th class="numeric">Total purchase</th><th class="numeric">Paid</th><th class="numeric">Due (credit)</th></tr>
+          <tr><th>${escapeHtml(groupLabel)}</th><th class="numeric">Dealers</th><th class="numeric">Quantity</th><th class="numeric">Total purchase</th><th class="numeric">Paid</th><th class="numeric">Due (credit)</th></tr>
         </thead>
         <tbody>
           ${creditSheetGroups
@@ -435,6 +476,7 @@ export default function CreditSheetPage() {
                 <tr>
                   <td>${escapeHtml(group.name)}</td>
                   <td class="numeric">${group.totals.dealers}</td>
+                  <td class="numeric">${qty(group.totals.quantity)}</td>
                   <td class="numeric">${money(group.totals.purchase)}</td>
                   <td class="numeric">${money(group.totals.paid)}</td>
                   <td class="numeric">${money(group.totals.due)}</td>
@@ -445,6 +487,7 @@ export default function CreditSheetPage() {
           <tr class="grand">
             <td>Grand total</td>
             <td class="numeric">${metrics.dealers}</td>
+            <td class="numeric">${qty(metrics.quantity)}</td>
             <td class="numeric">${money(metrics.purchase)}</td>
             <td class="numeric">${money(metrics.paid)}</td>
             <td class="numeric">${money(metrics.due)}</td>
@@ -480,13 +523,17 @@ export default function CreditSheetPage() {
         particulars: entryForm.particulars,
         qty: entryForm.qty ? Number(entryForm.qty) : undefined,
         unitPrice: entryForm.unitPrice ? Number(entryForm.unitPrice) : undefined,
-        debit: Number(entryForm.debit || 0),
-        credit: Number(entryForm.credit || 0),
+        debit: entryForm.entryType === 'debit' ? Number(entryForm.amount || 0) : 0,
+        credit: entryForm.entryType === 'credit' ? Number(entryForm.amount || 0) : 0,
       }
       await recordCreditLedgerEntry(input)
       setEntryDialogOpen(false)
       setEntryForm(emptyLedgerEntryForm())
-      if (changesNeedApproval) setLedgerFeedback('The entry was sent to an admin for approval. It shows on the sheet once approved.')
+      if (zoneInCharge) {
+        setLedgerFeedback("The entry was sent to your zone's Authorizer, then goes to the Chairman. It shows on the sheet once approved.")
+      } else if (changesNeedApproval) {
+        setLedgerFeedback('The entry was sent to an admin for approval. It shows on the sheet once approved.')
+      }
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to save ledger entry.')
     } finally {
@@ -507,7 +554,8 @@ export default function CreditSheetPage() {
   function buildLedgerHtml(autoPrint: boolean) {
     if (!selectedCustomer) return null
 
-    const commitments = sortedCommitments(selectedCustomer)
+    // Only approved commitments go on the printed ledger, narrowed by the PDF options and per-note toggles.
+    const commitments = commitmentsForPdf(selectedCustomer, commitmentPdf)
     const commitmentsHtml = commitments.length
       ? `
         <p class="section-title">Commitment notes</p>
@@ -627,7 +675,7 @@ export default function CreditSheetPage() {
                   Notify dealer
                 </Button>
               ) : null}
-              {canEdit ? (
+              {canAddEntry ? (
                 <Button type="button" size="sm" className="rounded-lg" onClick={openEntryDialog}>
                   <Plus className="mr-1.5 h-4 w-4" />
                   Add ledger entry
@@ -642,13 +690,14 @@ export default function CreditSheetPage() {
             </Card>
           ) : null}
 
+          <LedgerEntryApprovals customerId={selectedCustomer.id} />
+
           <Card className="border-border/70 shadow-sm">
             <CardContent className="space-y-5 p-4 sm:p-6">
               <SheetBrandHeader
                 topLeft={`${zoneTitle(selectedZoneName)}_Power Int.`}
                 topRight={selectedCustomer.name}
                 heading="Ledger"
-                badge="Index"
               />
 
               <div className="overflow-x-auto">
@@ -736,11 +785,11 @@ export default function CreditSheetPage() {
                           ) : null}
                         </TableCell>
                         <TableCell className="text-right">{row.qty ?? ''}</TableCell>
-                        <TableCell className="text-right">{row.unitPrice ? formatCurrency(row.unitPrice, currency) : ''}</TableCell>
-                        <TableCell className="text-right">{row.debit ? formatCurrency(row.debit, currency) : ''}</TableCell>
-                        <TableCell className="text-right">{row.credit ? formatCurrency(row.credit, currency) : ''}</TableCell>
+                        <TableCell className="text-right">{row.unitPrice ? formatAmount(row.unitPrice) : ''}</TableCell>
+                        <TableCell className="text-right">{row.debit ? formatAmount(row.debit) : ''}</TableCell>
+                        <TableCell className="text-right">{row.credit ? formatAmount(row.credit) : ''}</TableCell>
                         <TableCell>{row.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
-                        <TableCell className="text-right font-medium">{formatCurrency(Math.abs(row.balance), currency)}</TableCell>
+                        <TableCell className="text-right font-medium">{formatAmount(Math.abs(row.balance))}</TableCell>
                         {canEdit ? (
                           <TableCell className="text-right">
                             {row.removable ? (
@@ -773,10 +822,10 @@ export default function CreditSheetPage() {
                         <TableCell colSpan={3}>Total</TableCell>
                         <TableCell className="text-right">{ledgerTotals.qty}</TableCell>
                         <TableCell />
-                        <TableCell className="text-right">{formatCurrency(ledgerTotals.debit, currency)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(ledgerTotals.credit, currency)}</TableCell>
+                        <TableCell className="text-right">{formatAmount(ledgerTotals.debit)}</TableCell>
+                        <TableCell className="text-right">{formatAmount(ledgerTotals.credit)}</TableCell>
                         <TableCell>{ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(Math.abs(ledgerTotals.balance), currency)}</TableCell>
+                        <TableCell className="text-right">{formatAmount(Math.abs(ledgerTotals.balance))}</TableCell>
                         {canEdit ? <TableCell /> : null}
                       </TableRow>
                     </TableFooter>
@@ -793,8 +842,50 @@ export default function CreditSheetPage() {
                 Payment promises and other commitments from this dealer, with a photo of the cheque, memo or document if you have one.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <CommitmentsPanel customer={selectedCustomer} canEdit={canEdit} />
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border/70 p-3">
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">On PDF / print</p>
+                  <Select
+                    value={commitmentPdf.status}
+                    onValueChange={(value) => setCommitmentPdf((current) => ({ ...current, status: value as CommitmentPdfStatus }))}
+                  >
+                    <SelectTrigger className="h-9 w-44">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All commitments</SelectItem>
+                      <SelectItem value="pending">Pending only</SelectItem>
+                      <SelectItem value="fulfilled">Fulfilled only</SelectItem>
+                      <SelectItem value="none">No commitments</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">From</p>
+                  <Input
+                    type="date"
+                    value={commitmentPdf.from}
+                    disabled={commitmentPdf.status === 'none'}
+                    onChange={(event) => setCommitmentPdf((current) => ({ ...current, from: event.target.value }))}
+                    className="h-9 w-40"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">To</p>
+                  <Input
+                    type="date"
+                    value={commitmentPdf.to}
+                    disabled={commitmentPdf.status === 'none'}
+                    onChange={(event) => setCommitmentPdf((current) => ({ ...current, to: event.target.value }))}
+                    className="h-9 w-40"
+                  />
+                </div>
+                <p className="pb-2 text-xs text-muted-foreground">
+                  {commitmentsForPdf(selectedCustomer, commitmentPdf).length} on the PDF. Dates use the commitment date, or the day it was added.
+                </p>
+              </div>
+              <CommitmentsPanel customer={selectedCustomer} canEdit={canEdit} canAdd={canAddCommitment} />
             </CardContent>
           </Card>
         </div>
@@ -810,6 +901,26 @@ export default function CreditSheetPage() {
               </DialogDescription>
             </DialogHeader>
             <form className="space-y-5" onSubmit={handleEntrySubmit}>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">Entry type</p>
+                <div className="inline-flex rounded-lg border border-border/70 p-0.5" role="radiogroup" aria-label="Ledger entry type">
+                  {LEDGER_ENTRY_TYPE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={entryForm.entryType === option.value}
+                      onClick={() => setEntryForm((current) => ({ ...current, entryType: option.value }))}
+                      className={cn(
+                        'rounded-md px-3 py-1 text-sm font-medium transition-colors',
+                        entryForm.entryType === option.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">
@@ -841,7 +952,7 @@ export default function CreditSheetPage() {
                     type="number"
                     min="0"
                     value={entryForm.qty}
-                    onChange={(event) => setEntryForm((current) => ({ ...current, qty: event.target.value }))}
+                    onChange={(event) => setEntryForm((current) => withAutoAmount({ ...current, qty: event.target.value }))}
                     placeholder="0"
                   />
                 </div>
@@ -853,31 +964,24 @@ export default function CreditSheetPage() {
                     type="number"
                     min="0"
                     value={entryForm.unitPrice}
-                    onChange={(event) => setEntryForm((current) => ({ ...current, unitPrice: event.target.value }))}
+                    onChange={(event) => setEntryForm((current) => withAutoAmount({ ...current, unitPrice: event.target.value }))}
                     placeholder="0"
                   />
                 </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Debit ({currency ?? 'BDT'})</p>
+                <div className="space-y-2 sm:col-span-2">
+                  <p className="text-sm font-medium text-foreground">
+                    {entryForm.entryType === 'debit' ? 'Debit' : 'Credit'} amount ({currency ?? 'BDT'})
+                  </p>
                   <Input
                     type="number"
                     min="0"
-                    value={entryForm.debit}
-                    onChange={(event) => setEntryForm((current) => ({ ...current, debit: event.target.value }))}
+                    value={entryForm.amount}
+                    onChange={(event) => setEntryForm((current) => ({ ...current, amount: event.target.value }))}
                     placeholder="0"
                   />
-                  <p className="text-xs text-muted-foreground">Payments, deposits, or returns that reduce the balance.</p>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Credit ({currency ?? 'BDT'})</p>
-                  <Input
-                    type="number"
-                    min="0"
-                    value={entryForm.credit}
-                    onChange={(event) => setEntryForm((current) => ({ ...current, credit: event.target.value }))}
-                    placeholder="0"
-                  />
-                  <p className="text-xs text-muted-foreground">Goods taken or charges that increase the balance.</p>
+                  <p className="text-xs text-muted-foreground">
+                    {LEDGER_ENTRY_TYPE_OPTIONS.find((option) => option.value === entryForm.entryType)?.hint} Auto-filled from Qty × Unit price.
+                  </p>
                 </div>
               </div>
               <div className="flex justify-end gap-3">
@@ -907,15 +1011,16 @@ export default function CreditSheetPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
-            ['Dealers', metrics.dealers.toLocaleString('en-BD'), 'Matching current filters'],
-            ['Total purchase', formatCurrency(metrics.purchase, currency), 'From sales history'],
-            ['Paid', formatCurrency(metrics.paid, currency), 'Payments received'],
-            ['Due (credit)', formatCurrency(metrics.due, currency), 'Outstanding across dealers'],
-          ].map(([label, value, note]) => (
-            <Card key={label} className="border-border/70 shadow-sm">
+            // Paid reads green and due reads red so the two are told apart at a glance.
+            ['Dealers', metrics.dealers.toLocaleString('en-BD'), 'Matching current filters', 'border-t-sky-500 from-sky-500/12', 'text-sky-700 dark:text-sky-300'],
+            ['Total purchase', formatAmount(metrics.purchase), 'From sales history', 'border-t-violet-500 from-violet-500/12', 'text-violet-700 dark:text-violet-300'],
+            ['Paid', formatAmount(metrics.paid), 'Payments received', 'border-t-emerald-500 from-emerald-500/12', 'text-emerald-700 dark:text-emerald-300'],
+            ['Due (credit)', formatAmount(metrics.due), 'Outstanding across dealers', 'border-t-rose-500 from-rose-500/12', 'text-rose-700 dark:text-rose-300'],
+          ].map(([label, value, note, tile, valueTone]) => (
+            <Card key={label} className={`border-t-[3px] border-border/70 bg-gradient-to-br to-transparent shadow-sm ${tile}`}>
               <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{value}</p>
+                <p className={`mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl ${valueTone}`}>{value}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{note}</p>
               </CardContent>
             </Card>
@@ -1070,6 +1175,7 @@ export default function CreditSheetPage() {
                               <TableHead>Dealer</TableHead>
                               <TableHead>Mobile</TableHead>
                               {showSubZoneColumn ? <TableHead>Sub-zone</TableHead> : null}
+                              <TableHead className="text-right">Quantity</TableHead>
                               <TableHead className="text-right">Total purchase</TableHead>
                               <TableHead className="text-right">Paid</TableHead>
                               <TableHead className="text-right">Due (credit)</TableHead>
@@ -1082,7 +1188,7 @@ export default function CreditSheetPage() {
                                 <TableCell className="text-muted-foreground">{index + 1}</TableCell>
                                 <TableCell className="font-medium">
                                   {row.customer.name}
-                                  {row.customer.commitments && Object.values(row.customer.commitments).some((item) => item.status === 'pending') ? (
+                                  {row.customer.commitments && Object.values(row.customer.commitments).some((item) => item.status === 'pending' && item.approvalStage !== 'rejected') ? (
                                     <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
                                       Commitment
                                     </span>
@@ -1090,10 +1196,11 @@ export default function CreditSheetPage() {
                                 </TableCell>
                                 <TableCell>{row.customer.phone}</TableCell>
                                 {showSubZoneColumn ? <TableCell>{row.customer.thana || '-'}</TableCell> : null}
-                                <TableCell className="text-right">{formatCurrency(row.purchaseTotal, currency)}</TableCell>
-                                <TableCell className="text-right">{formatCurrency(row.paid, currency)}</TableCell>
+                                <TableCell className="text-right">{row.quantity.toLocaleString('en-BD')}</TableCell>
+                                <TableCell className="text-right">{formatAmount(row.purchaseTotal)}</TableCell>
+                                <TableCell className="text-right">{formatAmount(row.paid)}</TableCell>
                                 <TableCell className="text-right font-medium text-amber-700 dark:text-amber-400">
-                                  {formatCurrency(row.customer.due, currency)}
+                                  {formatAmount(row.customer.due)}
                                 </TableCell>
                                 <TableCell className="text-right">
                                   <Button
@@ -1113,10 +1220,11 @@ export default function CreditSheetPage() {
                           <TableFooter>
                             <TableRow className="font-semibold">
                               <TableCell colSpan={3 + extraColumnCount}>{group.name} total</TableCell>
-                              <TableCell className="text-right">{formatCurrency(group.totals.purchase, currency)}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(group.totals.paid, currency)}</TableCell>
+                              <TableCell className="text-right">{group.totals.quantity.toLocaleString('en-BD')}</TableCell>
+                              <TableCell className="text-right">{formatAmount(group.totals.purchase)}</TableCell>
+                              <TableCell className="text-right">{formatAmount(group.totals.paid)}</TableCell>
                               <TableCell className="text-right text-amber-700 dark:text-amber-400">
-                                {formatCurrency(group.totals.due, currency)}
+                                {formatAmount(group.totals.due)}
                               </TableCell>
                               <TableCell />
                             </TableRow>
@@ -1134,6 +1242,7 @@ export default function CreditSheetPage() {
                           <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
                             <TableHead>{groupLabel}</TableHead>
                             <TableHead className="text-right">Dealers</TableHead>
+                            <TableHead className="text-right">Quantity</TableHead>
                             <TableHead className="text-right">Total purchase</TableHead>
                             <TableHead className="text-right">Paid</TableHead>
                             <TableHead className="text-right">Due (credit)</TableHead>
@@ -1144,10 +1253,11 @@ export default function CreditSheetPage() {
                             <TableRow key={group.name}>
                               <TableCell className="font-medium">{group.name}</TableCell>
                               <TableCell className="text-right">{group.totals.dealers}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(group.totals.purchase, currency)}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(group.totals.paid, currency)}</TableCell>
+                              <TableCell className="text-right">{group.totals.quantity.toLocaleString('en-BD')}</TableCell>
+                              <TableCell className="text-right">{formatAmount(group.totals.purchase)}</TableCell>
+                              <TableCell className="text-right">{formatAmount(group.totals.paid)}</TableCell>
                               <TableCell className="text-right text-amber-700 dark:text-amber-400">
-                                {formatCurrency(group.totals.due, currency)}
+                                {formatAmount(group.totals.due)}
                               </TableCell>
                             </TableRow>
                           ))}
@@ -1156,10 +1266,11 @@ export default function CreditSheetPage() {
                           <TableRow className="font-semibold">
                             <TableCell>Grand total</TableCell>
                             <TableCell className="text-right">{metrics.dealers}</TableCell>
-                            <TableCell className="text-right">{formatCurrency(metrics.purchase, currency)}</TableCell>
-                            <TableCell className="text-right">{formatCurrency(metrics.paid, currency)}</TableCell>
+                            <TableCell className="text-right">{metrics.quantity.toLocaleString('en-BD')}</TableCell>
+                            <TableCell className="text-right">{formatAmount(metrics.purchase)}</TableCell>
+                            <TableCell className="text-right">{formatAmount(metrics.paid)}</TableCell>
                             <TableCell className="text-right text-amber-700 dark:text-amber-400">
-                              {formatCurrency(metrics.due, currency)}
+                              {formatAmount(metrics.due)}
                             </TableCell>
                           </TableRow>
                         </TableFooter>

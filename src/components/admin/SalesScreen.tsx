@@ -33,9 +33,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
+import { resolveCustomerZone } from '@/lib/erp/zones'
 import type { OrderRecord } from '@/lib/erp/types'
 import { cn } from '@/lib/utils'
 import { exportXlsx, formatCurrency, formatDate, getReadableOrderState, toArray } from '@/lib/erp/utils'
+import { brandedDocument, downloadDocumentPdf } from './credit-sheet/printSheet'
 
 function defaultPaymentDueDate() {
   const date = new Date()
@@ -61,6 +63,12 @@ type SalesDocument = Pick<
 > & { subtotal?: number; discount?: number }
 
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid'
+type SaleSection = 'order' | 'payment'
+
+const SALE_SECTION_OPTIONS: { value: SaleSection; label: string }[] = [
+  { value: 'order', label: 'Order details' },
+  { value: 'payment', label: 'Payment' },
+]
 
 function escapeHtml(value: string) {
   return value
@@ -97,7 +105,9 @@ export function SalesScreen() {
 
   const [orderForm, setOrderForm] = useState(emptyOrder)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [newSaleOpen, setNewSaleOpen] = useState(false)
+  const [saleSection, setSaleSection] = useState<SaleSection>('order')
   const [quickCreateCustomerOpen, setQuickCreateCustomerOpen] = useState(false)
   const [quickCreateProductOpen, setQuickCreateProductOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
@@ -215,12 +225,17 @@ export function SalesScreen() {
     }
   }
 
-  function buildSalesDocumentHtml(type: 'Quotation' | 'Invoice', document: SalesDocument) {
+  function buildSalesDocumentHtml(type: 'Quotation' | 'Invoice', document: SalesDocument, autoPrint = true) {
     const customer = customers.find((entry) => entry.id === document.customerId)
     const issueDate = formatDate(document.createdAt)
     const deliveryDate = formatDate(document.deliveryDate)
     const currency = data?.settings.currency
     const invoiceNumber = (document.billNumber || document.id).replace(/\D/g, '').slice(-8).padStart(8, '0')
+    const companyName = data?.settings.companyName ?? 'Power International BD'
+    const iconUrl = `${window.location.origin}/power-icon.png`
+    const zone = customer ? resolveCustomerZone(customer, toArray(data?.zones)) : null
+    const zoneName = zone ? zone.name.replace(/\s*zone\s*$/i, '') : ''
+    const zoneLabel = zoneName ? `${zoneName} Zone_Power Int.` : 'Power Int.'
 
     const rows = document.items
       .map((item, index) => {
@@ -246,11 +261,16 @@ export function SalesScreen() {
           <title>${type} ${escapeHtml(document.id)}</title>
           <style>
             * { box-sizing: border-box; }
-            @page { margin: 0; }
+            @page { size: A4; margin: 0; }
             body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; }
-            .header { align-items: flex-start; border-bottom: 2px solid #111827; display: flex; justify-content: space-between; padding-bottom: 18px; }
-            .brand h1 { font-size: 24px; margin: 0; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .zone-label { color: #111827; font-size: 13px; margin: 0 0 10px; }
+            .header { align-items: center; border-bottom: 2px solid #111827; display: flex; justify-content: space-between; padding-bottom: 16px; }
+            .brand { align-items: center; display: flex; gap: 14px; }
+            .brand img { height: 58px; object-fit: contain; width: 58px; }
+            .brand h1 { color: #111827; font-family: 'Times New Roman', Times, serif; font-size: 30px; font-weight: 400; letter-spacing: .01em; margin: 0; text-transform: uppercase; }
             .brand p, .meta p, .party p { color: #4b5563; font-size: 13px; margin: 5px 0 0; }
+            .brand .contact { font-size: 11px; margin-top: 4px; }
             .title { font-size: 28px; font-weight: 700; margin: 0; text-align: right; text-transform: uppercase; }
             .section { margin-top: 26px; }
             .party-grid { display: grid; gap: 20px; grid-template-columns: 1fr 1fr; }
@@ -270,12 +290,14 @@ export function SalesScreen() {
           </style>
         </head>
         <body>
+          <p class="zone-label">${escapeHtml(zoneLabel)}</p>
           <div class="header">
             <div class="brand">
-              <h1>${escapeHtml(data?.settings.companyName ?? 'ERP')}</h1>
-              <p>Sales & Billing</p>
-              <p>92, Wise Market, Nawabpur Road, Dhaka-1100</p>
-              <p>+88 01897914480-83</p>
+              <img src="${iconUrl}" alt="" />
+              <div>
+                <h1>${escapeHtml(companyName)}</h1>
+                <p class="contact">92, Wise Market, Nawabpur Road, Dhaka-1100 · +88 01897914480-83</p>
+              </div>
             </div>
             <div class="meta">
               <p class="title">${type}</p>
@@ -322,12 +344,16 @@ export function SalesScreen() {
           </div>
 
           <p class="print-date">${issueDate}</p>
-          <script>
+          ${
+            autoPrint
+              ? `<script>
             window.addEventListener('load', () => {
               window.focus();
               window.print();
             });
-          </script>
+          </script>`
+              : ''
+          }
         </body>
       </html>
     `
@@ -344,6 +370,15 @@ export function SalesScreen() {
     popup.document.open()
     popup.document.write(buildSalesDocumentHtml(type, document))
     popup.document.close()
+  }
+
+  async function downloadInvoicePdf(order: OrderRecord) {
+    setFeedback(null)
+    try {
+      await downloadDocumentPdf(buildSalesDocumentHtml('Invoice', order, false), `invoice-${order.billNumber || order.id}.pdf`)
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to create the invoice PDF.')
+    }
   }
 
   function handleQuotationPrint() {
@@ -416,6 +451,109 @@ export function SalesScreen() {
     )
   }
 
+  function buildSalesReportHtml() {
+    const currency = data?.settings.currency
+    const money = (value: number) => formatCurrency(value, currency)
+    const totals = filteredOrders.reduce(
+      (sum, order) => ({ total: sum.total + order.total, paid: sum.paid + order.paid, due: sum.due + order.due }),
+      { total: 0, paid: 0, due: 0 }
+    )
+    const units = filteredOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)
+    const salesPersonName = salesPeople.find((person) => person.id === salesPersonFilter)?.name
+    const filters = [
+      query.trim() ? `Search: "${query.trim()}"` : '',
+      statusFilter !== 'all' ? `Status: ${statusFilter}` : '',
+      paymentFilter !== 'all' ? `Payment: ${paymentFilter}` : '',
+      salesPersonName ? `Sales person: ${salesPersonName}` : '',
+      dueOnly ? 'Due only' : '',
+    ].filter(Boolean)
+    const period = fromDate || toDate ? `${fromDate ? formatDate(fromDate) : 'Start'} – ${toDate ? formatDate(toDate) : 'Today'}` : 'All dates'
+
+    const rows = filteredOrders
+      .map((order, index) => {
+        const items = order.items
+          .map((item) => `${escapeHtml(item.productName)} × ${item.quantity} @ ${money(item.unitPrice)}`)
+          .join('<br />')
+
+        return `
+          <tr>
+            <td class="numeric">${index + 1}</td>
+            <td>${escapeHtml(order.billNumber || order.id)}<br /><span style="color:#6b7280">${formatDate(order.createdAt)}</span></td>
+            <td>${escapeHtml(order.customerName)}</td>
+            <td>${escapeHtml(order.salesPersonName)}</td>
+            <td>${items}</td>
+            <td class="numeric">${money(order.total)}</td>
+            <td class="numeric">${money(order.paid)}</td>
+            <td class="numeric">${money(order.due)}</td>
+            <td style="text-transform:capitalize">${escapeHtml(getReadableOrderState(order))}<br /><span style="color:#6b7280">${formatDate(order.deliveryDate)}</span></td>
+          </tr>
+        `
+      })
+      .join('')
+
+    return brandedDocument({
+      title: 'Sales & Billing Report',
+      heading: 'Sales & Billing Report',
+      autoPrint: false,
+      body: `
+        <table class="info">
+          <tr>
+            <td class="label">Period</td><td>${escapeHtml(period)}</td>
+            <td class="label">Filters</td><td>${escapeHtml(filters.join(' · ') || 'None')}</td>
+          </tr>
+          <tr>
+            <td class="label">Orders</td><td>${filteredOrders.length} (${units} units)</td>
+            <td class="label">Address</td><td>92, Wise Market, Nawabpur Road, Dhaka-1100 · +88 01897914480-83</td>
+          </tr>
+        </table>
+        <table class="info">
+          <tr>
+            <td class="label">Total sales</td><td class="numeric">${money(totals.total)}</td>
+            <td class="label">Collected</td><td class="numeric">${money(totals.paid)}</td>
+            <td class="label">Due</td><td class="numeric">${money(totals.due)}</td>
+          </tr>
+        </table>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Bill / Date</th>
+              <th>Customer</th>
+              <th>Sales person</th>
+              <th>Items</th>
+              <th class="numeric">Total</th>
+              <th class="numeric">Paid</th>
+              <th class="numeric">Due</th>
+              <th>Status / Delivery</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="9" style="text-align:center">No sales orders match the current filters.</td></tr>'}
+            <tr class="grand">
+              <td colspan="5">Grand total</td>
+              <td class="numeric">${money(totals.total)}</td>
+              <td class="numeric">${money(totals.paid)}</td>
+              <td class="numeric">${money(totals.due)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      `,
+    })
+  }
+
+  async function handleExportPdf() {
+    setFeedback(null)
+    setIsExportingPdf(true)
+    try {
+      await downloadDocumentPdf(buildSalesReportHtml(), `sales-report-${new Date().toISOString().slice(0, 10)}.pdf`)
+    } catch (reason) {
+      setFeedback(reason instanceof Error ? reason.message : 'Unable to create the PDF.')
+    } finally {
+      setIsExportingPdf(false)
+    }
+  }
+
   return (
     <AdminShell active="Sales & Billing">
       <div className="space-y-6">
@@ -467,8 +605,15 @@ export function SalesScreen() {
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 Export data
               </Button>
+              <Button variant="outline" className="rounded-xl" onClick={() => void handleExportPdf()} disabled={isExportingPdf}>
+                <FileDown className="mr-2 h-4 w-4" />
+                {isExportingPdf ? 'Preparing PDF...' : 'Full PDF'}
+              </Button>
               {hasPermission('sales.edit') ? (
-                <Button className="rounded-xl" onClick={() => setNewSaleOpen(true)}>
+                <Button className="rounded-xl" onClick={() => {
+                  setSaleSection('order')
+                  setNewSaleOpen(true)
+                }}>
                   <Plus className="mr-2 h-4 w-4" />
                   New sale
                 </Button>
@@ -602,7 +747,7 @@ export function SalesScreen() {
                           <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => printSalesDocument('Invoice', order)} aria-label={`Print invoice ${order.id}`}>
                             <Printer className="h-4 w-4" />
                           </Button>
-                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => printSalesDocument('Invoice', order)} aria-label={`Download invoice ${order.id} as PDF`}>
+                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => void downloadInvoicePdf(order)} aria-label={`Download invoice ${order.id} as PDF`}>
                             <FileDown className="h-4 w-4" />
                           </Button>
                         </div>
@@ -631,8 +776,38 @@ export function SalesScreen() {
             <DialogTitle>Create new sale</DialogTitle>
             <DialogDescription>Save a sales order from the live inventory set, or print a quotation first.</DialogDescription>
           </DialogHeader>
-          <form className="space-y-5" onSubmit={handleOrderSubmit}>
-            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+          <form
+            className="space-y-5"
+            onSubmit={handleOrderSubmit}
+            onInvalidCapture={(event) => {
+              // Jump to the hidden section holding the invalid field so the browser can show its message.
+              const field = event.target as HTMLInputElement
+              const section = field.closest<HTMLElement>('[data-sale-section]')?.dataset.saleSection as SaleSection | undefined
+              if (section && section !== saleSection) {
+                setSaleSection(section)
+                requestAnimationFrame(() => field.reportValidity())
+              }
+            }}
+          >
+            <div className="inline-flex rounded-lg border border-border/70 p-0.5" role="tablist" aria-label="New sale sections">
+              {SALE_SECTION_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={saleSection === option.value}
+                  onClick={() => setSaleSection(option.value)}
+                  className={cn(
+                    'rounded-md px-3 py-1 text-sm font-medium transition-colors',
+                    saleSection === option.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            <div data-sale-section="order" className={cn('space-y-4 rounded-2xl border border-border/70 p-4', saleSection !== 'order' && 'hidden')}>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Order details</p>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">
@@ -724,7 +899,7 @@ export function SalesScreen() {
               </div>
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+            <div data-sale-section="payment" className={cn('space-y-4 rounded-2xl border border-border/70 p-4', saleSection !== 'payment' && 'hidden')}>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment</p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -796,10 +971,16 @@ export function SalesScreen() {
                 <Printer className="mr-2 h-4 w-4" />
                 Print quotation
               </Button>
-              <Button type="submit" className="rounded-xl">
-                <ClipboardPlus className="mr-2 h-4 w-4" />
-                Save order
-              </Button>
+              {saleSection === 'order' ? (
+                <Button type="button" className="rounded-xl" onClick={() => setSaleSection('payment')}>
+                  Next: Payment
+                </Button>
+              ) : (
+                <Button type="submit" className="rounded-xl">
+                  <ClipboardPlus className="mr-2 h-4 w-4" />
+                  Save order
+                </Button>
+              )}
             </div>
           </form>
         </DialogContent>

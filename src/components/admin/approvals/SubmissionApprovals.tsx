@@ -11,9 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositStatus, EditableSubmissionKind, ERPData, SubmissionEdit, SubmissionPatch } from '@/lib/erp/types'
-import { formatCurrency, formatDate, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
+import { approvalStage, canActAtStage, formatCurrency, formatDate, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
 
-import { EditHistory, EmptyState, FeedbackBanner, NotifyButtons, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
+import { ApprovalStageNote, EditHistory, EmptyState, FeedbackBanner, NotifyButtons, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
 
 type SubmissionRow = {
   id: string
@@ -32,6 +32,9 @@ type SubmissionRow = {
   documentUrl?: string
   /** Fields the edit dialog starts from. */
   editable: SubmissionPatch
+  /** Deposits go to the zone's Authorizer, then the Chairman. */
+  authorizedAt?: string
+  authorizedByName?: string
   /** Actual TA amounts come from the trips, so the amount is not editable. */
   amountLocked?: boolean
   notify?: { phone: string; message: string }
@@ -70,6 +73,8 @@ function buildRows(kind: EditableSubmissionKind, data: ERPData): SubmissionRow[]
       reviewedByName: deposit.reviewedByName,
       edits: deposit.edits,
       editable: { amount: deposit.amount, date: deposit.date, method: deposit.method, note: deposit.note },
+      authorizedAt: deposit.authorizedAt,
+      authorizedByName: deposit.authorizedByName,
       notify: {
         phone: data.customers[deposit.customerId]?.phone ?? '',
         message: `Dear ${deposit.customerName}, ${company} has received your payment of ${deposit.amount.toLocaleString()} BDT (${deposit.method}) on ${formatDate(deposit.date)}. Thank you.`,
@@ -143,7 +148,7 @@ function buildRows(kind: EditableSubmissionKind, data: ERPData): SubmissionRow[]
 }
 
 export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissionKind; isAdmin: boolean }) {
-  const { data, reviewDeposit, reviewSupplierPayment, reviewExpense } = useERP()
+  const { data, currentUser, reviewDeposit, reviewSupplierPayment, reviewExpense } = useERP()
   const [feedback, setFeedback] = useState<Feedback>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [editing, setEditing] = useState<SubmissionRow | null>(null)
@@ -164,11 +169,14 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
     setBusyId(row.id)
     setFeedback(null)
     try {
+      const authorizing = kind === 'deposits' && approvalStage(row) === 'authorizer'
       const reviewFn = kind === 'deposits' ? reviewDeposit : kind === 'supplierPayments' ? reviewSupplierPayment : reviewExpense
       await reviewFn(row.id, decision)
       setFeedback({
         tone: 'success',
-        text: `${KIND_COPY[kind].noun[0].toUpperCase()}${KIND_COPY[kind].noun.slice(1)} of ${formatCurrency(row.amount)} (${row.party}) ${decision === 'approve' ? 'approved' : 'rejected'} and added to the daily audit.`,
+        text: authorizing && decision === 'approve'
+          ? `Deposit of ${formatCurrency(row.amount)} (${row.party}) authorized and sent to the Chairman for final approval.`
+          : `${KIND_COPY[kind].noun[0].toUpperCase()}${KIND_COPY[kind].noun.slice(1)} of ${formatCurrency(row.amount)} (${row.party}) ${decision === 'approve' ? 'approved' : 'rejected'} and added to the daily audit.`,
       })
     } catch (error) {
       setFeedback({ tone: 'error', text: error instanceof Error ? error.message : 'Could not review it.' })
@@ -191,7 +199,10 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
               </span>
             </div>
           ) : null}
-          {groupRows.map((row) => (
+          {groupRows.map((row) => {
+            const stage = kind === 'deposits' ? approvalStage(row) : null
+            const canReview = kind === 'deposits' ? canActAtStage(currentUser, stage) : isAdmin
+            return (
             <Card key={row.id}>
               <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-1.5">
@@ -216,27 +227,35 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
                     </a>
                   ) : null}
                   <SubmittedBy name={row.submittedByName} role={row.submittedByRole} at={row.submittedAt} />
+                  {kind === 'deposits' ? <ApprovalStageNote record={row} /> : null}
                   <EditHistory edits={row.edits} />
                 </div>
-                {isAdmin ? (
+                {isAdmin || canReview ? (
                   <div className="flex shrink-0 flex-wrap gap-2">
-                    <Button size="sm" variant="outline" className="gap-1.5" disabled={busyId === row.id} onClick={() => setEditing(row)}>
-                      <Pencil className="h-4 w-4" />
-                      Edit
-                    </Button>
-                    <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busyId === row.id} onClick={() => void review(row, 'reject')}>
-                      <X className="h-4 w-4" />
-                      Reject
-                    </Button>
-                    <Button size="sm" className="gap-1.5" disabled={busyId === row.id} onClick={() => void review(row, 'approve')}>
-                      <Check className="h-4 w-4" />
-                      Approve
-                    </Button>
+                    {isAdmin ? (
+                      <Button size="sm" variant="outline" className="gap-1.5" disabled={busyId === row.id} onClick={() => setEditing(row)}>
+                        <Pencil className="h-4 w-4" />
+                        Edit
+                      </Button>
+                    ) : null}
+                    {canReview ? (
+                      <>
+                        <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busyId === row.id} onClick={() => void review(row, 'reject')}>
+                          <X className="h-4 w-4" />
+                          Reject
+                        </Button>
+                        <Button size="sm" className="gap-1.5" disabled={busyId === row.id} onClick={() => void review(row, 'approve')}>
+                          <Check className="h-4 w-4" />
+                          {stage === 'authorizer' ? 'Authorize' : stage === 'chairman' ? 'Final approve' : 'Approve'}
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </CardContent>
             </Card>
-          ))}
+            )
+          })}
         </div>
       ))}
 

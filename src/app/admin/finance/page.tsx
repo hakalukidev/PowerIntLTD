@@ -247,7 +247,7 @@ export default function FinancePage() {
           <title>Invoice ${escapeHtml(order.id)}</title>
           <style>
             * { box-sizing: border-box; }
-            @page { margin: 0; }
+            @page { size: A4; margin: 0; }
             body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; }
             .header { border-bottom: 2px solid #111827; display: flex; justify-content: space-between; padding-bottom: 18px; }
             h1 { font-size: 24px; margin: 0; }

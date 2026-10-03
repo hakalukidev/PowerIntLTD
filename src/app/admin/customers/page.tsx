@@ -1,9 +1,10 @@
 "use client"
 
-import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
+import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { CommitmentApprovalBadge, CommitmentReviewActions } from '@/components/admin/credit-sheet/CommitmentApproval'
 import { downloadDocumentJpg, downloadDocumentPdf } from '@/components/admin/credit-sheet/printSheet'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -18,15 +19,15 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
-import type { CustomerCommitment, CustomerInput, CustomerRecord } from '@/lib/erp/types'
+import type { CustomerCommitment, CustomerInput, CustomerRecord, DocumentPhoto } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
+import { groupRemindersByDate, localToday, pendingCommitmentReminders } from '@/lib/erp/commitmentReminders'
 import { customerZoneId, subZoneKey, subZoneKeyFor, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME, zoneSubZones } from '@/lib/erp/zones'
-import { escapeHtml, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatCurrency, formatDate, isCommitmentApproved, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
 
 const CUSTOMER_DOCUMENT_FOLDER = 'customers'
 
@@ -64,21 +65,30 @@ type CustomerFormState = {
   signaturePublicId: string
 }
 
+const DOCUMENT_KEYS: DocumentKey[] = ['signature', 'dealerPhoto', 'bankDocument', 'nidCopy', 'tradeLicenseCopy', 'passportPhoto']
+
+/** A photo already saved (`url` + `publicId`) or picked and waiting to upload (`file`, with a local preview `url`). */
+type DocumentPhotoItem = DocumentPhoto & { file: File | null }
+
 type DocumentUploadState = {
-  file: File | null
-  preview: string | null
-  pendingDeleteId: string | null
+  photos: DocumentPhotoItem[]
+  /** Saved photos taken off the form, deleted from storage once the dealer is saved. */
+  removedIds: string[]
 }
 
 function emptyDocumentUploads(): Record<DocumentKey, DocumentUploadState> {
-  return {
-    nidCopy: { file: null, preview: null, pendingDeleteId: null },
-    tradeLicenseCopy: { file: null, preview: null, pendingDeleteId: null },
-    passportPhoto: { file: null, preview: null, pendingDeleteId: null },
-    bankDocument: { file: null, preview: null, pendingDeleteId: null },
-    dealerPhoto: { file: null, preview: null, pendingDeleteId: null },
-    signature: { file: null, preview: null, pendingDeleteId: null },
-  }
+  return Object.fromEntries(DOCUMENT_KEYS.map((key) => [key, { photos: [], removedIds: [] }])) as Record<DocumentKey, DocumentUploadState>
+}
+
+/** The photos a saved dealer has for each document: the main one first, then the extras. */
+function documentUploadsFromCustomer(customer: CustomerRecord): Record<DocumentKey, DocumentUploadState> {
+  return Object.fromEntries(
+    DOCUMENT_KEYS.map((key) => {
+      const main: DocumentPhoto[] = customer[`${key}Url`] ? [{ url: customer[`${key}Url`], publicId: customer[`${key}PublicId`] }] : []
+      const photos = [...main, ...(customer.extraPhotos?.[key] ?? [])].map((photo) => ({ ...photo, file: null }))
+      return [key, { photos, removedIds: [] }]
+    })
+  ) as Record<DocumentKey, DocumentUploadState>
 }
 
 const documentFieldLabels: Record<DocumentKey, { title: string; helper: string }> = {
@@ -180,8 +190,12 @@ function withFallbackOption(options: string[], current: string): string[] {
 }
 
 export default function CustomersPage() {
-  const { data, saveCustomer, deleteCustomer, saveCustomerCommitment, deleteCustomerCommitment, changesNeedApproval, hasPermission } = useERP()
+  const { data, currentUser, saveCustomer, deleteCustomer, saveCustomerCommitment, deleteCustomerCommitment, changesNeedApproval, hasPermission } =
+    useERP()
   const canEdit = hasPermission('customers.edit')
+  // A zone in charge cannot change client data, but may add a commitment; it then goes to the Authorizer and the Chairman.
+  const zoneInCharge = useMemo(() => isZoneInCharge(currentUser, toArray(data?.zones)), [currentUser, data?.zones])
+  const canAddCommitment = canEdit || zoneInCharge
   const canDelete = hasPermission('customers.delete')
   const currency = data?.settings.currency
   // Zone managers and zone-limited roles only see the dealers of their zones.
@@ -189,6 +203,11 @@ export default function CustomersPage() {
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
   const [query, setQuery] = useState('')
   const [reminderOnly, setReminderOnly] = useState(false)
+  // The notification bell links here with ?reminders=1 to open the date-wise commitment reminders.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('reminders') === '1') setReminderOnly(true)
+  }, [])
+  const commitmentReminderGroups = useMemo(() => groupRemindersByDate(pendingCommitmentReminders(customers)), [customers])
   const [filterZone, setFilterZone] = useState('all')
   const [filterSubZone, setFilterSubZone] = useState('all')
   const [priceMin, setPriceMin] = useState('')
@@ -208,7 +227,6 @@ export default function CustomersPage() {
   const [documentUploads, setDocumentUploads] = useState<Record<DocumentKey, DocumentUploadState>>(emptyDocumentUploads)
   const [isSaving, setIsSaving] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
-  const signaturePadRef = useRef<SignaturePadHandle>(null)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [isExportingImage, setIsExportingImage] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -265,7 +283,10 @@ export default function CustomersPage() {
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
-      const matchesReminder = !reminderOnly || (customer.reminderCustomer && !hasOrders)
+      const matchesReminder =
+        !reminderOnly ||
+        (customer.reminderCustomer && !hasOrders) ||
+        Object.values(customer.commitments ?? {}).some((item) => item.status === 'pending' && isCommitmentApproved(item))
       const matchesZone = filterZone === 'all' || customerZoneId(customer, zones) === filterZone
       const matchesSubZone = filterSubZone === 'all' || subZoneKey(customer, zones) === filterSubZone
       const matchesMinPrice = minPrice === null || Number.isNaN(minPrice) || purchaseTotal >= minPrice
@@ -313,7 +334,6 @@ export default function CustomersPage() {
     setDocumentUploads(emptyDocumentUploads())
     setFeedback(null)
     setPdfError(null)
-    signaturePadRef.current?.clear()
     setDialogOpen(true)
   }
 
@@ -323,38 +343,43 @@ export default function CustomersPage() {
     // Show the zone the dealer is actually in, even when it came from their sub-zone rather than being picked.
     const resolvedZoneId = customerZoneId(customer, zones)
     setCustomerForm(!form.zoneId && resolvedZoneId !== UNASSIGNED_ZONE_ID ? { ...form, zoneId: resolvedZoneId } : form)
-    setDocumentUploads(emptyDocumentUploads())
+    setDocumentUploads(documentUploadsFromCustomer(customer))
     setFeedback(null)
     setPdfError(null)
-    signaturePadRef.current?.clear()
     setDialogOpen(true)
   }
 
   function handleDocumentFileChange(key: DocumentKey, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null
-    if (!file) return
+    const files = Array.from(event.target.files ?? [])
+    // Lets the same file be picked again after it was removed.
+    event.target.value = ''
+    if (!files.length) return
 
-    setDocumentUploads((current) => ({
-      ...current,
-      [key]: {
-        file,
-        preview: URL.createObjectURL(file),
-        pendingDeleteId: current[key].pendingDeleteId || customerForm[`${key}PublicId`] || null,
-      },
-    }))
-    setCustomerForm((current) => ({ ...current, [`${key}Url`]: '', [`${key}PublicId`]: '' }))
+    const added = files.map((file) => ({ url: URL.createObjectURL(file), publicId: '', file }))
+    setDocumentUploads((current) => {
+      const upload = current[key]
+      // The signature holds one image, so a new one replaces it.
+      if (key === 'signature') {
+        const replacedIds = upload.photos.map((photo) => photo.publicId).filter(Boolean)
+        return { ...current, [key]: { photos: added.slice(0, 1), removedIds: [...upload.removedIds, ...replacedIds] } }
+      }
+      return { ...current, [key]: { ...upload, photos: [...upload.photos, ...added] } }
+    })
   }
 
-  function handleRemoveDocument(key: DocumentKey) {
-    setDocumentUploads((current) => ({
-      ...current,
-      [key]: {
-        file: null,
-        preview: null,
-        pendingDeleteId: current[key].pendingDeleteId || customerForm[`${key}PublicId`] || null,
-      },
-    }))
-    setCustomerForm((current) => ({ ...current, [`${key}Url`]: '', [`${key}PublicId`]: '' }))
+  function handleRemoveDocument(key: DocumentKey, index: number) {
+    setDocumentUploads((current) => {
+      const upload = current[key]
+      const removed = upload.photos[index]
+      if (!removed) return current
+      return {
+        ...current,
+        [key]: {
+          photos: upload.photos.filter((_, photoIndex) => photoIndex !== index),
+          removedIds: removed.publicId ? [...upload.removedIds, removed.publicId] : upload.removedIds,
+        },
+      }
+    })
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -367,20 +392,26 @@ export default function CustomersPage() {
     setIsSaving(true)
 
     try {
-      const documentKeys = Object.keys(documentUploads) as DocumentKey[]
       const uploadedFields: Partial<CustomerFormState> = {}
+      const extraPhotos: Record<string, DocumentPhoto[]> = {}
       const deletions: string[] = []
 
-      for (const key of documentKeys) {
+      for (const key of DOCUMENT_KEYS) {
         const upload = documentUploads[key]
-        if (upload.file) {
-          const result = await uploadImageToCloudinary(upload.file, CUSTOMER_DOCUMENT_FOLDER)
-          uploadedFields[`${key}Url`] = result.imageUrl
-          uploadedFields[`${key}PublicId`] = result.imagePublicId
-          if (upload.pendingDeleteId) deletions.push(upload.pendingDeleteId)
-        } else if (upload.pendingDeleteId) {
-          deletions.push(upload.pendingDeleteId)
+        const photos: DocumentPhoto[] = []
+        for (const photo of upload.photos) {
+          if (photo.file) {
+            const result = await uploadImageToCloudinary(photo.file, CUSTOMER_DOCUMENT_FOLDER)
+            photos.push({ url: result.imageUrl, publicId: result.imagePublicId })
+          } else {
+            photos.push({ url: photo.url, publicId: photo.publicId })
+          }
         }
+        // The first photo stays in the document's own field; the rest are extras.
+        uploadedFields[`${key}Url`] = photos[0]?.url ?? ''
+        uploadedFields[`${key}PublicId`] = photos[0]?.publicId ?? ''
+        if (photos.length > 1) extraPhotos[key] = photos.slice(1)
+        deletions.push(...upload.removedIds)
       }
 
       const finalForm = { ...customerForm, ...uploadedFields }
@@ -414,6 +445,7 @@ export default function CustomersPage() {
         dealerPhotoPublicId: finalForm.dealerPhotoPublicId,
         signatureUrl: finalForm.signatureUrl,
         signaturePublicId: finalForm.signaturePublicId,
+        extraPhotos,
       }
 
       await saveCustomer(input, editingCustomer?.id)
@@ -456,27 +488,37 @@ export default function CustomersPage() {
 
   function renderDocumentUpload(key: DocumentKey) {
     const { title, helper } = documentFieldLabels[key]
-    const upload = documentUploads[key]
-    const previewSrc = upload.preview ?? customerForm[`${key}Url`]
+    const { photos } = documentUploads[key]
+    const isSignature = key === 'signature'
 
     return (
       <div key={key} className="space-y-2">
         <p className="text-sm font-medium text-foreground">{title}</p>
-        {previewSrc ? (
-          <div className="flex items-center gap-3">
-            <img
-              src={previewSrc}
-              alt={title}
-              className={`h-20 rounded-xl border border-border/70 ${key === 'signature' ? 'w-48 bg-white object-contain' : 'w-20 object-cover'}`}
-            />
-            <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => handleRemoveDocument(key)}>
-              Remove
-            </Button>
+        {photos.length ? (
+          <div className="flex flex-wrap gap-2">
+            {photos.map((photo, index) => (
+              <div key={photo.url} className="relative">
+                <img
+                  src={photo.url}
+                  alt={`${title} ${index + 1}`}
+                  className={`h-20 rounded-xl border border-border/70 ${isSignature ? 'w-48 bg-white object-contain' : 'w-20 object-cover'}`}
+                />
+                <button
+                  type="button"
+                  aria-label={`Remove ${title} ${index + 1}`}
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-destructive"
+                  onClick={() => handleRemoveDocument(key, index)}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">{helper}</p>
         )}
-        <Input type="file" accept="image/*" onChange={(event) => handleDocumentFileChange(key, event)} />
+        <Input type="file" accept="image/*" multiple={!isSignature} onChange={(event) => handleDocumentFileChange(key, event)} />
+        {!isSignature && photos.length ? <p className="text-xs text-muted-foreground">{photos.length} photo{photos.length > 1 ? 's' : ''} · choose more to add</p> : null}
       </div>
     )
   }
@@ -510,6 +552,91 @@ export default function CustomersPage() {
     })
   }
 
+  /** The pending commitments of every visible dealer, date-wise, so none is missed on its day. */
+  function renderCommitmentReminders() {
+    const today = localToday()
+    const whenLabel = { overdue: 'Overdue', today: 'Today', upcoming: 'Upcoming', no_date: 'No due date' } as const
+    const whenClass = {
+      overdue: 'bg-red-500/15 text-red-700 hover:bg-red-500/15 dark:text-red-300',
+      today: 'bg-amber-500/15 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300',
+      upcoming: 'bg-sky-500/15 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300',
+      no_date: 'bg-muted text-muted-foreground hover:bg-muted',
+    } as const
+
+    return (
+      <div className="mb-4 space-y-3 rounded-2xl border border-border/70 p-3 sm:p-4">
+        <div>
+          <p className="flex items-center gap-2 text-sm font-semibold">
+            <BellRing className="h-4 w-4" />
+            Commitment reminders
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">Pending commitments by due date, today {formatDate(today)}.</p>
+        </div>
+        {commitmentError ? <p className="text-sm text-destructive">{commitmentError}</p> : null}
+        {commitmentReminderGroups.length ? (
+          commitmentReminderGroups.map((group) => (
+            <div key={group.date || 'no-date'} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.date ? formatDate(group.date) : 'No due date'}
+                </p>
+                <Badge className={whenClass[group.when]}>{whenLabel[group.when]}</Badge>
+              </div>
+              {group.items.map(({ customer, commitment }) => (
+                <div key={commitment.id} className="flex items-start gap-3 rounded-xl border border-border/70 p-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-sm font-medium">
+                      {customer.name}{' '}
+                      <span className="font-mono text-xs font-normal text-muted-foreground">{partyCode(customer)}</span>
+                    </p>
+                    <p className="whitespace-pre-wrap break-words text-sm">{commitment.note}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {customer.phone ? `${customer.phone} · ` : ''}Added {formatDate(commitment.createdAt)}
+                      {commitment.createdBy ? ` by ${commitment.createdBy}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    {canEdit ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        disabled={commitmentBusy}
+                        onClick={() =>
+                          void runCommitmentAction(() =>
+                            saveCustomerCommitment(customer.id, { note: commitment.note, status: 'fulfilled' }, commitment.id)
+                          )
+                        }
+                        aria-label="Mark as fulfilled"
+                        title="Mark as fulfilled"
+                      >
+                        <Check className="h-4 w-4" />
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => openDetailsDialog(customer.id, true)}
+                      aria-label={`View ${customer.name}'s commitments`}
+                      title="View commitments"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-muted-foreground">No pending commitments.</p>
+        )}
+      </div>
+    )
+  }
+
   function renderCommitments(customer: CustomerRecord) {
     const commitments = sortedCommitments(customer)
     const today = new Date().toISOString().slice(0, 10)
@@ -526,8 +653,9 @@ export default function CustomersPage() {
         {commitments.length ? (
           <div className="space-y-2">
             {commitments.map((commitment) => {
+              const approved = isCommitmentApproved(commitment)
               const fulfilled = commitment.status === 'fulfilled'
-              const overdue = !fulfilled && Boolean(commitment.dueDate) && commitment.dueDate < today
+              const overdue = approved && !fulfilled && Boolean(commitment.dueDate) && commitment.dueDate < today
               return (
                 <div
                   key={commitment.id}
@@ -538,7 +666,9 @@ export default function CustomersPage() {
                       {commitment.note}
                     </p>
                     <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                      {fulfilled ? (
+                      {!approved ? (
+                        <CommitmentApprovalBadge commitment={commitment} />
+                      ) : fulfilled ? (
                         <Badge className="bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300">Fulfilled</Badge>
                       ) : overdue ? (
                         <Badge className="bg-red-500/15 text-red-700 hover:bg-red-500/15 dark:text-red-300">Overdue</Badge>
@@ -552,6 +682,8 @@ export default function CustomersPage() {
                       </span>
                     </div>
                   </div>
+                  <CommitmentReviewActions customerId={customer.id} commitment={commitment} onError={setCommitmentError} />
+                  {canEdit && approved ? (
                   <div className="flex shrink-0 gap-1.5">
                     <Button
                       type="button"
@@ -586,6 +718,20 @@ export default function CustomersPage() {
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
+                  ) : canEdit ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                      disabled={commitmentBusy}
+                      onClick={() => void runCommitmentAction(() => deleteCustomerCommitment(customer.id, commitment.id))}
+                      aria-label="Delete commitment"
+                      title="Delete commitment"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  ) : null}
                 </div>
               )
             })}
@@ -594,7 +740,11 @@ export default function CustomersPage() {
           <p className="text-sm text-muted-foreground">No commitments recorded.</p>
         )}
 
+        {canAddCommitment ? (
         <div className="space-y-2 rounded-xl bg-muted/30 p-3">
+          {!canEdit ? (
+            <p className="text-xs text-muted-foreground">Your commitment goes to the Authorizer, then to the Chairman for approval.</p>
+          ) : null}
           <Textarea
             value={commitmentNote}
             onChange={(event) => setCommitmentNote(event.target.value)}
@@ -622,8 +772,9 @@ export default function CustomersPage() {
               Add commitment
             </Button>
           </div>
-          {commitmentError ? <p className="text-xs text-destructive">{commitmentError}</p> : null}
         </div>
+        ) : null}
+        {commitmentError ? <p className="text-xs text-destructive">{commitmentError}</p> : null}
       </div>
     )
   }
@@ -655,14 +806,17 @@ export default function CustomersPage() {
       ['Bank name', customer.bankName],
       ['Branch', customer.branchName],
     ]
-    const documents: [string, string][] = [
-      ['Dealer photo', customer.dealerPhotoUrl],
-      ['Bank cheque / document', customer.bankDocumentUrl],
-      ['NID copy', customer.nidCopyUrl],
-      ['Trade license copy', customer.tradeLicenseCopyUrl],
-      ['Passport size photo', customer.passportPhotoUrl],
-      ['Signature', customer.signatureUrl],
-    ]
+    const savedPhotos = documentUploadsFromCustomer(customer)
+    const documents: [string, string[]][] = (
+      [
+        ['Dealer photo', 'dealerPhoto'],
+        ['Bank cheque / document', 'bankDocument'],
+        ['NID copy', 'nidCopy'],
+        ['Trade license copy', 'tradeLicenseCopy'],
+        ['Passport size photo', 'passportPhoto'],
+        ['Signature', 'signature'],
+      ] as const
+    ).map(([label, key]) => [label, savedPhotos[key].photos.map((photo) => photo.url)])
 
     const field = ([label, value]: [string, string]) => (
       <div key={label}>
@@ -728,17 +882,24 @@ export default function CustomersPage() {
         <div className="space-y-3 rounded-2xl border border-border/70 p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Documents</p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {documents.map(([label, url]) => (
+            {documents.map(([label, urls]) => (
               <div key={label} className="space-y-1.5">
-                <p className="text-xs font-medium">{label}</p>
-                {url ? (
-                  <a href={url} target="_blank" rel="noreferrer" className="block">
-                    <img
-                      src={url}
-                      alt={label}
-                      className="h-28 w-full rounded-xl border border-border/70 bg-muted/30 object-contain transition hover:opacity-80"
-                    />
-                  </a>
+                <p className="text-xs font-medium">
+                  {label}
+                  {urls.length > 1 ? <span className="text-muted-foreground"> ({urls.length})</span> : null}
+                </p>
+                {urls.length ? (
+                  <div className={urls.length > 1 ? 'grid grid-cols-2 gap-1.5' : ''}>
+                    {urls.map((url, index) => (
+                      <a key={url} href={url} target="_blank" rel="noreferrer" className="block">
+                        <img
+                          src={url}
+                          alt={`${label} ${index + 1}`}
+                          className={`${urls.length > 1 ? 'h-20' : 'h-28'} w-full rounded-xl border border-border/70 bg-muted/30 object-contain transition hover:opacity-80`}
+                        />
+                      </a>
+                    ))}
+                  </div>
                 ) : (
                   <div className="flex h-28 items-center justify-center rounded-xl border border-dashed border-border/70 text-xs text-muted-foreground">
                     Not attached
@@ -827,20 +988,25 @@ export default function CustomersPage() {
   function buildCustomerAgreementHtml(
     form: CustomerFormState,
     uploads: Record<DocumentKey, DocumentUploadState>,
-    signatureDataUrl: string | null,
     autoPrint = true
   ) {
-    const documentPreview = (key: DocumentKey) => uploads[key].preview ?? form[`${key}Url`]
+    const documentPreview = (key: DocumentKey) => uploads[key].photos[0]?.url ?? ''
     const addressParts = [form.location, form.thana, form.district].filter(Boolean)
     const companyName = data?.settings.companyName ?? 'Power International BD'
     const logoUrl = `${window.location.origin}/power-logo.png`
     const dealerPhotoSrc = documentPreview('dealerPhoto') || documentPreview('passportPhoto')
     const documentRow = (label: string, key: DocumentKey) => {
-      const src = documentPreview(key)
+      const sources = uploads[key].photos.map((photo) => photo.url)
       return `
         <div class="document">
           <h3>${escapeHtml(label)}</h3>
-          ${src ? `<img src="${src}" alt="${escapeHtml(label)}" />` : '<p class="missing">Not attached</p>'}
+          ${
+            sources.length
+              ? `<div class="document-photos${sources.length > 1 ? ' multi' : ''}">${sources
+                  .map((src, index) => `<img src="${src}" alt="${escapeHtml(`${label} ${index + 1}`)}" />`)
+                  .join('')}</div>`
+              : '<p class="missing">Not attached</p>'
+          }
         </div>
       `
     }
@@ -875,6 +1041,8 @@ export default function CustomersPage() {
             .document { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
             .document h3 { color: #374151; font-size: 11px; margin: 0 0 6px; }
             .document img { background: #f9fafb; border-radius: 4px; display: block; height: 110px; object-fit: contain; width: 100%; }
+            .document-photos.multi { display: grid; gap: 4px; grid-template-columns: 1fr 1fr; }
+            .document-photos.multi img { height: 53px; }
             .document .missing { align-items: center; background: #f9fafb; border-radius: 4px; color: #9ca3af; display: flex; font-size: 11px; height: 110px; justify-content: center; margin: 0; }
             .declaration { background: #fff7ed; border: 1px solid #fed7aa; border-left: 4px solid #f28c1b; border-radius: 6px; font-size: 12.5px; line-height: 1.7; margin-top: 18px; padding: 12px 14px; }
             .signature-area { display: flex; justify-content: space-between; margin-top: 40px; }
@@ -942,7 +1110,6 @@ export default function CustomersPage() {
 
           <div class="signature-area">
             <div class="signature-box">
-              ${signatureDataUrl ? `<img src="${signatureDataUrl}" alt="Signature" />` : ''}
               <div class="signature-line">Dealer Signature</div>
             </div>
             <div class="signature-box">
@@ -966,18 +1133,15 @@ export default function CustomersPage() {
     `
   }
 
-  // Returns undefined when the form is not ready to export.
-  function prepareAgreementSignature(): string | null | undefined {
+  // The agreement is signed by hand after printing, so the export only leaves a blank signature line.
+  function canExportAgreement(): boolean {
     setPdfError(null)
 
     if (!customerForm.name.trim() || !customerForm.phone.trim()) {
       setPdfError('Fill in the dealer name and mobile number before generating the PDF or JPG.')
-      return undefined
+      return false
     }
-
-    const drawnSignature =
-      signaturePadRef.current && !signaturePadRef.current.isEmpty() ? signaturePadRef.current.toDataUrl() : null
-    return drawnSignature ?? (documentUploads.signature.preview || customerForm.signatureUrl || null)
+    return true
   }
 
   // Saves the agreement as a PDF file directly, so no browser print header or footer ends up on it.
@@ -998,13 +1162,12 @@ export default function CustomersPage() {
   }
 
   async function handleDownloadJpg() {
-    const signatureDataUrl = prepareAgreementSignature()
-    if (signatureDataUrl === undefined) return
+    if (!canExportAgreement()) return
 
     setIsExportingImage(true)
     try {
       await downloadAgreementJpg(
-        buildCustomerAgreementHtml(customerForm, documentUploads, signatureDataUrl, false),
+        buildCustomerAgreementHtml(customerForm, documentUploads, false),
         customerForm.name
       )
     } catch (reason) {
@@ -1015,26 +1178,24 @@ export default function CustomersPage() {
   }
 
   async function handleGeneratePdf() {
-    const signatureDataUrl = prepareAgreementSignature()
-    if (signatureDataUrl === undefined) return
+    if (!canExportAgreement()) return
 
-    setPdfError(await downloadAgreementPdf(buildCustomerAgreementHtml(customerForm, documentUploads, signatureDataUrl, false), customerForm.name))
+    setPdfError(await downloadAgreementPdf(buildCustomerAgreementHtml(customerForm, documentUploads, false), customerForm.name))
   }
 
   async function handleExportSavedCustomer(customer: CustomerRecord, format: 'pdf' | 'jpg') {
     setDetailsExportError(null)
     const form = formFromCustomer(customer)
-    const uploads = emptyDocumentUploads()
-    const signature = customer.signatureUrl || null
+    const uploads = documentUploadsFromCustomer(customer)
 
     if (format === 'pdf') {
-      setDetailsExportError(await downloadAgreementPdf(buildCustomerAgreementHtml(form, uploads, signature, false), customer.name))
+      setDetailsExportError(await downloadAgreementPdf(buildCustomerAgreementHtml(form, uploads, false), customer.name))
       return
     }
 
     setIsExportingImage(true)
     try {
-      await downloadAgreementJpg(buildCustomerAgreementHtml(form, uploads, signature, false), customer.name)
+      await downloadAgreementJpg(buildCustomerAgreementHtml(form, uploads, false), customer.name)
     } catch (reason) {
       setDetailsExportError(reason instanceof Error ? reason.message : 'Unable to create the JPG image.')
     } finally {
@@ -1169,6 +1330,7 @@ export default function CustomersPage() {
                 <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
               </div>
             </div>
+            {reminderOnly ? renderCommitmentReminders() : null}
             <div className="overflow-x-auto rounded-2xl border border-border/70">
               <Table>
                 <TableHeader>
@@ -1214,7 +1376,7 @@ export default function CustomersPage() {
                                 </Badge>
                               ) : null}
                               {(() => {
-                                const pending = sortedCommitments(customer).filter((item) => item.status === 'pending').length
+                                const pending = sortedCommitments(customer).filter((item) => item.status === 'pending' && item.approvalStage !== 'rejected').length
                                 return pending ? (
                                   <button type="button" onClick={() => openDetailsDialog(customer.id, true)}>
                                     <Badge className="gap-1 bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300">
@@ -1561,18 +1723,13 @@ export default function CustomersPage() {
 
             <div className="space-y-3 rounded-2xl border border-border/70 p-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">PDF &amp; signature</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">PDF</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Sign below or upload a signature image, then generate a PDF or download a JPG with all the information entered above. A
-                  drawn signature is used if both are given.
+                  Generate a PDF or download a JPG with all the information entered above. Print it and have the dealer sign on the
+                  signature line.
                 </p>
               </div>
-              <SignaturePad ref={signaturePadRef} />
-              {renderDocumentUpload('signature')}
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => signaturePadRef.current?.clear()}>
-                  Clear signature
-                </Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"

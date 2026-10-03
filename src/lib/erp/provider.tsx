@@ -40,6 +40,8 @@ import type {
   CustomerCommitmentInput,
   CustomerInput,
   CustomerRecord,
+  LedgerEntryRequestRecord,
+  DocumentPhoto,
   DamageProductInput,
   DamageProductRecord,
   ComplaintInput,
@@ -88,12 +90,14 @@ import type {
   CommissionAuthorizationRecord,
 } from '@/lib/erp/types'
 import {
+  approvalStage,
   canAuthorizeCommission,
   computeMonthlyPay,
   createId,
   CUSTOMER_CODE_PREFIX,
   currentMonthKey,
   dayKey,
+  effectiveRole,
   inCommissionWindow,
   DEFAULT_COMMISSION_PER_UNIT,
   DEFAULT_MONTHLY_AMOUNT_TARGET,
@@ -105,6 +109,8 @@ import {
   getProductStatus,
   getTargetAchievement,
   hasPermission as hasPermissionCheck,
+  isZoneInCharge,
+  canActAtStage,
   nextEmployeeCode,
   nextPartyCode,
   SUPPLIER_CODE_PREFIX,
@@ -126,7 +132,7 @@ import {
 import { auth, database } from '@/lib/firebase/config'
 import { BUSINESS_ENTRY_LABELS } from './business'
 import { resolveRoles } from './roles'
-import { scopeDataToUserZones } from './zones'
+import { accessScopeFor, customerInScope, customerZoneId, scopeDataToUserZones } from './zones'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -192,6 +198,8 @@ type ERPContextValue = {
   deleteCustomer: (customerId: string) => Promise<void>
   saveCustomerCommitment: (customerId: string, input: CustomerCommitmentInput, commitmentId?: string) => Promise<void>
   deleteCustomerCommitment: (customerId: string, commitmentId: string) => Promise<void>
+  /** The Authorizer submits a zone in charge's commitment to the Chairman, who gives the final approval; either may reject it. */
+  reviewCustomerCommitment: (customerId: string, commitmentId: string, decision: 'approve' | 'reject') => Promise<void>
   saveZone: (input: ZoneInput, zoneId?: string) => Promise<string>
   deleteZone: (zoneId: string) => Promise<void>
   /** Saves a depot; a new depot also gets its own warehouse for its dealers' deliveries. */
@@ -259,6 +267,7 @@ type ERPContextValue = {
   recordSellerTransaction: (input: SellerTransactionInput) => Promise<void>
   deleteSellerTransaction: (transactionId: string) => Promise<void>
   recordCreditLedgerEntry: (input: CreditLedgerEntryInput) => Promise<void>
+  reviewLedgerEntryRequest: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
   deleteCreditLedgerEntry: (entryId: string) => Promise<void>
   saveCourier: (input: CourierInput, courierId?: string) => Promise<void>
   updateCourierStatus: (courierId: string, status: CourierRecord['status']) => Promise<void>
@@ -298,6 +307,15 @@ type ERPContextValue = {
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
 const CURRENT_USER_STORAGE_KEY = 'ims-current-user'
 
+// The database hands lists back as objects keyed by index, and drops empty ones.
+function normalizeExtraPhotos(extraPhotos?: Record<string, DocumentPhoto[]> | null) {
+  return Object.fromEntries(
+    Object.entries(extraPhotos ?? {})
+      .map(([key, photos]) => [key, Object.values(photos ?? {}).filter((photo) => photo?.url)] as const)
+      .filter(([, photos]) => photos.length)
+  )
+}
+
 function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
   const now = new Date().toISOString()
 
@@ -329,6 +347,7 @@ function normalizeCustomerRecord(customer: CustomerRecord): CustomerRecord {
     dealerPhotoPublicId: customer.dealerPhotoPublicId || '',
     signatureUrl: customer.signatureUrl || '',
     signaturePublicId: customer.signaturePublicId || '',
+    extraPhotos: normalizeExtraPhotos(customer.extraPhotos),
     createdAt: customer.createdAt || now,
     updatedAt: customer.updatedAt || customer.createdAt || now,
   }
@@ -507,6 +526,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     sellers: source.sellers ?? {},
     sellerTransactions: source.sellerTransactions ?? {},
     creditLedgerEntries: source.creditLedgerEntries ?? {},
+    ledgerEntryRequests: source.ledgerEntryRequests ?? {},
     deposits: source.deposits ?? {},
     complaints: source.complaints ?? {},
     replacements: source.replacements ?? {},
@@ -627,6 +647,7 @@ function normalizeCustomerInput(input: CustomerInput) {
     dealerPhotoPublicId: input.dealerPhotoPublicId ?? '',
     signatureUrl: input.signatureUrl ?? '',
     signaturePublicId: input.signaturePublicId ?? '',
+    extraPhotos: normalizeExtraPhotos(input.extraPhotos),
     zoneId: input.zoneId ?? '',
     creditLimit: Math.max(input.creditLimit ?? 0, 0),
     depotId: input.depotId ?? '',
@@ -817,6 +838,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }, [currentUser, data])
   const canTakeAttendance = currentPermissions.includes('attendance.edit')
   const needsApproval = useMemo(() => changesNeedApprovalFor(data?.roles, currentUser), [currentUser, data?.roles])
+  const zoneViewOnly = useMemo(() => isZoneInCharge(currentUser, toArray(data?.zones)), [currentUser, data?.zones])
+
+  /** Stops a zone in charge from changing client data, whichever screen the change comes from. */
+  function viewOnlyForZone<Args extends unknown[], Result>(action: (...args: Args) => Promise<Result>) {
+    return async (...args: Args) => {
+      if (zoneViewOnly) {
+        throw new Error('You can only view the client data of your zone. Changes are not allowed.')
+      }
+      return action(...args)
+    }
+  }
 
   // A Firebase account is not enough on its own: the matching ERP record has to
   // exist and still be active, otherwise we drop the session immediately.
@@ -1246,6 +1278,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       dealerPhotoPublicId: input.dealerPhotoPublicId ?? existingCustomer?.dealerPhotoPublicId ?? '',
       signatureUrl: input.signatureUrl ?? existingCustomer?.signatureUrl ?? '',
       signaturePublicId: input.signaturePublicId ?? existingCustomer?.signaturePublicId ?? '',
+      extraPhotos: input.extraPhotos ?? existingCustomer?.extraPhotos ?? {},
       zoneId: input.zoneId ?? existingCustomer?.zoneId ?? '',
       creditLimit: input.creditLimit ?? existingCustomer?.creditLimit ?? 0,
       depotId: input.depotId ?? existingCustomer?.depotId ?? '',
@@ -1330,13 +1363,26 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const existing = commitmentId ? customer.commitments?.[commitmentId] : undefined
+    // A zone in charge may only add commitments for their own zone's clients, and each one
+    // waits for the Authorizer and then the Chairman before it counts.
+    if (zoneViewOnly) {
+      if (existing) {
+        throw new Error('You can only add new commitments. Changes are not allowed.')
+      }
+      if (!visibleData?.customers[customerId]) {
+        throw new Error('You can only add commitments for the clients of your zone.')
+      }
+    }
     const id = existing?.id ?? createId('commitment')
     const now = new Date().toISOString()
     const commitment: CustomerCommitment = {
+      ...existing,
       id,
       note,
       dueDate: input.dueDate ?? existing?.dueDate ?? '',
       status: input.status ?? existing?.status ?? 'pending',
+      approvalStage: existing ? existing.approvalStage ?? 'approved' : zoneViewOnly ? 'authorizer' : 'approved',
+      showOnPdf: input.showOnPdf ?? existing?.showOnPdf ?? true,
       imageUrl: input.imageUrl ?? existing?.imageUrl ?? '',
       imagePublicId: input.imagePublicId ?? existing?.imagePublicId ?? '',
       createdBy: existing?.createdBy ?? currentUser?.name ?? '',
@@ -1353,6 +1399,62 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         ? `Updated a commitment for ${customer.name}.`
         : `Added a commitment for ${customer.name}: ${note}`
     )
+    if (commitment.approvalStage === 'authorizer') {
+      await writeNotification(
+        'Commitment waiting for authorization',
+        `${currentUser?.name ?? 'A zone in charge'} made a commitment to ${customer.name}: ${note}. Submit it to the Chairman or reject it from the client's details.`,
+        'warning',
+        ['authorizer', 'admin']
+      )
+    }
+  }
+
+  async function reviewCustomerCommitment(customerId: string, commitmentId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in before reviewing commitments.')
+    }
+
+    const customer = data.customers[customerId]
+    const existing = customer?.commitments?.[commitmentId]
+    if (!customer || !existing) {
+      throw new Error('Commitment not found.')
+    }
+
+    const stage = existing.approvalStage
+    if (stage !== 'authorizer' && stage !== 'chairman') {
+      throw new Error('This commitment has already been reviewed.')
+    }
+    if (!canActAtStage(currentUser, stage)) {
+      throw new Error(stage === 'authorizer' ? 'Only the Authorizer can review this commitment.' : 'Only the Chairman can approve this commitment.')
+    }
+    // The Authorizer only reviews the clients of the zones they are assigned.
+    if (!visibleData?.customers[customerId]) {
+      throw new Error('This client is not in your zone.')
+    }
+
+    const now = new Date().toISOString()
+    const reviewer = currentUser.name
+    const changes: Partial<CustomerCommitment> =
+      decision === 'reject'
+        ? { approvalStage: 'rejected', rejectedBy: reviewer, rejectedAt: now }
+        : stage === 'authorizer'
+          ? { approvalStage: 'chairman', authorizedBy: reviewer, authorizedAt: now }
+          : { approvalStage: 'approved', approvedBy: reviewer, approvedAt: now }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/customers/${customerId}/commitments/${commitmentId}`), { ...changes, updatedAt: now })
+
+    const action =
+      decision === 'reject' ? 'Rejected' : stage === 'authorizer' ? 'Submitted to the Chairman' : 'Approved'
+    await writeActivity('customer_commitment_reviewed', 'customers', `${action} a commitment for ${customer.name}: ${existing.note}`)
+    if (decision === 'approve' && stage === 'authorizer') {
+      await writeNotification(
+        'Commitment waiting for approval',
+        `${reviewer} submitted a commitment to ${customer.name} for your approval: ${existing.note}`,
+        'warning',
+        ['chairman', 'admin']
+      )
+    }
   }
 
   async function deleteCustomerCommitment(customerId: string, commitmentId: string) {
@@ -2646,6 +2748,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer not found.')
     }
 
+    // A zone in charge's entry waits for their zone's Authorizer, then the Chairman.
+    if (zoneViewOnly) {
+      await submitLedgerEntryRequest(customer, input)
+      return
+    }
+
     if (needsApproval) {
       await requestChange('credit_entry', 'create', '', customer.name, input)
       return
@@ -2672,6 +2780,131 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     notifyTransaction('ledger_entry', entryId)
     await writeActivity('credit_entry_recorded', 'customers', `Recorded a credit sheet entry for ${customer.name}.`)
+  }
+
+  async function submitLedgerEntryRequest(customer: CustomerRecord, input: CreditLedgerEntryInput) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!visibleData?.customers[customer.id]) {
+      throw new Error('You can only add ledger entries for the clients of your zone.')
+    }
+    const particulars = input.particulars.trim()
+    if (!particulars) {
+      throw new Error('Particulars are required.')
+    }
+    const debit = Math.max(input.debit ?? 0, 0)
+    const credit = Math.max(input.credit ?? 0, 0)
+    if (!(debit > 0 || credit > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('ledger_request')
+    const now = new Date().toISOString()
+    const request: LedgerEntryRequestRecord = {
+      id,
+      customerId: customer.id,
+      customerName: customer.name,
+      date: input.date?.trim() || now,
+      particulars,
+      qty: Math.max(input.qty ?? 0, 0),
+      unitPrice: Math.max(input.unitPrice ?? 0, 0),
+      debit,
+      credit,
+      status: 'pending',
+      zoneId: customerZoneId(customer, toArray(data.zones)),
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await update(ref(db, 'erp/ledgerEntryRequests'), { [id]: request })
+
+    const amount = Math.max(debit, credit).toLocaleString()
+    await writeActivity('ledger_entry_submitted', 'customers', `Submitted a ${amount} ledger entry for ${customer.name} for approval.`)
+    await writeNotification(
+      'Ledger entry awaiting the Authorizer',
+      `${currentUser.name} added a ledger entry for ${customer.name}: ${particulars} (${debit > 0 ? 'debit' : 'credit'} ${amount}).`,
+      'info',
+      ['authorizer', 'admin']
+    )
+  }
+
+  /** The Authorizer accepts it and sends it to the Chairman; the Chairman's approval writes it to the client's ledger. */
+  async function reviewLedgerEntryRequest(requestId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const request = data.ledgerEntryRequests[requestId]
+    if (!request) {
+      throw new Error('Ledger entry not found.')
+    }
+    const stage = requireApprovalStage(request, 'ledger entry')
+    const amount = Math.max(request.debit, request.credit)
+    if (stage === 'authorizer' && decision === 'approve') {
+      await recordAuthorization('ledgerEntryRequests', requestId, `the ${amount.toLocaleString()} ledger entry for ${request.customerName}`)
+      return
+    }
+
+    const customer = data.customers[request.customerId]
+    if (decision === 'approve' && !customer) {
+      throw new Error('This client no longer exists. Reject the entry instead.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const entryId = decision === 'approve' ? createId('credit_entry') : ''
+    const updates: Record<string, unknown> = {
+      [`ledgerEntryRequests/${requestId}/status`]: decision === 'approve' ? 'approved' : 'rejected',
+      [`ledgerEntryRequests/${requestId}/reviewedById`]: currentUser.id,
+      [`ledgerEntryRequests/${requestId}/reviewedByName`]: currentUser.name,
+      [`ledgerEntryRequests/${requestId}/reviewedAt`]: now,
+      [`ledgerEntryRequests/${requestId}/updatedAt`]: now,
+    }
+    if (entryId && customer) {
+      updates[`ledgerEntryRequests/${requestId}/entryId`] = entryId
+      updates[`creditLedgerEntries/${entryId}`] = {
+        id: entryId,
+        customerId: customer.id,
+        customerName: customer.name,
+        date: request.date,
+        particulars: request.particulars,
+        qty: request.qty,
+        unitPrice: request.unitPrice,
+        debit: request.debit,
+        credit: request.credit,
+        createdAt: now,
+      }
+    }
+
+    await update(ref(db, 'erp'), updates)
+    if (entryId) notifyTransaction('ledger_entry', entryId)
+    await writeActivity(
+      decision === 'approve' ? 'ledger_entry_approved' : 'ledger_entry_rejected',
+      'customers',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${amount.toLocaleString()} ledger entry for ${request.customerName}.`
+    )
+    await writeAuditEntry({
+      kind: 'change',
+      refId: requestId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: request.customerName,
+      summary: [`Ledger entry: ${request.particulars}`, request.authorizedByName && `Authorized by ${request.authorizedByName}`].filter(Boolean).join(' · '),
+      amount,
+      submittedByName: request.submittedByName,
+      submittedByRole: roleNameOf(request.submittedById),
+      submittedAt: request.createdAt,
+    })
+    if (decision === 'reject') {
+      await writeNotification(
+        'Ledger entry rejected',
+        `${currentUser.name} rejected the ledger entry for ${request.customerName}: ${request.particulars}.`,
+        'warning',
+        ['admin']
+      )
+    }
   }
 
   async function submitDeposit(input: DepositInput) {
@@ -2704,6 +2937,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         method: input.method.trim(),
         note: input.note?.trim() ?? '',
         status: 'pending',
+        zoneId: customerZoneId(customer, toArray(data.zones)),
         submittedById: currentUser.id,
         submittedByName: currentUser.name,
         createdAt: now,
@@ -2713,10 +2947,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await writeActivity('deposit_submitted', 'customers', `Submitted a ${input.amount.toLocaleString()} deposit for ${customer.name}.`)
     await writeNotification(
-      'Deposit awaiting approval',
+      'Deposit awaiting the Authorizer',
       `${currentUser.name} submitted a ${input.amount.toLocaleString()} deposit (${input.method.trim()}) for ${customer.name}.`,
       'info',
-      ['admin', 'accountant']
+      ['authorizer', 'admin', 'accountant']
     )
   }
 
@@ -2724,16 +2958,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!data || !currentUser) {
       return
     }
-    if (!userRoleIds(currentUser).includes('admin')) {
-      throw new Error('Only an admin can approve deposits.')
-    }
 
     const deposit = data.deposits[depositId]
     if (!deposit) {
       throw new Error('Deposit not found.')
     }
-    if (deposit.status !== 'pending') {
-      throw new Error('This deposit has already been reviewed.')
+    const stage = requireApprovalStage(deposit, 'deposit')
+    if (stage === 'authorizer' && decision === 'approve') {
+      await recordAuthorization('deposits', depositId, `the ${deposit.amount.toLocaleString()} deposit for ${deposit.customerName}`)
+      return
     }
 
     const db = getDatabaseOrThrow()
@@ -2777,7 +3010,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       refId: depositId,
       decision: decision === 'approve' ? 'approved' : 'rejected',
       party: deposit.customerName,
-      summary: [deposit.method, deposit.note].filter(Boolean).join(' · '),
+      summary: [deposit.method, deposit.note, deposit.authorizedByName && `Authorized by ${deposit.authorizedByName}`].filter(Boolean).join(' · '),
       amount: deposit.amount,
       submittedByName: deposit.submittedByName,
       submittedByRole: roleNameOf(deposit.submittedById),
@@ -3392,6 +3625,51 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return currentUser
   }
 
+  /**
+   * The stage a deposit or order-form order is at, once the signed-in user is allowed to act on
+   * it there: the Authorizer of the dealer's zone first, then the Chairman (an admin can do either).
+   */
+  function requireApprovalStage(record: { status: string; authorizedAt?: string; customerId: string }, noun: string) {
+    if (!data || !currentUser) {
+      throw new Error('ERP data not loaded yet.')
+    }
+    const stage = approvalStage(record)
+    if (!stage) {
+      throw new Error(`This ${noun} has already been reviewed.`)
+    }
+    if (!canActAtStage(currentUser, stage)) {
+      throw new Error(stage === 'authorizer' ? `This ${noun} is waiting for the Authorizer.` : `This ${noun} is waiting for the Chairman's final approval.`)
+    }
+    if (stage === 'authorizer' && !userRoleIds(currentUser).includes('admin')) {
+      const zones = toArray(data.zones)
+      const scope = accessScopeFor(currentUser, zones, effectiveRole(data.roles, currentUser), toArray(data.users), toArray(data.depots))
+      const customer = data.customers[record.customerId]
+      if (scope && (!customer || !customerInScope(customer, zones, scope))) {
+        throw new Error(`This ${noun} is from a zone you do not authorize.`)
+      }
+    }
+    return stage
+  }
+
+  /** The Authorizer accepts a deposit or order; it then waits for the Chairman. */
+  async function recordAuthorization(section: 'deposits' | 'orderRequests' | 'ledgerEntryRequests', id: string, what: string) {
+    if (!currentUser) return
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/${section}/${id}`), {
+      authorizedById: currentUser.id,
+      authorizedByName: currentUser.name,
+      authorizedAt: now,
+      updatedAt: now,
+    })
+    await writeActivity(
+      section === 'deposits' ? 'deposit_authorized' : section === 'ledgerEntryRequests' ? 'ledger_entry_authorized' : 'order_request_authorized',
+      section === 'orderRequests' ? 'sales' : 'customers',
+      `Authorized ${what}; sent to the Chairman for final approval.`
+    )
+    await writeNotification('Awaiting Chairman approval', `${currentUser.name} authorized ${what}.`, 'info', ['chairman', 'admin'])
+  }
+
   /** Prices the lines of an order request and works out its due and credit-limit standing. */
   function priceOrderRequest(customer: CustomerRecord, items: OrderRequestEdit['items'], paidInput: number) {
     if (!data) {
@@ -3456,6 +3734,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         deliveryDate: input.deliveryDate,
         courierName: input.courierName?.trim() ?? '',
         status: 'pending',
+        zoneId: customerZoneId(customer, toArray(data.zones)),
         submittedById: currentUser.id,
         submittedByName: currentUser.name,
         submittedByRole: roleNameOf(currentUser.id),
@@ -3466,10 +3745,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await writeActivity('order_request_submitted', 'sales', `Submitted an order of ${priced.total.toLocaleString()} for ${customer.name} for approval.`)
     await writeNotification(
-      priced.overCreditLimit ? 'Over-limit order awaiting approval' : 'Order awaiting approval',
+      priced.overCreditLimit ? 'Over-limit order awaiting the Authorizer' : 'Order awaiting the Authorizer',
       `${currentUser.name} submitted a ${priced.total.toLocaleString()} order for ${customer.name}${priced.overCreditLimit ? ' over their credit limit' : ''}.`,
       priced.overCreditLimit ? 'warning' : 'info',
-      ['admin']
+      ['authorizer', 'admin']
     )
   }
 
@@ -3527,14 +3806,16 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   async function reviewOrderRequest(requestId: string, decision: 'approve' | 'reject') {
-    const reviewer = requireAdminUser('approve orders')
     const request = data?.orderRequests[requestId]
-    if (!request) {
+    if (!request || !currentUser) {
       throw new Error('Order not found.')
     }
-    if (request.status !== 'pending') {
-      throw new Error('This order has already been reviewed.')
+    const stage = requireApprovalStage(request, 'order')
+    if (stage === 'authorizer' && decision === 'approve') {
+      await recordAuthorization('orderRequests', requestId, `the ${request.total.toLocaleString()} order for ${request.customerName}`)
+      return
     }
+    const reviewer = currentUser
 
     // The order itself (stock, due, customer history, credit sheet) only exists once approved.
     const orderId =
@@ -3568,7 +3849,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       refId: orderId || requestId,
       decision: decision === 'approve' ? 'approved' : 'rejected',
       party: request.customerName,
-      summary: `${request.items.map((item) => `${item.productName} × ${item.quantity}`).join(', ')}${request.courierName ? ` · ${request.courierName}` : ''}`,
+      summary: `${request.items.map((item) => `${item.productName} × ${item.quantity}`).join(', ')}${request.courierName ? ` · ${request.courierName}` : ''}${request.authorizedByName ? ` · Authorized by ${request.authorizedByName}` : ''}`,
       amount: request.total,
       submittedByName: request.submittedByName,
       submittedByRole: request.submittedByRole,
@@ -5089,50 +5370,51 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       reviewChangeRequest,
       saveProduct,
       deleteProduct,
-      saveCustomer,
-      deleteCustomer,
+      saveCustomer: viewOnlyForZone(saveCustomer),
+      deleteCustomer: viewOnlyForZone(deleteCustomer),
       saveCustomerCommitment,
-      deleteCustomerCommitment,
-      saveZone,
-      deleteZone,
-      saveDepot,
-      deleteDepot,
-      setDealersDepot,
-      saveDepotPrices,
+      deleteCustomerCommitment: viewOnlyForZone(deleteCustomerCommitment),
+      reviewCustomerCommitment,
+      saveZone: viewOnlyForZone(saveZone),
+      deleteZone: viewOnlyForZone(deleteZone),
+      saveDepot: viewOnlyForZone(saveDepot),
+      deleteDepot: viewOnlyForZone(deleteDepot),
+      setDealersDepot: viewOnlyForZone(setDealersDepot),
+      saveDepotPrices: viewOnlyForZone(saveDepotPrices),
       saveSupplier,
       deleteSupplier,
       saveWarehouse,
       deleteWarehouse,
       recordPurchase,
-      createOrder,
-      updateOrderStatus,
-      setCustomerCreditLimit,
-      saveZonePrices,
+      createOrder: viewOnlyForZone(createOrder),
+      updateOrderStatus: viewOnlyForZone(updateOrderStatus),
+      setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
+      saveZonePrices: viewOnlyForZone(saveZonePrices),
       saveGeneralPrices,
-      saveDealerPrices,
-      saveZonePriceExclusions,
+      saveDealerPrices: viewOnlyForZone(saveDealerPrices),
+      saveZonePriceExclusions: viewOnlyForZone(saveZonePriceExclusions),
       updateSettings,
-      submitDeposit,
-      reviewDeposit,
-      submitComplaint,
-      reviewComplaint,
-      submitReplacement,
-      reviewReplacement,
-      submitReplacementReturn,
-      reviewReplacementReturn,
+      submitDeposit: viewOnlyForZone(submitDeposit),
+      reviewDeposit: viewOnlyForZone(reviewDeposit),
+      submitComplaint: viewOnlyForZone(submitComplaint),
+      reviewComplaint: viewOnlyForZone(reviewComplaint),
+      submitReplacement: viewOnlyForZone(submitReplacement),
+      reviewReplacement: viewOnlyForZone(reviewReplacement),
+      submitReplacementReturn: viewOnlyForZone(submitReplacementReturn),
+      reviewReplacementReturn: viewOnlyForZone(reviewReplacementReturn),
       submitExpense,
       reviewExpense,
       saveBankAccount,
       deleteBankAccount,
       submitSupplierPayment,
       reviewSupplierPayment,
-      submitOrderRequest,
-      editOrderRequest,
-      reviewOrderRequest,
-      postDelivery,
-      updateDeliveryDetails,
-      submitDelivery,
-      editSubmission,
+      submitOrderRequest: viewOnlyForZone(submitOrderRequest),
+      editOrderRequest: viewOnlyForZone(editOrderRequest),
+      reviewOrderRequest: viewOnlyForZone(reviewOrderRequest),
+      postDelivery: viewOnlyForZone(postDelivery),
+      updateDeliveryDetails: viewOnlyForZone(updateDeliveryDetails),
+      submitDelivery: viewOnlyForZone(submitDelivery),
+      editSubmission: viewOnlyForZone(editSubmission),
       markAttendance,
       canTakeAttendance,
       createTask,
@@ -5146,37 +5428,39 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteSeller,
       recordSellerTransaction,
       deleteSellerTransaction,
+      // A zone in charge may add entries for their zone's clients; they wait for the Authorizer and the Chairman.
       recordCreditLedgerEntry,
-      deleteCreditLedgerEntry,
-      saveCourier,
-      updateCourierStatus,
-      deleteCourier,
+      reviewLedgerEntryRequest: viewOnlyForZone(reviewLedgerEntryRequest),
+      deleteCreditLedgerEntry: viewOnlyForZone(deleteCreditLedgerEntry),
+      saveCourier: viewOnlyForZone(saveCourier),
+      updateCourierStatus: viewOnlyForZone(updateCourierStatus),
+      deleteCourier: viewOnlyForZone(deleteCourier),
       saveDamageProduct,
       updateDamageProductStatus,
       deleteDamageProduct,
-      saveLead,
-      deleteLead,
+      saveLead: viewOnlyForZone(saveLead),
+      deleteLead: viewOnlyForZone(deleteLead),
       saveEmployee,
       reviewEmployee,
       issueJoiningLetter,
       deleteEmployee,
-      recordSale,
+      recordSale: viewOnlyForZone(recordSale),
       saveSalaryPayment,
       saveEmployeeAdvance,
       deleteEmployeeAdvance,
-      requestCommissionAuthorization,
+      requestCommissionAuthorization: viewOnlyForZone(requestCommissionAuthorization),
       reviewCommissionAuthorization,
       requestAdvance,
       reviewAdvanceRequest,
-      saveBatteryReport,
-      deleteBatteryReport,
+      saveBatteryReport: viewOnlyForZone(saveBatteryReport),
+      deleteBatteryReport: viewOnlyForZone(deleteBatteryReport),
       saveBusiness,
       deleteBusiness,
       submitBusinessEntry,
       reviewBusinessEntry,
       deleteBusinessEntry,
     }),
-    [canTakeAttendance, currentPermissions, currentUser, data, error, isPortalUser, loading, needsApproval, users, visibleData]
+    [canTakeAttendance, currentPermissions, currentUser, data, error, isPortalUser, loading, needsApproval, users, visibleData, zoneViewOnly]
   )
 
   return <ERPContext.Provider value={value}>{children}</ERPContext.Provider>

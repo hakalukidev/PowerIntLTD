@@ -12,10 +12,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, partyCode, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { approvalStage, canActAtStage, formatCurrency, formatDate, partyCode, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 
 import {
+  ApprovalStageNote,
   EditHistory,
   EmptyState,
   FeedbackBanner,
@@ -53,13 +54,16 @@ export function OrderApprovals({ isAdmin }: { isAdmin: boolean }) {
     setBusyId(request.id)
     setFeedback(null)
     try {
+      const authorizing = approvalStage(request) === 'authorizer'
       await reviewOrderRequest(request.id, decision)
       setFeedback({
         tone: 'success',
         text:
-          decision === 'approve'
-            ? `Order for ${request.customerName} approved and added to their history and credit sheet. Notify them below.`
-            : `Order for ${request.customerName} rejected.`,
+          decision === 'reject'
+            ? `Order for ${request.customerName} rejected.`
+            : authorizing
+              ? `Order for ${request.customerName} authorized and sent to the Chairman for final approval.`
+              : `Order for ${request.customerName} approved and added to their history and credit sheet. Notify them below.`,
       })
     } catch (error) {
       setFeedback({ tone: 'error', text: error instanceof Error ? error.message : 'Could not review the order.' })
@@ -134,9 +138,11 @@ function OrderRequestCard({
   onReview: (decision: 'approve' | 'reject') => void
   onEdit: () => void
 }) {
-  const { data } = useERP()
+  const { data, currentUser } = useERP()
   const { zones } = useZoneAccess()
   const customer = data?.customers[request.customerId]
+  const stage = approvalStage(request)
+  const canReview = canActAtStage(currentUser, stage)
 
   const history = useMemo(() => {
     const orders = toArray(data?.orders).filter((order) => order.customerId === request.customerId)
@@ -178,21 +184,28 @@ function OrderRequestCard({
             {customer ? ` · ${customerZoneName(customer, zones)} · ${customer.phone}` : ''}
           </CardDescription>
           <SubmittedBy name={request.submittedByName} role={request.submittedByRole} at={request.createdAt} />
+          <ApprovalStageNote record={request} />
         </div>
-        {isAdmin ? (
+        {isAdmin || canReview ? (
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={onEdit}>
-              <Pencil className="h-4 w-4" />
-              Edit
-            </Button>
-            <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
-              <X className="h-4 w-4" />
-              Reject
-            </Button>
-            <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
-              <Check className="h-4 w-4" />
-              {busy ? 'Saving...' : 'Confirm order'}
-            </Button>
+            {isAdmin ? (
+              <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={onEdit}>
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
+            ) : null}
+            {canReview ? (
+              <>
+                <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
+                  <X className="h-4 w-4" />
+                  Reject
+                </Button>
+                <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
+                  <Check className="h-4 w-4" />
+                  {busy ? 'Saving...' : stage === 'authorizer' ? 'Authorize' : 'Final approve'}
+                </Button>
+              </>
+            ) : null}
           </div>
         ) : null}
       </CardHeader>

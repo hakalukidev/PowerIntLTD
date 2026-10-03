@@ -122,6 +122,21 @@ test.describe.serial('Zone access', () => {
     await expect(page.locator('a[href="/admin/finance"]')).toHaveCount(0)
   })
 
+  test('TC-07.5 the zone manager can view their zone\'s data but not change it', async ({ page }, testInfo) => {
+    await loginAs(page, manager.email, manager.password)
+    await navigate(page, '/admin/customers')
+    await expect(row(page, dealerA.name)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add dealer' })).toHaveCount(0)
+
+    await navigate(page, '/admin/credit-sheet')
+    await expect(row(page, dealerA.name)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Add ledger entry' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Notify dealer' })).toHaveCount(0)
+
+    note(testInfo, `The ${zoneA.name} Zone Manager sees their dealers, with no buttons to add or change dealer or ledger data.`)
+    await screenshot(page, 'zone-manager-view-only', testInfo)
+  })
+
   test('TC-07.4 an admin still sees the dealers of every zone', async ({ page }) => {
     await loginAsAdmin(page)
     await navigate(page, '/admin/customers')

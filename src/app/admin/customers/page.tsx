@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
-import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { BellRing, Check, Edit, Eye, FileSignature, ImageDown, ImagePlus, Handshake, MapPin, Phone, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { CommitmentApprovalBadge, CommitmentReviewActions } from '@/components/admin/credit-sheet/CommitmentApproval'
@@ -493,32 +493,48 @@ export default function CustomersPage() {
 
     return (
       <div key={key} className="space-y-2">
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        {photos.length ? (
-          <div className="flex flex-wrap gap-2">
-            {photos.map((photo, index) => (
-              <div key={photo.url} className="relative">
-                <img
-                  src={photo.url}
-                  alt={`${title} ${index + 1}`}
-                  className={`h-20 rounded-xl border border-border/70 ${isSignature ? 'w-48 bg-white object-contain' : 'w-20 object-cover'}`}
-                />
-                <button
-                  type="button"
-                  aria-label={`Remove ${title} ${index + 1}`}
-                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-destructive"
-                  onClick={() => handleRemoveDocument(key, index)}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">{helper}</p>
-        )}
-        <Input type="file" accept="image/*" multiple={!isSignature} onChange={(event) => handleDocumentFileChange(key, event)} />
-        {!isSignature && photos.length ? <p className="text-xs text-muted-foreground">{photos.length} photo{photos.length > 1 ? 's' : ''} · choose more to add</p> : null}
+        <p className="text-sm font-medium text-foreground">
+          {title}
+          {!isSignature ? <span className="font-normal text-muted-foreground"> (multiple photos)</span> : null}
+        </p>
+        <p className="text-xs text-muted-foreground">{helper}</p>
+        <div className="flex flex-wrap gap-2">
+          {photos.map((photo, index) => (
+            <div key={photo.url} className="relative">
+              <img
+                src={photo.url}
+                alt={`${title} ${index + 1}`}
+                className={`h-20 rounded-xl border border-border/70 ${isSignature ? 'w-48 bg-white object-contain' : 'w-20 object-cover'}`}
+              />
+              <button
+                type="button"
+                aria-label={`Remove ${title} ${index + 1}`}
+                className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:text-destructive"
+                onClick={() => handleRemoveDocument(key, index)}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          <label
+            className={`flex h-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border bg-muted/30 px-2 text-center text-xs text-muted-foreground transition hover:border-primary hover:text-primary focus-within:border-primary ${isSignature && photos.length ? 'w-24' : 'w-20'}`}
+          >
+            <ImagePlus className="h-5 w-5" />
+            <span>{isSignature ? (photos.length ? 'Replace' : 'Add') : photos.length ? 'Add more' : 'Add photos'}</span>
+            <input
+              type="file"
+              accept="image/*"
+              multiple={!isSignature}
+              className="sr-only"
+              onChange={(event) => handleDocumentFileChange(key, event)}
+            />
+          </label>
+        </div>
+        {!isSignature && photos.length ? (
+          <p className="text-xs text-muted-foreground">
+            {photos.length} photo{photos.length > 1 ? 's' : ''} added
+          </p>
+        ) : null}
       </div>
     )
   }

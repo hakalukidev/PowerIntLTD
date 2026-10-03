@@ -2,11 +2,13 @@
 
 import Image from 'next/image'
 import { useMemo, useState, type FormEvent } from 'react'
-import { ArrowLeft, Eye, FileText, MapPinned, Plus, Printer, Trash2 } from 'lucide-react'
+import { ArrowLeft, BellRing, Eye, FileImage, FileText, MapPinned, Plus, Printer, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { CommitmentsPanel, sortedCommitments } from '@/components/admin/credit-sheet/CommitmentsPanel'
-import { brandedDocument, downloadDocumentPdf, downloadSheetPdf, openPrintWindow, type SheetPdfTable } from '@/components/admin/credit-sheet/printSheet'
+import { brandedDocument, downloadDocumentJpg, downloadDocumentPdf, downloadSheetPdf, openPrintWindow, type SheetPdfTable } from '@/components/admin/credit-sheet/printSheet'
+import { buildLedgerDocument, customerDocumentParty, ledgerFileSlug } from '@/components/admin/credit-sheet/ledgerDocument'
+import { PartyNotifyDialog } from '@/components/admin/portal/PartyNotifyDialog'
 import { ZoneManagerDialog } from '@/components/admin/credit-sheet/ZoneManagerDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,8 +24,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
+import { buildCustomerLedger, ledgerTotalsOf, withRunningBalance } from '@/lib/erp/ledger'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
 import {
   customerZoneId,
   customerZoneName,
@@ -33,17 +36,6 @@ import {
   UNASSIGNED_ZONE_NAME,
 } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils/index'
-
-type LedgerRow = {
-  id: string
-  date: string
-  particulars: string
-  qty: number | null
-  unitPrice: number | null
-  debit: number
-  credit: number
-  removable: boolean
-}
 
 type LedgerEntryFormState = {
   date: string
@@ -143,7 +135,7 @@ function SheetBrandHeader({ topLeft, topRight, heading, badge }: { topLeft: stri
 }
 
 export default function CreditSheetPage() {
-  const { data, currentUser, hasPermission, recordCreditLedgerEntry, deleteCreditLedgerEntry } = useERP()
+  const { data, currentUser, hasPermission, recordCreditLedgerEntry, deleteCreditLedgerEntry, changesNeedApproval } = useERP()
   const currency = data?.settings.currency
   const canEdit = hasPermission('credit_sheet.edit')
   const canManageZones = hasPermission('zones.edit')
@@ -170,6 +162,8 @@ export default function CreditSheetPage() {
   const [isSavingEntry, setIsSavingEntry] = useState(false)
   const [ledgerFeedback, setLedgerFeedback] = useState<string | null>(null)
   const [isSavingLedgerPdf, setIsSavingLedgerPdf] = useState(false)
+  const [isSavingLedgerJpg, setIsSavingLedgerJpg] = useState(false)
+  const [notifyOpen, setNotifyOpen] = useState(false)
   const [sheetFeedback, setSheetFeedback] = useState<string | null>(null)
 
   const customerRows = useMemo<SheetRow[]>(() => {
@@ -300,69 +294,11 @@ export default function CreditSheetPage() {
     return zoneCustomers.findIndex((customer) => customer.id === selectedCustomer.id) + 1
   }, [allCustomers, selectedCustomer, zones])
 
-  const ledgerRows = useMemo<LedgerRow[]>(() => {
-    if (!selectedCustomerId) return []
-    const rows: LedgerRow[] = []
-
-    for (const order of orders.filter((entry) => entry.customerId === selectedCustomerId)) {
-      for (const item of order.items) {
-        rows.push({
-          id: `${order.id}-${item.productId}`,
-          date: order.createdAt,
-          particulars: item.productName,
-          qty: item.quantity,
-          unitPrice: item.unitPrice,
-          debit: 0,
-          credit: item.quantity * item.unitPrice,
-          removable: false,
-        })
-      }
-      if (order.paid > 0) {
-        rows.push({
-          id: `${order.id}-payment`,
-          date: order.createdAt,
-          particulars: `Payment received (${order.billNumber})`,
-          qty: null,
-          unitPrice: null,
-          debit: order.paid,
-          credit: 0,
-          removable: false,
-        })
-      }
-    }
-
-    for (const entry of creditLedgerEntries.filter((item) => item.customerId === selectedCustomerId)) {
-      rows.push({
-        id: entry.id,
-        date: entry.date,
-        particulars: entry.particulars,
-        qty: entry.qty || null,
-        unitPrice: entry.unitPrice || null,
-        debit: entry.debit,
-        credit: entry.credit,
-        removable: true,
-      })
-    }
-
-    return rows.sort((left, right) => left.date.localeCompare(right.date))
-  }, [orders, creditLedgerEntries, selectedCustomerId])
-
-  const ledgerWithBalance = useMemo(() => {
-    let balance = 0
-    return ledgerRows.map((row) => {
-      balance += row.credit - row.debit
-      return { ...row, balance }
-    })
-  }, [ledgerRows])
-
-  const ledgerTotals = useMemo(() => {
-    return {
-      qty: ledgerRows.reduce((sum, row) => sum + (row.qty ?? 0), 0),
-      debit: ledgerRows.reduce((sum, row) => sum + row.debit, 0),
-      credit: ledgerRows.reduce((sum, row) => sum + row.credit, 0),
-      balance: ledgerWithBalance.length ? ledgerWithBalance[ledgerWithBalance.length - 1].balance : 0,
-    }
-  }, [ledgerRows, ledgerWithBalance])
+  const ledgerWithBalance = useMemo(
+    () => (selectedCustomerId ? withRunningBalance(buildCustomerLedger(selectedCustomerId, orders, creditLedgerEntries)) : []),
+    [orders, creditLedgerEntries, selectedCustomerId]
+  )
+  const ledgerTotals = useMemo(() => ledgerTotalsOf(ledgerWithBalance), [ledgerWithBalance])
 
   // Export PDF draws the same layout as Print sheet, with selectable text. Sheets with Bangla
   // text use an image of the printed page instead (jsPDF cannot join Bangla letters), with a
@@ -550,6 +486,7 @@ export default function CreditSheetPage() {
       await recordCreditLedgerEntry(input)
       setEntryDialogOpen(false)
       setEntryForm(emptyLedgerEntryForm())
+      if (changesNeedApproval) setLedgerFeedback('The entry was sent to an admin for approval. It shows on the sheet once approved.')
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to save ledger entry.')
     } finally {
@@ -561,6 +498,7 @@ export default function CreditSheetPage() {
     setLedgerFeedback(null)
     try {
       await deleteCreditLedgerEntry(entryId)
+      if (changesNeedApproval) setLedgerFeedback('Removing the entry was sent to an admin for approval.')
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to delete ledger entry.')
     }
@@ -568,23 +506,6 @@ export default function CreditSheetPage() {
 
   function buildLedgerHtml(autoPrint: boolean) {
     if (!selectedCustomer) return null
-
-    const rows = ledgerWithBalance
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(formatDate(row.date))}</td>
-            <td>${escapeHtml(row.particulars)}</td>
-            <td class="numeric">${row.qty ?? ''}</td>
-            <td class="numeric">${row.unitPrice ? formatCurrency(row.unitPrice, currency) : ''}</td>
-            <td class="numeric">${row.debit ? formatCurrency(row.debit, currency) : ''}</td>
-            <td class="numeric">${row.credit ? formatCurrency(row.credit, currency) : ''}</td>
-            <td>${row.balance >= 0 ? 'Cr' : 'Dr'}</td>
-            <td class="numeric">${formatCurrency(Math.abs(row.balance), currency)}</td>
-          </tr>
-        `
-      )
-      .join('')
 
     const commitments = sortedCommitments(selectedCustomer)
     const commitmentsHtml = commitments.length
@@ -612,77 +533,12 @@ export default function CreditSheetPage() {
       `
       : ''
 
-    const address = [selectedCustomer.location, selectedCustomer.thana, selectedCustomer.district].filter(Boolean).join(', ')
-    const bank = selectedCustomer.bankName
-      ? `${selectedCustomer.bankName}${selectedCustomer.branchName ? ` (${selectedCustomer.branchName})` : ''}`
-      : ''
-    const orNA = (value: string | undefined) => escapeHtml(value || 'N/A')
-    const body = `
-      <table class="info">
-        <tr>
-          <td class="label">Account of</td>
-          <td class="center">${orNA(selectedCustomer.name)}</td>
-          <td class="label">Owner Name</td>
-          <td class="center" colspan="3">${orNA(selectedCustomer.company)}</td>
-        </tr>
-        <tr>
-          <td class="label">Add</td>
-          <td>${orNA(address)}</td>
-          <td class="label">Zone</td>
-          <td>${orNA(selectedZoneName)}</td>
-          <td class="label">SL. No.</td>
-          <td class="center">${selectedCustomerSerial}</td>
-        </tr>
-        <tr>
-          <td class="label">Contact No.</td>
-          <td>${orNA(selectedCustomer.phone)}</td>
-          <td class="label">Email</td>
-          <td colspan="3">${orNA(selectedCustomer.email)}</td>
-        </tr>
-        <tr>
-          <td class="label">NID No.</td>
-          <td>${orNA(selectedCustomer.nid)}</td>
-          <td class="label">Trade License</td>
-          <td>${orNA(selectedCustomer.tradeLicenseNo)}</td>
-          <td class="label">Bank</td>
-          <td>${orNA(bank)}</td>
-        </tr>
-      </table>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Particulars</th>
-            <th class="numeric">Qty</th>
-            <th class="numeric">Unit Price</th>
-            <th class="numeric">Debit</th>
-            <th class="numeric">Credit</th>
-            <th>Dr/Cr</th>
-            <th class="numeric">Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-          <tr class="grand">
-            <td colspan="2">Total</td>
-            <td class="numeric">${ledgerTotals.qty}</td>
-            <td></td>
-            <td class="numeric">${formatCurrency(ledgerTotals.debit, currency)}</td>
-            <td class="numeric">${formatCurrency(ledgerTotals.credit, currency)}</td>
-            <td>${ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</td>
-            <td class="numeric">${formatCurrency(Math.abs(ledgerTotals.balance), currency)}</td>
-          </tr>
-        </tbody>
-      </table>
-      ${commitmentsHtml}
-    `
-
-    return brandedDocument({
-      title: `Ledger - ${selectedCustomer.name}`,
-      heading: 'Ledger',
-      badge: 'Index',
-      body,
+    return buildLedgerDocument({
+      party: customerDocumentParty(selectedCustomer, selectedZoneName, selectedCustomerSerial),
+      rows: ledgerWithBalance,
+      totals: ledgerTotals,
+      currency,
+      extraHtml: commitmentsHtml,
       autoPrint,
     })
   }
@@ -702,12 +558,26 @@ export default function CreditSheetPage() {
     setLedgerFeedback(null)
     setIsSavingLedgerPdf(true)
     try {
-      const slug = selectedCustomer.name.trim().replace(/[^\w\u0980-\u09FF]+/g, '-').replace(/^-+|-+$/g, '') || 'dealer'
-      await downloadDocumentPdf(html, `ledger-${slug}.pdf`)
+      await downloadDocumentPdf(html, `ledger-${ledgerFileSlug(selectedCustomer.name)}.pdf`)
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to create the PDF.')
     } finally {
       setIsSavingLedgerPdf(false)
+    }
+  }
+
+  async function handleDownloadLedgerJpg() {
+    const html = buildLedgerHtml(false)
+    if (!html || !selectedCustomer) return
+
+    setLedgerFeedback(null)
+    setIsSavingLedgerJpg(true)
+    try {
+      await downloadDocumentJpg(html, `ledger-${ledgerFileSlug(selectedCustomer.name)}.jpg`)
+    } catch (reason) {
+      setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to create the image.')
+    } finally {
+      setIsSavingLedgerJpg(false)
     }
   }
 
@@ -740,6 +610,23 @@ export default function CreditSheetPage() {
                 <FileText className="mr-1.5 h-4 w-4" />
                 {isSavingLedgerPdf ? 'Preparing PDF...' : 'Download PDF'}
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                onClick={() => void handleDownloadLedgerJpg()}
+                disabled={isSavingLedgerJpg}
+              >
+                <FileImage className="mr-1.5 h-4 w-4" />
+                {isSavingLedgerJpg ? 'Preparing JPG...' : 'Download JPG'}
+              </Button>
+              {canEdit ? (
+                <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => setNotifyOpen(true)}>
+                  <BellRing className="mr-1.5 h-4 w-4" />
+                  Notify dealer
+                </Button>
+              ) : null}
               {canEdit ? (
                 <Button type="button" size="sm" className="rounded-lg" onClick={openEntryDialog}>
                   <Plus className="mr-1.5 h-4 w-4" />
@@ -787,9 +674,9 @@ export default function CreditSheetPage() {
                       <td className={infoLabel}>Contact No.</td>
                       <td className={infoValue}>{selectedCustomer.phone || 'N/A'}</td>
                       <td className={infoLabel}>Email</td>
-                      <td className={infoValue} colSpan={3}>
-                        {selectedCustomer.email || 'N/A'}
-                      </td>
+                      <td className={infoValue}>{selectedCustomer.email || 'N/A'}</td>
+                      <td className={infoLabel}>Client ID</td>
+                      <td className={cn(infoValue, 'text-center')}>{partyCode(selectedCustomer)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -817,6 +704,7 @@ export default function CreditSheetPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
+                      <TableHead>Bill No</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Particulars</TableHead>
                       <TableHead className="text-right">Qty</TableHead>
@@ -831,8 +719,22 @@ export default function CreditSheetPage() {
                   <TableBody>
                     {ledgerWithBalance.map((row) => (
                       <TableRow key={row.id}>
+                        <TableCell className="whitespace-nowrap">{row.billNumber}</TableCell>
                         <TableCell>{formatDate(row.date)}</TableCell>
-                        <TableCell>{row.particulars}</TableCell>
+                        <TableCell>
+                          {row.particulars}
+                          {row.documentUrl ? (
+                            <a
+                              href={row.documentUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ml-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline print:hidden"
+                            >
+                              <FileText className="h-3 w-3" />
+                              Delivery doc
+                            </a>
+                          ) : null}
+                        </TableCell>
                         <TableCell className="text-right">{row.qty ?? ''}</TableCell>
                         <TableCell className="text-right">{row.unitPrice ? formatCurrency(row.unitPrice, currency) : ''}</TableCell>
                         <TableCell className="text-right">{row.debit ? formatCurrency(row.debit, currency) : ''}</TableCell>
@@ -859,7 +761,7 @@ export default function CreditSheetPage() {
                     ))}
                     {ledgerWithBalance.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={canEdit ? 9 : 8} className="h-20 text-center text-muted-foreground">
+                        <TableCell colSpan={canEdit ? 10 : 9} className="h-20 text-center text-muted-foreground">
                           No ledger entries yet.
                         </TableCell>
                       </TableRow>
@@ -868,7 +770,7 @@ export default function CreditSheetPage() {
                   {ledgerWithBalance.length > 0 ? (
                     <TableFooter>
                       <TableRow className="font-semibold">
-                        <TableCell colSpan={2}>Total</TableCell>
+                        <TableCell colSpan={3}>Total</TableCell>
                         <TableCell className="text-right">{ledgerTotals.qty}</TableCell>
                         <TableCell />
                         <TableCell className="text-right">{formatCurrency(ledgerTotals.debit, currency)}</TableCell>
@@ -896,6 +798,8 @@ export default function CreditSheetPage() {
             </CardContent>
           </Card>
         </div>
+
+        <PartyNotifyDialog open={notifyOpen} onOpenChange={setNotifyOpen} partyKind="customer" partyId={selectedCustomer.id} />
 
         <Dialog open={entryDialogOpen} onOpenChange={setEntryDialogOpen}>
           <DialogContent className="max-w-xl">

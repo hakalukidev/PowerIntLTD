@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
+import { InventoryManagersCard } from './InventoryManagersCard'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { QuickCreateSupplierDialog } from './quick-create/QuickCreateSupplierDialog'
 import { QuickCreateWarehouseDialog } from './quick-create/QuickCreateWarehouseDialog'
@@ -33,7 +34,7 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import { formatCurrency, formatDateTime, getProductStatus, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDateTime, getProductStatus, toArray, userRoleIds } from '@/lib/erp/utils'
 import { uploadImageToCloudinary, deleteCloudinaryImage } from '@/lib/cloudinary'
 
 const SUPPLIER_NONE = '__none__'
@@ -179,6 +180,7 @@ export function StockOverviewScreen() {
     deleteWarehouse,
     recordPurchase,
     loading,
+    currentUser,
   } = useERP()
 
   const products = useMemo(
@@ -243,6 +245,8 @@ export function StockOverviewScreen() {
 
   const deferredSearch = useDeferredValue(search)
   const canManageInventory = hasPermission('inventory.edit')
+  const canDeleteInventory = hasPermission('inventory.delete')
+  const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
   const currency = data?.settings.currency ?? 'BDT'
 
   const filteredProducts = useMemo(() => {
@@ -708,7 +712,7 @@ export function StockOverviewScreen() {
                           <TableCell>{formatCurrency(product.sellingPrice, currency)}</TableCell>
                           <TableCell>{supplier?.name ?? 'Not assigned'}</TableCell>
                           <TableCell>{formatDateTime(product.updatedAt)}</TableCell>
-                          <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button><Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button></div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
+                          <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
                         </TableRow>
                       )
                     }) : activeInventoryView === 'warehouses' ? warehouseSummaries.map((warehouse) => (
@@ -718,7 +722,7 @@ export function StockOverviewScreen() {
                         <TableCell>{warehouse.productCount}</TableCell>
                         <TableCell>{warehouse.unitCount}</TableCell>
                         <TableCell>{warehouse.lowStockCount}</TableCell>
-                        <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditWarehouseDialog(warehouse.id)}>Edit</Button><Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteWarehouse(warehouse.id)} disabled={busyWarehouseId === warehouse.id}>Delete</Button></div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
+                        <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditWarehouseDialog(warehouse.id)}>Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteWarehouse(warehouse.id)} disabled={busyWarehouseId === warehouse.id}>Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
                       </TableRow>
                     )) : activeInventoryView === 'low-stock' ? lowStockProducts.map((product) => {
                       const warehouse = data?.warehouses[product.warehouseId]
@@ -835,6 +839,7 @@ export function StockOverviewScreen() {
           </DialogContent>
         </Dialog>
 
+        {isAdmin ? <InventoryManagersCard /> : null}
         {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading inventory...</CardContent></Card> : null}
       </div>
 

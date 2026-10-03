@@ -51,15 +51,21 @@ export async function requireSignedIn(request: Request) {
  */
 export async function requirePermission(request: Request, permission: string) {
   const { uid, db, caller } = await requireSignedIn(request)
-
-  // Resolved the same way as in the app: built-in roles, legacy permission ids, admin = everything,
-  // and a user with several approved roles gets what all of them grant.
-  const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
-  const permissions = effectiveRole(roles, caller)?.permissions ?? []
+  const permissions = await callerPermissions(db, caller)
 
   if (!permissions.includes(permission)) {
     throw new AuthorizationError('You do not have permission to do that.', 403)
   }
 
   return { uid, db, isAdmin: caller.roleId === 'admin' }
+}
+
+/**
+ * Everything the caller's roles grant, resolved the same way as in the app: built-in roles,
+ * legacy permission ids, admin = everything, and a user with several approved roles gets what
+ * all of them grant.
+ */
+export async function callerPermissions(db: ReturnType<typeof getAdminDatabase>, caller: UserRecord) {
+  const roles = resolveRoles((await db.ref('erp/roles').get()).val() as Record<string, RoleRecord> | null)
+  return effectiveRole(roles, caller)?.permissions ?? []
 }

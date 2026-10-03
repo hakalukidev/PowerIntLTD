@@ -27,7 +27,7 @@ export function QuickCreateSupplierDialog({
   initialName = '',
   onCreated,
 }: QuickCreateSupplierDialogProps) {
-  const { saveSupplier } = useERP()
+  const { saveSupplier, changesNeedApproval } = useERP()
   const [name, setName] = useState(initialName)
   const [phone, setPhone] = useState('')
   const [company, setCompany] = useState('')
@@ -50,7 +50,8 @@ export function QuickCreateSupplierDialog({
 
     try {
       const supplierId = await saveSupplier({ name, phone, company })
-      onCreated(supplierId)
+      // A new supplier waiting for approval has no record to pick yet.
+      if (supplierId) onCreated(supplierId)
       onOpenChange(false)
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to save supplier.')
@@ -94,6 +95,9 @@ export function QuickCreateSupplierDialog({
             <Input value={company} onChange={(event) => setCompany(event.target.value)} placeholder="e.g. Guangzhou Lift Co. Ltd." />
           </div>
           {feedback ? <p className="text-sm text-destructive">{feedback}</p> : null}
+          {changesNeedApproval ? (
+            <p className="text-sm text-muted-foreground">The new supplier is sent to an admin for approval and can be picked once approved.</p>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

@@ -25,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, getExpenseCategories, isApprovedExpense, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function dateInputValue(date = new Date()) {
@@ -82,7 +82,7 @@ function SectionHeader({
 }
 
 export default function FinancePage() {
-  const { data, saveExpense, deleteExpense } = useERP()
+  const { data, saveExpense, deleteExpense, changesNeedApproval } = useERP()
   const [mode, setMode] = useState<'daily' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState(dateInputValue())
   const [selectedMonth, setSelectedMonth] = useState(monthInputValue())
@@ -98,15 +98,18 @@ export default function FinancePage() {
     [data?.purchases]
   )
   const expenses = useMemo(
-    () => toArray(data?.expenses).sort((left, right) => right.date.localeCompare(left.date)),
+    () => toArray(data?.expenses).filter(isApprovedExpense).sort((left, right) => right.date.localeCompare(left.date)),
     [data?.expenses]
   )
   const { customers } = useZoneAccess()
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const currency = data?.settings.currency
   const expenseCategories = useMemo(
-    () => Array.from(new Set(expenses.map((expense) => expense.category).filter(Boolean))).sort(),
-    [expenses]
+    () =>
+      Array.from(
+        new Set([...getExpenseCategories(data?.settings.expenseCategories), ...expenses.map((expense) => expense.category).filter(Boolean)])
+      ),
+    [data?.settings.expenseCategories, expenses]
   )
 
   const filteredExpenses = useMemo(() => {
@@ -133,7 +136,7 @@ export default function FinancePage() {
       }
       await saveExpense(input)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
-      setFeedback('Expense recorded.')
+      setFeedback(changesNeedApproval ? 'Expense sent to an admin for approval.' : 'Expense recorded.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record expense.')
     }
@@ -144,7 +147,7 @@ export default function FinancePage() {
 
     try {
       await deleteExpense(expenseId)
-      setFeedback('Expense removed.')
+      setFeedback(changesNeedApproval ? 'Removing the expense was sent to an admin for approval.' : 'Expense removed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete expense.')
     }

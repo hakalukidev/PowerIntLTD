@@ -46,6 +46,7 @@ export default function SalesTargetPage() {
   const [saleEmployeeId, setSaleEmployeeId] = useState('')
   const [units, setUnits] = useState('0')
   const [amount, setAmount] = useState('0')
+  const [collected, setCollected] = useState('0')
   const [note, setNote] = useState('')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -59,11 +60,12 @@ export default function SalesTargetPage() {
         const amountTarget = target?.amountTarget ?? employee.monthlyAmountTarget
         const unitsSold = target?.unitsSold ?? 0
         const amountSold = target?.amountSold ?? 0
+        const amountCollected = target?.amountCollected ?? 0
         const achievement = getTargetAchievement({ unitsSold, unitTarget, amountSold, amountTarget })
         const commissionAmount = computeCommission(unitsSold, employee.commissionPerUnit)
         const onTrack = achievement.achievementPercent >= TARGET_ACHIEVEMENT_HOLD_THRESHOLD
 
-        return { employee, unitTarget, amountTarget, unitsSold, amountSold, achievement, commissionAmount, onTrack }
+        return { employee, unitTarget, amountTarget, unitsSold, amountSold, amountCollected, achievement, commissionAmount, onTrack }
       })
       .sort((left, right) => right.achievement.achievementPercent - left.achievement.achievementPercent)
   }, [employees, salesTargets, selectedMonth])
@@ -88,6 +90,7 @@ export default function SalesTargetPage() {
     setSaleEmployeeId(employeeId)
     setUnits('0')
     setAmount('0')
+    setCollected('0')
     setNote('')
     setFeedback(null)
     setSaleDialogOpen(true)
@@ -104,6 +107,7 @@ export default function SalesTargetPage() {
         month: selectedMonth,
         units: Number(units) || 0,
         amount: Number(amount) || 0,
+        collected: Number(collected) || 0,
         note,
       })
       setSaleDialogOpen(false)
@@ -139,9 +143,9 @@ export default function SalesTargetPage() {
         <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Active sales staff', metrics.employees.toLocaleString('en-BD'), 'Tracked against this month’s target'],
-            ['On track (≥80%)', metrics.onTrack.toLocaleString('en-BD'), 'Salary hold released'],
-            ['Below target', metrics.belowTarget.toLocaleString('en-BD'), 'Salary hold risk'],
-            ['Commission this month', formatCurrency(metrics.totalCommission, currency), 'BDT per unit sold, summed'],
+            ['On track (≥80%)', metrics.onTrack.toLocaleString('en-BD'), 'Commission payable'],
+            ['Below target', metrics.belowTarget.toLocaleString('en-BD'), 'No commission unless owner authorizes'],
+            ['Commission earned', formatCurrency(metrics.totalCommission, currency), 'Before the collection and target rules'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
               <CardContent className="p-4 sm:p-5">
@@ -160,7 +164,7 @@ export default function SalesTargetPage() {
         ) : null}
 
         <div className="grid gap-4 xl:grid-cols-2">
-          {rows.map(({ employee, unitTarget, amountTarget, unitsSold, amountSold, achievement, commissionAmount, onTrack }) => (
+          {rows.map(({ employee, unitTarget, amountTarget, unitsSold, amountSold, amountCollected, achievement, commissionAmount, onTrack }) => (
             <Card key={employee.id} className="border-border/70 shadow-sm">
               <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0">
                 <div>
@@ -206,6 +210,15 @@ export default function SalesTargetPage() {
                     <p className="font-semibold">{formatCurrency(amountSold, currency)}</p>
                     <p className="text-xs text-muted-foreground">of {formatCurrency(amountTarget, currency)}</p>
                   </div>
+                  <div className="col-span-2 rounded-xl border border-border/70 bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">Due collected from credit sales</p>
+                    <p className="font-semibold">
+                      {formatCurrency(amountCollected, currency)}
+                      {amountSold > 0 ? (
+                        <span className="font-normal text-muted-foreground"> · {Math.min((amountCollected / amountSold) * 100, 100).toFixed(1)}% of sales</span>
+                      ) : null}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between rounded-xl border border-border/70 p-3">
@@ -219,7 +232,7 @@ export default function SalesTargetPage() {
                 {canManage ? (
                   <Button variant="outline" className="w-full rounded-xl" onClick={() => openSaleDialog(employee.id)}>
                     <Plus className="mr-2 h-4 w-4" />
-                    Record sale
+                    Record sale / collection
                   </Button>
                 ) : null}
               </CardContent>
@@ -241,17 +254,22 @@ export default function SalesTargetPage() {
           <DialogHeader>
             <DialogTitle>Record sale</DialogTitle>
             <DialogDescription>
-              Adds to {formatMonthLabel(selectedMonth)}&apos;s running total for this employee. Commission and hold status update immediately.
+              Adds to {formatMonthLabel(selectedMonth)}&apos;s running totals for this employee. Commission is paid for the share of sales
+              whose due money is collected, so record collections here too.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleRecordSale}>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">Units sold</p>
-              <Input type="number" min="0" value={units} onChange={(event) => setUnits(event.target.value)} required />
+              <Input type="number" min="0" value={units} onChange={(event) => setUnits(event.target.value)} />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">Sales amount (BDT)</p>
               <Input type="number" min="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Due collected (BDT)</p>
+              <Input type="number" min="0" value={collected} onChange={(event) => setCollected(event.target.value)} />
             </div>
             <div className="space-y-2">
               <p className="text-sm font-medium text-foreground">

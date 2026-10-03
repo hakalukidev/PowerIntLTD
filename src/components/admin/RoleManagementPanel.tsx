@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -28,6 +29,7 @@ const initialForm = {
   permissions: [] as string[],
   zoneIds: [] as string[],
   dataScope: 'all' as RoleDataScope,
+  requiresApproval: false,
 }
 
 function groupByCategory(permissions: PermissionDefinition[]) {
@@ -355,6 +357,7 @@ export function RoleManagementPanel() {
       permissions: [...role.permissions],
       zoneIds: [...(role.zoneIds ?? [])],
       dataScope: role.dataScope ?? 'all',
+      requiresApproval: Boolean(role.requiresApproval),
     })
     setMessage(null)
     setError(null)
@@ -499,6 +502,24 @@ export function RoleManagementPanel() {
                       zones or areas assigned to them on the Users tab, and the officers who report to them.
                     </p>
                   </div>
+                ) : null}
+
+                {editingRole?.id !== 'admin' ? (
+                  <label className="flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-border/70 p-3">
+                    <span className="space-y-1">
+                      <span className="block text-sm font-medium text-foreground">Changes need admin approval</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Adding, editing or deleting dealers, suppliers, credit sheet entries and expenses only files a request. Nothing
+                        changes until an admin approves it on the Approvals page. Deposits, payments and expense forms always need
+                        approval.
+                      </span>
+                    </span>
+                    <Switch
+                      checked={form.requiresApproval}
+                      onCheckedChange={(checked) => setForm((current) => ({ ...current, requiresApproval: checked }))}
+                      aria-label="Changes need admin approval"
+                    />
+                  </label>
                 ) : null}
 
                 {editingRole?.id !== 'admin' ? (

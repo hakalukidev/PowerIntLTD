@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { computeSupplierPayables, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const DOCUMENT_FIELDS = [
@@ -49,13 +49,14 @@ function hasBankDetails(supplier: SupplierRecord) {
 }
 
 export default function SupplierCrmPage() {
-  const { data, deleteSupplier, hasPermission } = useERP()
+  const { data, deleteSupplier, hasPermission, changesNeedApproval } = useERP()
   const canEdit = hasPermission('suppliers.edit')
   const canDelete = hasPermission('suppliers.delete')
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const purchases = useMemo(() => toArray(data?.purchases), [data?.purchases])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const currency = data?.settings.currency
+  const payables = useMemo(() => computeSupplierPayables(data), [data])
 
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<SupplierRecord['supplierType'] | 'all'>('all')
@@ -82,12 +83,14 @@ export default function SupplierCrmPage() {
           supplier,
           purchaseCount: supplierPurchases.length,
           purchaseTotal: supplierPurchases.reduce((sum, purchase) => sum + purchase.total, 0),
+          payable: payables[supplier.id]?.payable ?? supplier.openingDue,
+          pendingPayment: payables[supplier.id]?.pendingPayment ?? 0,
           hasHistory,
           complete,
         }
       })
       .sort((left, right) => right.supplier.createdAt.localeCompare(left.supplier.createdAt))
-  }, [products, purchases, suppliers])
+  }, [payables, products, purchases, suppliers])
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -95,7 +98,7 @@ export default function SupplierCrmPage() {
     return rows.filter(({ supplier, complete }) => {
       const matchesSearch =
         !normalizedQuery ||
-        [supplier.name, supplier.company, supplier.phone, supplier.email, supplier.location, supplier.country, supplier.nid, supplier.tradeLicenseNo]
+        [partyCode(supplier), supplier.name, supplier.company, supplier.phone, supplier.email, supplier.location, supplier.country, supplier.nid, supplier.tradeLicenseNo]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
@@ -112,6 +115,7 @@ export default function SupplierCrmPage() {
     () => ({
       total: suppliers.length,
       purchaseTotal: rows.reduce((sum, row) => sum + row.purchaseTotal, 0),
+      payable: rows.reduce((sum, row) => sum + Math.max(row.payable, 0), 0),
       complete: rows.filter((row) => row.complete).length,
     }),
     [rows, suppliers.length]
@@ -137,7 +141,9 @@ export default function SupplierCrmPage() {
 
     try {
       await deleteSupplier(supplier.id)
-      setFeedback(`${supplier.name} removed from supplier list.`)
+      setFeedback(
+        changesNeedApproval ? `Deleting ${supplier.name} was sent to an admin for approval.` : `${supplier.name} removed from supplier list.`
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete supplier.')
     }
@@ -146,10 +152,11 @@ export default function SupplierCrmPage() {
   return (
     <AdminShell active="Suppliers (CRM)">
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
             ['Suppliers', metrics.total.toLocaleString('en-BD'), 'Supplier profiles'],
             ['Total purchase', formatCurrency(metrics.purchaseTotal, currency), 'From purchase history'],
+            ['Total payable', formatCurrency(metrics.payable, currency), 'Opening due + purchases - approved payments'],
             ['Complete profiles', `${metrics.complete} / ${metrics.total}`, 'Bank details and all documents'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
@@ -232,11 +239,12 @@ export default function SupplierCrmPage() {
                     <TableHead>Documents</TableHead>
                     <TableHead>Joined</TableHead>
                     <TableHead>Purchase</TableHead>
+                    <TableHead>Payable</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ supplier, purchaseCount, purchaseTotal, hasHistory, complete }) => {
+                  {filteredRows.map(({ supplier, purchaseCount, purchaseTotal, payable, pendingPayment, hasHistory, complete }) => {
                     const photo = supplier.supplierPhotoUrl || supplier.passportPhotoUrl
                     const documentCount = attachedDocuments(supplier)
 
@@ -250,7 +258,10 @@ export default function SupplierCrmPage() {
                             </Avatar>
                             <div>
                               <p className="font-semibold">{supplier.name}</p>
-                              <p className="text-sm text-muted-foreground">{supplier.company}</p>
+                              <p className="text-sm text-muted-foreground">
+                                <span className="font-mono text-xs">{partyCode(supplier)}</span>
+                                {supplier.company ? ` · ${supplier.company}` : ''}
+                              </p>
                               <Badge variant="outline" className={cn('mt-1 rounded-full text-xs', typeToneClass(supplier.supplierType))}>
                                 {supplierTypeLabels[supplier.supplierType]}
                               </Badge>
@@ -303,6 +314,15 @@ export default function SupplierCrmPage() {
                           <p className="font-medium">{formatCurrency(purchaseTotal, currency)}</p>
                           <p className="text-xs text-muted-foreground">{purchaseCount} purchases</p>
                         </TableCell>
+                        <TableCell className="min-w-32">
+                          <p className={cn('font-medium', payable > 0 && 'text-rose-600 dark:text-rose-400')}>
+                            {formatCurrency(Math.abs(payable), currency)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {payable < 0 ? 'Paid in advance' : payable === 0 ? 'Settled' : 'Due'}
+                            {pendingPayment > 0 ? ` · ${formatCurrency(pendingPayment, currency)} pending` : ''}
+                          </p>
+                        </TableCell>
                         <TableCell>
                           <div className="flex justify-end gap-2">
                             <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => setViewingSupplierId(supplier.id)} aria-label={`View ${supplier.name}`}>
@@ -332,7 +352,7 @@ export default function SupplierCrmPage() {
                   })}
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={8} className="h-28 text-center text-muted-foreground">
                         No suppliers found.
                       </TableCell>
                     </TableRow>

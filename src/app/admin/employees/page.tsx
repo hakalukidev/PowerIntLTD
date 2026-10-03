@@ -1,7 +1,8 @@
 "use client"
 
+import Link from 'next/link'
 import { useMemo, useState, type FormEvent } from 'react'
-import { Briefcase, ClipboardCheck, Edit, MapPin, Phone, Plus, Search, ShieldCheck, Trash2, UserRound } from 'lucide-react'
+import { Briefcase, ClipboardCheck, Edit, Eye, MapPin, Phone, Plus, Search, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import {
@@ -44,6 +45,8 @@ import {
 } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
+const NO_LOGIN = 'none'
+
 function employmentToneClass(status: EmploymentStatus) {
   if (status === 'resigned') {
     return 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300'
@@ -61,6 +64,7 @@ export default function EmployeesPage() {
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])
   const zones = useMemo(() => toArray(data?.zones).sort((left, right) => left.name.localeCompare(right.name)), [data?.zones])
   const currency = data?.settings.currency
+  const users = useMemo(() => toArray(data?.users).sort((left, right) => left.name.localeCompare(right.name)), [data?.users])
 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'probation' | 'confirmed' | 'rejected'>('all')
@@ -91,7 +95,7 @@ export default function EmployeesPage() {
     return rows.filter(({ employee, probation }) => {
       const matchesSearch =
         !normalizedQuery ||
-        [employee.name, employee.designation, employee.phone, employee.address, employee.area, zoneNames.get(employee.zoneId) ?? '']
+        [employee.name, employee.employeeCode ?? '', employee.designation, employee.phone, employee.address, employee.area, zoneNames.get(employee.zoneId) ?? '']
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
@@ -152,10 +156,12 @@ export default function EmployeesPage() {
             houseRent: salaryBased ? Number(employeeForm.houseRent) : 0,
             mobileBill: salaryBased ? Number(employeeForm.mobileBill) : 0,
             commissionPerUnit: Number(employeeForm.commissionPerUnit),
+            daPerDay: Number(employeeForm.daPerDay),
             monthlyUnitTarget: Number(employeeForm.monthlyUnitTarget),
             monthlyAmountTarget: Number(employeeForm.monthlyAmountTarget),
           }
         : {}),
+      ...(isAdmin ? { userId: employeeForm.userId } : {}),
     }
 
     try {
@@ -271,7 +277,12 @@ export default function EmployeesPage() {
                             <UserRound className="h-4 w-4 text-muted-foreground" />
                           </span>
                           <div>
-                            <p className="font-semibold">{employee.name}</p>
+                            <Link href={`/admin/employees/${employee.id}`} className="font-semibold hover:underline">
+                              {employee.name}
+                            </Link>
+                            {employee.employeeCode ? (
+                              <p className="font-mono text-xs text-muted-foreground">{employee.employeeCode}</p>
+                            ) : null}
                             <p className="flex items-center gap-1 text-sm text-muted-foreground">
                               <Briefcase className="h-3.5 w-3.5" />
                               {employee.designation}
@@ -350,6 +361,11 @@ export default function EmployeesPage() {
                                 Review
                               </Button>
                             ) : null}
+                            <Button asChild variant="outline" size="icon" className="h-9 w-9" aria-label={`View ${employee.name}'s profile`}>
+                              <Link href={`/admin/employees/${employee.id}`}>
+                                <Eye className="h-4 w-4" />
+                              </Link>
+                            </Button>
                             <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(employee)} aria-label={`Edit ${employee.name}`}>
                               <Edit className="h-4 w-4" />
                             </Button>
@@ -419,6 +435,9 @@ export default function EmployeesPage() {
                   <FormField label="Commission per unit">
                     <Input type="number" min="0" value={employeeForm.commissionPerUnit} onChange={(event) => setField('commissionPerUnit', event.target.value)} />
                   </FormField>
+                  <FormField label="DA per present day">
+                    <Input type="number" min="0" value={employeeForm.daPerDay} onChange={(event) => setField('daPerDay', event.target.value)} />
+                  </FormField>
                   <FormField label="Probation (months)">
                     <Input type="number" min="0" value={employeeForm.probationMonths} onChange={(event) => setField('probationMonths', event.target.value)} />
                   </FormField>
@@ -433,6 +452,21 @@ export default function EmployeesPage() {
                   An employee hits target by reaching either the unit count or the amount — whichever comes first.
                 </p>
               </div>
+            ) : null}
+
+            {isAdmin ? (
+              <FormField label="Linked login" optional>
+                <Select value={employeeForm.userId || NO_LOGIN} onValueChange={(value) => setField('userId', value === NO_LOGIN ? '' : value)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_LOGIN}>No login linked</SelectItem>
+                    {users.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>{user.name} ({user.loginId})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">The employee sees their own profile, pay, and clients under My Profile with this login.</p>
+              </FormField>
             ) : null}
 
             <FormField label="Notes" optional>

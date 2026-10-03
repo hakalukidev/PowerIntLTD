@@ -58,7 +58,7 @@ function buildPermissionCatalog(): Record<string, PermissionDefinition> {
   const groups: Array<[string, ModuleActionConfig]> = [
     ['dashboard', { category: 'Dashboard', noun: 'the dashboard', actions: ['view'] }],
     ['sales', { category: 'Sales Management', noun: 'sales orders and billing' }],
-    ['inventory', { category: 'Inventory Management', noun: 'products and stock' }],
+    ['inventory', { category: 'Inventory Management', noun: 'products, stock and warehouses' }],
     ['suppliers', { category: 'Supplier Management', noun: 'suppliers and imports' }],
     ['customers', { category: 'Customer Management', noun: 'customers (CRM)' }],
     ['credit_sheet', { category: 'Customer Management', noun: 'the credit sheet' }],
@@ -72,6 +72,7 @@ function buildPermissionCatalog(): Record<string, PermissionDefinition> {
     ['employees', { category: 'Employee Management', noun: 'employee profiles' }],
     ['sales_target', { category: 'Sales & Target Management', noun: 'sales targets', actions: ['view', 'edit'] }],
     ['salary', { category: 'Salary & Commission', noun: 'salary and commission payouts', actions: ['view', 'edit'] }],
+    ['attendance', { category: 'Employee Management', noun: 'daily attendance and DA', actions: ['view', 'edit'] }],
     ['users', { category: 'User & Role Management', noun: 'users' }],
     ['roles', { category: 'User & Role Management', noun: 'roles and permissions' }],
   ]
@@ -115,8 +116,8 @@ export function createDefaultERPData(): ERPData {
       },
       store_manager: {
         id: 'store_manager',
-        name: 'Store Manager',
-        description: 'Handles stock, warehouse, and replenishment operations.',
+        name: 'Inventory & Stock Manager',
+        description: 'Runs inventory and stock: products, warehouses, receiving purchases, damage products, and replenishment.',
         permissions: [
           ...permissionIds('dashboard'),
           ...permissionIds('inventory'),
@@ -183,20 +184,23 @@ export function createDefaultERPData(): ERPData {
       accountant: {
         id: 'accountant',
         name: 'Accountant',
-        description: 'Sees every customer, employee, and supplier, plus the accounts.',
+        description:
+          'Enters deposits, payments and expenses, and can edit and delete every dealer (suppliers optional). Every change waits for an admin to approve it.',
         permissions: [
           ...permissionIds('dashboard'),
           ...permissionIds('reports'),
           ...permissionIds('finance'),
           ...permissionIds('credit_sheet'),
-          'customers.view',
+          ...permissionIds('customers'),
           'suppliers.view',
           'sellers.view',
           'employees.view',
           ...permissionIds('sales_target'),
           ...permissionIds('salary'),
+          'attendance.view',
         ],
         dataScope: 'all',
+        requiresApproval: true,
       },
       zone_manager: {
         id: 'zone_manager',
@@ -373,6 +377,7 @@ export function createDefaultERPData(): ERPData {
         currency: 'BDT',
         notes: 'Winter collection shipment under LC.',
         suppliedProducts: [],
+        openingDue: 0,
         bankAccountName: '',
         bankAccountNumber: '',
         bankName: '',
@@ -418,6 +423,7 @@ export function createDefaultERPData(): ERPData {
         currency: 'BDT',
         notes: 'Handles port release and local transport.',
         suppliedProducts: [],
+        openingDue: 0,
         bankAccountName: '',
         bankAccountNumber: '',
         bankName: '',
@@ -463,6 +469,7 @@ export function createDefaultERPData(): ERPData {
         currency: 'BDT',
         notes: 'Local fabric and ready-goods supplier.',
         suppliedProducts: [],
+        openingDue: 0,
         bankAccountName: '',
         bankAccountNumber: '',
         bankName: '',
@@ -944,6 +951,7 @@ export function createDefaultERPData(): ERPData {
           employmentStatus: 'active' as const,
           baseSalary: 18000,
           taDa: 0,
+          daPerDay: 0,
           houseRent: 0,
           mobileBill: 0,
           monthlyUnitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
@@ -977,6 +985,7 @@ export function createDefaultERPData(): ERPData {
           employmentStatus: 'active' as const,
           baseSalary: 15000,
           taDa: 0,
+          daPerDay: 0,
           houseRent: 0,
           mobileBill: 0,
           monthlyUnitTarget: DEFAULT_MONTHLY_UNIT_TARGET,
@@ -1098,6 +1107,7 @@ export function createDefaultERPData(): ERPData {
 
       return salaries
     })(),
+    depots: {},
     sellers: {
       sel_kamal: {
         id: 'sel_kamal',
@@ -1148,6 +1158,22 @@ export function createDefaultERPData(): ERPData {
     },
     zones: {},
     creditLedgerEntries: {},
+    deposits: {},
+    complaints: {},
+    replacements: {},
+    replacementReturns: {},
+    bankAccounts: {},
+    supplierPayments: {},
+    orderRequests: {},
+    changeRequests: {},
+    employeeAdvances: {},
+    commissionAuthorizations: {},
+    advanceRequests: {},
+    batteryReports: {},
+    businesses: {},
+    businessEntries: {},
+    auditLog: {},
+    attendance: {},
     couriers: {
       cour_1001: {
         id: 'cour_1001',
@@ -1210,6 +1236,8 @@ export function createDefaultERPData(): ERPData {
       companyName: 'Power International BD',
       currency: 'BDT',
       timezone: 'Asia/Dhaka',
+      depositMethods: ['Cash', 'UCB', 'IBBL', 'DBBL'],
+      expenseCategories: [],
     },
     meta: {
       seededAt,

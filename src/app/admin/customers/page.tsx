@@ -26,7 +26,7 @@ import { useERP } from '@/lib/erp/provider'
 import type { CustomerCommitment, CustomerInput, CustomerRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { customerZoneId, subZoneKey, subZoneKeyFor, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME, zoneSubZones } from '@/lib/erp/zones'
-import { escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatCurrency, formatDate, partyCode, toArray } from '@/lib/erp/utils'
 
 const CUSTOMER_DOCUMENT_FOLDER = 'customers'
 
@@ -180,7 +180,9 @@ function withFallbackOption(options: string[], current: string): string[] {
 }
 
 export default function CustomersPage() {
-  const { data, saveCustomer, deleteCustomer, saveCustomerCommitment, deleteCustomerCommitment } = useERP()
+  const { data, saveCustomer, deleteCustomer, saveCustomerCommitment, deleteCustomerCommitment, changesNeedApproval, hasPermission } = useERP()
+  const canEdit = hasPermission('customers.edit')
+  const canDelete = hasPermission('customers.delete')
   const currency = data?.settings.currency
   // Zone managers and zone-limited roles only see the dealers of their zones.
   const { zones, zoneOptions, visibleZoneIds, customers } = useZoneAccess()
@@ -259,7 +261,7 @@ export default function CustomersPage() {
     return customerRows.filter(({ customer, hasOrders, purchaseTotal }) => {
       const matchesSearch =
         !normalizedQuery ||
-        [customer.name, customer.company, customer.phone, customer.location]
+        [partyCode(customer), customer.name, customer.company, customer.phone, customer.location]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
@@ -416,13 +418,22 @@ export default function CustomersPage() {
 
       await saveCustomer(input, editingCustomer?.id)
 
-      await Promise.all(deletions.map((publicId) => deleteCloudinaryImage(publicId).catch(() => undefined)))
+      // A change waiting for approval still needs the files the dealer has now.
+      if (!changesNeedApproval) {
+        await Promise.all(deletions.map((publicId) => deleteCloudinaryImage(publicId).catch(() => undefined)))
+      }
 
       setDialogOpen(false)
       setCustomerForm(emptyCustomerForm)
       setDocumentUploads(emptyDocumentUploads())
       setEditingCustomer(null)
-      setFeedback(editingCustomer ? 'Dealer details updated.' : 'New dealer added.')
+      setFeedback(
+        changesNeedApproval
+          ? `${editingCustomer ? 'Dealer changes' : 'New dealer'} sent to an admin for approval.`
+          : editingCustomer
+            ? 'Dealer details updated.'
+            : 'New dealer added.'
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to save dealer.')
     } finally {
@@ -435,7 +446,9 @@ export default function CustomersPage() {
 
     try {
       await deleteCustomer(customer.id)
-      setFeedback(`${customer.name} removed from dealer list.`)
+      setFeedback(
+        changesNeedApproval ? `Deleting ${customer.name} was sent to an admin for approval.` : `${customer.name} removed from dealer list.`
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete dealer.')
     }
@@ -793,17 +806,19 @@ export default function CustomersPage() {
           <Button type="button" variant="outline" className="rounded-xl" onClick={() => setViewingCustomerId(null)}>
             Close
           </Button>
-          <Button
-            type="button"
-            className="rounded-xl"
-            onClick={() => {
-              setViewingCustomerId(null)
-              openEditDialog(customer)
-            }}
-          >
-            <Edit className="mr-1.5 h-4 w-4" />
-            Edit
-          </Button>
+          {canEdit ? (
+            <Button
+              type="button"
+              className="rounded-xl"
+              onClick={() => {
+                setViewingCustomerId(null)
+                openEditDialog(customer)
+              }}
+            >
+              <Edit className="mr-1.5 h-4 w-4" />
+              Edit
+            </Button>
+          ) : null}
         </div>
       </div>
     )
@@ -1076,10 +1091,12 @@ export default function CustomersPage() {
                 <BellRing className="mr-2 h-4 w-4" />
                 Reminder dealers
               </Button>
-              <Button onClick={openCreateDialog} className="h-10 rounded-xl">
-                <Plus className="mr-2 h-4 w-4" />
-                Add dealer
-              </Button>
+              {canEdit ? (
+                <Button onClick={openCreateDialog} className="h-10 rounded-xl">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add dealer
+                </Button>
+              ) : null}
             </div>
           </CardHeader>
           <CardContent>
@@ -1184,7 +1201,9 @@ export default function CustomersPage() {
                           </Avatar>
                           <div>
                             <p className="font-semibold">{customer.name}</p>
-                            <p className="text-sm text-muted-foreground">{customer.company || 'Retail'}</p>
+                            <p className="text-sm text-muted-foreground">
+                              <span className="font-mono text-xs">{partyCode(customer)}</span> · {customer.company || 'Retail'}
+                            </p>
                             <div className="mt-1 flex flex-wrap gap-1.5">
                               <Badge variant="outline" className="text-xs font-normal">
                                 {customer.leadSource === 'facebook' ? 'From Facebook' : 'From Local Marketing'}
@@ -1250,19 +1269,23 @@ export default function CustomersPage() {
                           >
                             <Handshake className="h-4 w-4" />
                           </Button>
-                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(customer)} aria-label={`Edit ${customer.name}`}>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9 text-destructive hover:text-destructive"
-                            onClick={() => void handleDelete(customer)}
-                            disabled={hasOrders}
-                            aria-label={`Delete ${customer.name}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canEdit ? (
+                            <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(customer)} aria-label={`Edit ${customer.name}`}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                          {canDelete ? (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9 text-destructive hover:text-destructive"
+                              onClick={() => void handleDelete(customer)}
+                              disabled={hasOrders}
+                              aria-label={`Delete ${customer.name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>

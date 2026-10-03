@@ -6,14 +6,27 @@ import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Banknote,
+  BatteryCharging,
   Bell,
   Boxes,
+  Briefcase,
+  CalendarCheck,
   CheckCheck,
+  ClipboardCheck,
   ClipboardList,
+  BookCheck,
+  FileCheck2,
+  ClipboardPen,
+  Receipt,
   Factory,
   FileSpreadsheet,
+  Globe,
+  HandCoins,
+  IdCard,
+  MessageSquareWarning,
   Handshake,
   KeyRound,
+  Landmark,
   LayoutDashboard,
   Lock,
   LogOut,
@@ -22,14 +35,19 @@ import {
   PackageCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  RefreshCcw,
+  Undo2,
+  Send,
   ShieldCheck,
   Store,
+  Tags,
   ShoppingCart,
   Target,
   Truck,
   UserPlus,
   UserRound,
   Users,
+  Warehouse,
   Wallet,
 } from 'lucide-react'
 
@@ -58,6 +76,7 @@ type NavigationItem = {
   description: string
   href: string
   icon: typeof LayoutDashboard
+  /** Empty: every signed-in user sees it. */
   permission: string
 }
 
@@ -78,10 +97,38 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'dashboard.view',
       },
       {
+        label: 'Approvals',
+        description: 'Confirm orders, deposits, payments and expenses; daily closing and delivery reports',
+        href: '/admin/approvals',
+        icon: ClipboardCheck,
+        permission: 'finance.view',
+      },
+      {
         label: 'Sales & Billing',
         description: 'POS, invoices, returns, and due tracking',
         href: '/admin/sales',
         icon: ShoppingCart,
+        permission: 'sales.view',
+      },
+      {
+        label: 'Order Form',
+        description: 'New dealer order with credit check, zone pricing, and courier',
+        href: '/admin/order-form',
+        icon: ClipboardPen,
+        permission: 'sales.view',
+      },
+      {
+        label: 'Price List',
+        description: 'Change prices for one dealer, one zone (leaving dealers out), or every dealer',
+        href: '/admin/price-list',
+        icon: Tags,
+        permission: 'sales.view',
+      },
+      {
+        label: 'Delivery',
+        description: 'Post approved orders with warehouse, delivery man and courier; submit the delivery document',
+        href: '/admin/delivery',
+        icon: PackageCheck,
         permission: 'sales.view',
       },
       {
@@ -106,10 +153,24 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'suppliers.view',
       },
       {
+        label: 'Payment Form',
+        description: 'Supplier payments by bank or cash, sent to an admin for approval',
+        href: '/admin/supplier-payment',
+        icon: Send,
+        permission: 'suppliers.view',
+      },
+      {
         label: 'Dealers (CRM)',
         description: 'Dealer history, support, and credit tracking',
         href: '/admin/customers',
         icon: Users,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Depot',
+        description: 'Depots, their dealers, depot prices, and deliveries',
+        href: '/admin/depot',
+        icon: Warehouse,
         permission: 'customers.view',
       },
       {
@@ -125,6 +186,55 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/credit-sheet',
         icon: ClipboardList,
         permission: 'credit_sheet.view',
+      },
+      {
+        label: 'Dealer Portal',
+        description: 'Dealer and supplier logins, reminders, and statements',
+        href: '/admin/portal-access',
+        icon: Globe,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Deposit Form',
+        description: 'Dealer payments sent to an admin for approval',
+        href: '/admin/deposit',
+        icon: HandCoins,
+        permission: 'credit_sheet.view',
+      },
+      {
+        label: 'Complain Form',
+        description: 'Product complaints from SRs and customers, sent for approval',
+        href: '/admin/complaint',
+        icon: MessageSquareWarning,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Replacement Form',
+        description: 'Faulty product replacements raised by SRs, sent for approval',
+        href: '/admin/replacement',
+        icon: RefreshCcw,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Replacement Return',
+        description: 'Replaced products returned by dealers, sent for approval',
+        href: '/admin/replacement-return',
+        icon: Undo2,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Replacement Sheet',
+        description: 'Replaced, returned and still-returnable pieces per dealer',
+        href: '/admin/replacement-sheet',
+        icon: ClipboardList,
+        permission: 'customers.view',
+      },
+      {
+        label: 'Battery Check Report',
+        description: 'Bench test readings, fault, warranty and decision for checked batteries',
+        href: '/admin/battery-report',
+        icon: BatteryCharging,
+        permission: 'customers.view',
       },
       {
         label: 'Seller List',
@@ -155,6 +265,27 @@ const navigationGroups: NavigationGroup[] = [
         permission: 'finance.view',
       },
       {
+        label: 'Expense Form',
+        description: 'Staff expenses with a receipt, sent to an admin for approval',
+        href: '/admin/expense',
+        icon: Receipt,
+        permission: 'finance.view',
+      },
+      {
+        label: 'Bank Accounts',
+        description: 'Sender and receiver bank accounts used on the payment form',
+        href: '/admin/bank-accounts',
+        icon: Landmark,
+        permission: 'finance.view',
+      },
+      {
+        label: 'Sub Businesses',
+        description: 'Separate books and balance sheet (stock, cash, deposits, payments, expenses)',
+        href: '/admin/sub-business',
+        icon: Briefcase,
+        permission: 'finance.view',
+      },
+      {
         label: 'Reports',
         description: 'Sales, stock, returns, and warranty reports',
         href: '/admin/reports',
@@ -164,8 +295,34 @@ const navigationGroups: NavigationGroup[] = [
     ],
   },
   {
+    title: 'Audit',
+    items: [
+      {
+        label: 'Daily Audit',
+        description: 'Everything approved or rejected each day, with who submitted and edited it',
+        href: '/admin/audit/daily',
+        icon: BookCheck,
+        permission: 'finance.view',
+      },
+      {
+        label: 'Monthly Audit',
+        description: 'Approved reports and submitted deliveries for a month, with a day-by-day breakdown',
+        href: '/admin/audit/monthly',
+        icon: FileCheck2,
+        permission: 'finance.view',
+      },
+    ],
+  },
+  {
     title: 'HR & Payroll',
     items: [
+      {
+        label: 'My Profile',
+        description: 'Your pay, target, commission, advances, and clients',
+        href: '/admin/my-profile',
+        icon: IdCard,
+        permission: '',
+      },
       {
         label: 'Employee Management',
         description: 'Profiles, joining date, and probation/confirmation status',
@@ -179,6 +336,13 @@ const navigationGroups: NavigationGroup[] = [
         href: '/admin/employees/joining',
         icon: UserPlus,
         permission: 'employees.view',
+      },
+      {
+        label: 'Attendance',
+        description: 'Daily present/absent sheet and the DA it earns',
+        href: '/admin/attendance',
+        icon: CalendarCheck,
+        permission: 'attendance.view',
       },
       {
         label: 'Sales & Target',
@@ -243,7 +407,7 @@ function SidebarContent({
   const visibleGroups = navigationGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => hasPermission(item.permission)),
+      items: group.items.filter((item) => !item.permission || hasPermission(item.permission)),
     }))
     .filter((group) => group.items.length > 0)
 
@@ -648,7 +812,7 @@ export function AdminShell({ active, children }: AdminShellProps) {
 
           <main className="flex-1 px-3 pb-24 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pb-8">
             <div className="mx-auto w-full max-w-7xl">
-              {hasPermission(currentPage.permission) ? (
+              {!currentPage.permission || hasPermission(currentPage.permission) ? (
                 children
               ) : (
                 <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-card p-8 text-center">

@@ -54,7 +54,9 @@ function productStatusClass(status: ReturnType<typeof getProductStatus>) {
 const MAX_PRODUCT_MATCHES = 6
 
 export default function SuppliersPage() {
-  const { data, saveSupplier, deleteSupplier } = useERP()
+  const { data, saveSupplier, deleteSupplier, changesNeedApproval, hasPermission } = useERP()
+  const canEdit = hasPermission('suppliers.edit')
+  const canDelete = hasPermission('suppliers.delete')
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const purchases = useMemo(() => toArray(data?.purchases), [data?.purchases])
   const products = useMemo(() => toArray(data?.products), [data?.products])
@@ -236,7 +238,9 @@ export default function SuppliersPage() {
 
     try {
       await deleteSupplier(supplier.id)
-      setFeedback(`${supplier.name} removed from supplier list.`)
+      setFeedback(
+        changesNeedApproval ? `Deleting ${supplier.name} was sent to an admin for approval.` : `${supplier.name} removed from supplier list.`
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete supplier.')
     }
@@ -268,10 +272,15 @@ export default function SuppliersPage() {
           currency: supplier.currency,
           notes: supplier.notes,
           suppliedProducts: supplier.suppliedProducts,
+          openingDue: supplier.openingDue,
         },
         supplier.id
       )
-      setFeedback(`${supplier.name} LC status changed to ${lcStatusLabels[lcStatus]}.`)
+      setFeedback(
+        changesNeedApproval
+          ? `Changing ${supplier.name}'s LC status to ${lcStatusLabels[lcStatus]} was sent to an admin for approval.`
+          : `${supplier.name} LC status changed to ${lcStatusLabels[lcStatus]}.`
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to update LC status.')
     }
@@ -409,10 +418,12 @@ export default function SuppliersPage() {
                   <SelectItem value="importer">Importer</SelectItem>
                 </SelectContent>
               </Select>
-              <Button onClick={openCreateDialog} className="h-10 rounded-xl">
-                <Plus className="mr-2 h-4 w-4" />
-                Add supplier
-              </Button>
+              {canEdit ? (
+                <Button onClick={openCreateDialog} className="h-10 rounded-xl">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add supplier
+                </Button>
+              ) : null}
             </div>
           </CardHeader>
           <CardContent>
@@ -474,7 +485,7 @@ export default function SuppliersPage() {
                       </TableCell>
                       <TableCell className="min-w-36">
                         <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
+                          <DropdownMenuTrigger asChild disabled={!canEdit}>
                             <Button
                               variant="outline"
                               className={cn('h-8 rounded-full px-3 text-sm font-medium', lcToneClass(supplier.lcStatus))}
@@ -524,19 +535,23 @@ export default function SuppliersPage() {
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(supplier)} aria-label={`Edit ${supplier.name}`}>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9 text-destructive hover:text-destructive"
-                            onClick={() => void handleDelete(supplier)}
-                            disabled={hasHistory}
-                            aria-label={`Delete ${supplier.name}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canEdit ? (
+                            <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(supplier)} aria-label={`Edit ${supplier.name}`}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          ) : null}
+                          {canDelete ? (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9 text-destructive hover:text-destructive"
+                              onClick={() => void handleDelete(supplier)}
+                              disabled={hasHistory}
+                              aria-label={`Delete ${supplier.name}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -565,7 +580,7 @@ export default function SuppliersPage() {
       <SupplierDetailsDialog
         supplier={viewingSupplier}
         onOpenChange={(open) => (open ? null : setViewingSupplierId(null))}
-        onEdit={openEditDialog}
+        onEdit={canEdit ? openEditDialog : () => undefined}
       />
     </AdminShell>
   )

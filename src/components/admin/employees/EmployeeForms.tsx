@@ -3,6 +3,7 @@
 import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { CheckCircle2, XCircle } from 'lucide-react'
 
+import { downloadJoiningLetter } from '@/components/admin/employees/joiningLetter'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -50,11 +51,14 @@ export type EmployeeFormState = {
   employmentStatus: EmploymentStatus
   baseSalary: string
   taDa: string
+  daPerDay: string
   houseRent: string
   mobileBill: string
   monthlyUnitTarget: string
   monthlyAmountTarget: string
   commissionPerUnit: string
+  /** The login linked to this employee, so they can see their own profile. Set by an admin. */
+  userId: string
   notes: string
 }
 
@@ -62,9 +66,12 @@ export type PayFormState = {
   compensationType: EmployeeCompensationType
   baseSalary: string
   taDa: string
+  daPerDay: string
   houseRent: string
   mobileBill: string
   commissionPerUnit: string
+  monthlyUnitTarget: string
+  monthlyAmountTarget: string
   notes: string
 }
 
@@ -92,11 +99,13 @@ export const emptyEmployeeForm: EmployeeFormState = {
   employmentStatus: 'active',
   baseSalary: '0',
   taDa: '0',
+  daPerDay: '0',
   houseRent: '0',
   mobileBill: '0',
   monthlyUnitTarget: String(DEFAULT_MONTHLY_UNIT_TARGET),
   monthlyAmountTarget: String(DEFAULT_MONTHLY_AMOUNT_TARGET),
   commissionPerUnit: String(DEFAULT_COMMISSION_PER_UNIT),
+  userId: '',
   notes: '',
 }
 
@@ -119,11 +128,13 @@ export function formFromEmployee(employee: EmployeeRecord): EmployeeFormState {
     employmentStatus: employee.employmentStatus,
     baseSalary: String(employee.baseSalary),
     taDa: String(employee.taDa),
+    daPerDay: String(employee.daPerDay),
     houseRent: String(employee.houseRent),
     mobileBill: String(employee.mobileBill),
     monthlyUnitTarget: String(employee.monthlyUnitTarget),
     monthlyAmountTarget: String(employee.monthlyAmountTarget),
     commissionPerUnit: String(employee.commissionPerUnit),
+    userId: employee.userId ?? '',
     notes: employee.notes,
   }
 }
@@ -133,10 +144,30 @@ export function payFormFromEmployee(employee: EmployeeRecord): PayFormState {
     compensationType: employee.compensationType,
     baseSalary: String(employee.baseSalary || ''),
     taDa: String(employee.taDa || ''),
+    daPerDay: String(employee.daPerDay || ''),
     houseRent: String(employee.houseRent || ''),
     mobileBill: String(employee.mobileBill || ''),
     commissionPerUnit: String(employee.commissionPerUnit || ''),
+    monthlyUnitTarget: String(employee.monthlyUnitTarget ?? DEFAULT_MONTHLY_UNIT_TARGET),
+    monthlyAmountTarget: String(employee.monthlyAmountTarget ?? DEFAULT_MONTHLY_AMOUNT_TARGET),
     notes: employee.notes,
+  }
+}
+
+/**
+ * Downloads an approved employee's joining letter. The first download gives them their staff
+ * id if they have none yet (employees approved before ids existed).
+ */
+export function useJoiningLetter() {
+  const { data, issueJoiningLetter } = useERP()
+
+  return async (employee: EmployeeRecord) => {
+    const issued = await issueJoiningLetter(employee.id)
+    await downloadJoiningLetter(issued, {
+      companyName: data?.settings.companyName || 'Power International BD',
+      zoneName: data?.zones[issued.zoneId]?.name ?? '',
+      approvedByName: data?.users[issued.approvedBy]?.name ?? '',
+    })
   }
 }
 
@@ -335,6 +366,7 @@ export function EmployeeReviewDialog({
   onReviewed: (message: string) => void
 }) {
   const { data, reviewEmployee } = useERP()
+  const downloadLetter = useJoiningLetter()
   const zoneName = (zoneId: string) => data?.zones[zoneId]?.name ?? ''
   const [payForm, setPayForm] = useState<PayFormState>(() =>
     employee ? payFormFromEmployee(employee) : payFormFromEmployee({} as EmployeeRecord)
@@ -361,7 +393,7 @@ export function EmployeeReviewDialog({
       const salaryBased = payForm.compensationType === 'salary'
 
       try {
-        await reviewEmployee(
+        const reviewed = await reviewEmployee(
           employee.id,
           decision,
           decision === 'approve'
@@ -372,16 +404,26 @@ export function EmployeeReviewDialog({
                 houseRent: salaryBased ? Number(payForm.houseRent) : 0,
                 mobileBill: salaryBased ? Number(payForm.mobileBill) : 0,
                 commissionPerUnit: Number(payForm.commissionPerUnit),
+                daPerDay: Number(payForm.daPerDay),
+                monthlyUnitTarget: Number(payForm.monthlyUnitTarget),
+                monthlyAmountTarget: Number(payForm.monthlyAmountTarget),
                 notes: payForm.notes,
               }
             : undefined
         )
-        onReviewed(
-          decision === 'approve'
-            ? `${employee.name}'s joining form approved.`
-            : `${employee.name}'s joining form rejected.`
-        )
         onOpenChange(false)
+        if (decision === 'approve') {
+          // The joining letter comes with the approval as a PDF copy.
+          let letterNote = 'The joining letter PDF has been downloaded.'
+          try {
+            await downloadLetter(reviewed)
+          } catch {
+            letterNote = 'Download the joining letter from the employee profile.'
+          }
+          onReviewed(`${employee.name}'s joining form approved as ${reviewed.employeeCode}. ${letterNote}`)
+        } else {
+          onReviewed(`${employee.name}'s joining form rejected.`)
+        }
       } catch (reason) {
         setReviewError(reason instanceof Error ? reason.message : 'Unable to review joining form.')
       }
@@ -451,7 +493,20 @@ export function EmployeeReviewDialog({
                     <Input type="number" min="0" value={payForm.commissionPerUnit} onChange={(event) => setPayField('commissionPerUnit', event.target.value)} />
                   </FormField>
                 )}
+                <FormField label="DA per present day">
+                  <Input type="number" min="0" value={payForm.daPerDay} onChange={(event) => setPayField('daPerDay', event.target.value)} />
+                </FormField>
+                <FormField label="Monthly target (pcs)">
+                  <Input type="number" min="0" value={payForm.monthlyUnitTarget} onChange={(event) => setPayField('monthlyUnitTarget', event.target.value)} />
+                </FormField>
+                <FormField label="Monthly target (BDT sales)">
+                  <Input type="number" min="0" value={payForm.monthlyAmountTarget} onChange={(event) => setPayField('monthlyAmountTarget', event.target.value)} />
+                </FormField>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Commission is paid only at 80% of either target, for the share of credit sales collected. Approving gives a staff
+                id and downloads the joining letter.
+              </p>
               <FormField label="Note" optional>
                 <Textarea value={payForm.notes} onChange={(event) => setPayField('notes', event.target.value)} rows={2} />
               </FormField>

@@ -154,8 +154,8 @@ async function loadBanglaFont() {
   }
 }
 
-/** Saves a document as one tall A4-wide JPG, rendered off-screen so the page layout is not disturbed. */
-export async function downloadDocumentJpg(html: string, filename: string) {
+/** Renders a document as one tall A4-wide JPG data URL, off-screen so the page layout is not disturbed. */
+export async function renderDocumentJpg(html: string) {
   const iframe = document.createElement('iframe')
   iframe.setAttribute('aria-hidden', 'true')
   iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${A4_WIDTH_PX}px;height:${A4_HEIGHT_PX}px;border:0;`
@@ -192,13 +192,24 @@ export async function downloadDocumentJpg(html: string, filename: string) {
       height: body.scrollHeight,
     })
 
-    const link = document.createElement('a')
-    link.href = dataUrl
-    link.download = filename
-    link.click()
+    return dataUrl
   } finally {
     iframe.remove()
   }
+}
+
+/** Saves a document as one tall A4-wide JPG. */
+export async function downloadDocumentJpg(html: string, filename: string) {
+  const link = document.createElement('a')
+  link.href = await renderDocumentJpg(html)
+  link.download = filename
+  link.click()
+}
+
+/** A rendered JPG as a file, ready to upload or share. */
+export async function documentJpgFile(html: string, filename: string) {
+  const blob = await (await fetch(await renderDocumentJpg(html))).blob()
+  return new File([blob], filename, { type: 'image/jpeg' })
 }
 
 /**

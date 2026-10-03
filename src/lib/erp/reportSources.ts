@@ -1,5 +1,5 @@
 import type { ERPData } from '@/lib/erp/types'
-import { formatCurrency, formatDate, toArray, userRoleNames } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
 
@@ -202,7 +202,7 @@ export const REPORT_SOURCES: ReportSource[] = [
     label: 'Expenses',
     description: 'Operational expenses logged by category and staff member.',
     rows: (data) =>
-      toArray(data.expenses).map((expense) => ({
+      toArray(data.expenses).filter(isApprovedExpense).map((expense) => ({
         category: expense.category,
         amount: expense.amount,
         note: expense.note,

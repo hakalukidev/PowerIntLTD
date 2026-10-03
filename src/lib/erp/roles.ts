@@ -55,7 +55,7 @@ export function resolveRoles(stored?: Record<string, RoleRecord> | null): Record
   return Object.fromEntries(
     Object.entries(merged).map(([id, role]) => {
       if (id === 'admin') {
-        return [id, { ...role, permissions: Object.keys(catalog), dataScope: 'all' }]
+        return [id, { ...role, permissions: Object.keys(catalog), dataScope: 'all', requiresApproval: false }]
       }
 
       const resolved = new Set<string>()

@@ -8,6 +8,8 @@ import type {
   ProductRecord,
   SalaryHoldStatus,
   RoleRecord,
+  SalaryPaymentEntry,
+  SalaryRecord,
   SalesTargetRecord,
   UserRecord,
 } from '@/lib/erp/types'
@@ -76,6 +78,62 @@ export function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+/** Expenses from the expense form only count once approved; older entries have no status. */
+export function isApprovedExpense(expense: { status?: string }) {
+  return !expense.status || expense.status === 'approved'
+}
+
+export const TA_CATEGORY = 'TA'
+
+/** Standard expense categories; admins can add more through settings but not remove these. */
+export const DEFAULT_EXPENSE_CATEGORIES = [
+  'Office Expense',
+  'Courier',
+  'Delivery',
+  'Transport',
+  'Salary',
+  'Commission',
+  'Employee Expense',
+  'Dealer Expense',
+  TA_CATEGORY,
+  'DA',
+]
+
+/** Categories paid to a specific employee, so the form requires picking who it is for. */
+export const EMPLOYEE_EXPENSE_CATEGORIES = ['Salary', 'Commission', TA_CATEGORY, 'DA']
+
+export function isDefaultExpenseCategory(category: string) {
+  return DEFAULT_EXPENSE_CATEGORIES.some((item) => item.toLowerCase() === category.trim().toLowerCase())
+}
+
+/** The standard categories followed by the admin-added ones, without duplicates. */
+export function getExpenseCategories(extra: string[] = []) {
+  return [...DEFAULT_EXPENSE_CATEGORIES, ...extra.filter((item) => item.trim() && !isDefaultExpenseCategory(item))]
+}
+
+/** The short ID staff read out and search by: the random tail of a record id, e.g. `AB12CD`. */
+export function shortRecordId(id: string) {
+  return (id.split('_').pop() || id).toUpperCase()
+}
+
+export const CUSTOMER_CODE_PREFIX = 'PIL-CUS-'
+export const SUPPLIER_CODE_PREFIX = 'PIL-SUP-'
+
+/** The next free system code after the highest one already given (`PIL-CUS-0007` → `PIL-CUS-0008`). */
+export function nextPartyCode(records: Array<{ code?: string }>, prefix: string) {
+  const highest = records.reduce((max, record) => {
+    const match = record.code?.startsWith(prefix) ? record.code.match(/(\d+)$/) : null
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 0)
+  return `${prefix}${String(highest + 1).padStart(4, '0')}`
+}
+
+/** A client's or supplier's ID as staff see it: their system code, or the record id for records not yet coded. */
+export function partyCode(record: { id: string; code?: string } | null | undefined) {
+  if (!record) return ''
+  return record.code || shortRecordId(record.id)
+}
+
 /**
  * A phone number reduced to its local digits, so +8801711-000000, 8801711000000, and
  * 01711000000 all compare equal. Used for duplicate checks and for signing in by phone.
@@ -83,6 +141,24 @@ export function createId(prefix: string) {
 export function normalizePhone(value: unknown) {
   const digits = typeof value === 'string' || typeof value === 'number' ? String(value).replace(/\D/g, '') : ''
   return digits ? digits.replace(/^(?:880|88|0)+/, '') : ''
+}
+
+/** A Bangladeshi number in international digits, e.g. 01711-000000 → 8801711000000. Empty when there is no number. */
+export function internationalPhone(value: unknown) {
+  const local = normalizePhone(value)
+  return local ? `880${local}` : ''
+}
+
+/** A WhatsApp chat with the message typed in, ready to send. Empty without a phone number. */
+export function whatsappLink(phone: unknown, text: string) {
+  const digits = internationalPhone(phone)
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : ''
+}
+
+/** The phone's SMS app with the message typed in. Empty without a phone number. */
+export function smsLink(phone: unknown, text: string) {
+  const digits = internationalPhone(phone)
+  return digits ? `sms:+${digits}?body=${encodeURIComponent(text)}` : ''
 }
 
 /**
@@ -101,7 +177,7 @@ export function userRoleNames(roles: Record<string, RoleRecord> | undefined, use
 
 /**
  * One role that grants what all of the user's roles grant together: every permission of each,
- * and the widest data scope. A role that is not limited to zones or to the user's own territory
+ * the widest data scope, and approval only when every role needs it. A role that is not limited to zones or to the user's own territory
  * makes the combination unlimited too.
  */
 export function effectiveRole(roles: Record<string, RoleRecord> | undefined, user: Pick<UserRecord, 'roleId' | 'extraRoleIds'>): RoleRecord | null {
@@ -120,7 +196,15 @@ export function effectiveRole(roles: Record<string, RoleRecord> | undefined, use
     permissions: Array.from(new Set(held.flatMap((role) => role.permissions ?? []))),
     zoneIds: allLimited ? Array.from(new Set(held.flatMap((role) => role.zoneIds ?? []))) : [],
     dataScope: allLimited && held.some((role) => role.dataScope === 'assigned') ? 'assigned' : 'all',
+    // Like the data scope, the freer role wins: approval is only needed when every role needs it.
+    requiresApproval: held.every((role) => role.requiresApproval),
   }
+}
+
+/** Whether the user's changes to dealers, suppliers, credit sheet entries and expenses wait for an admin. */
+export function changesNeedApproval(roles: Record<string, RoleRecord> | undefined, user: UserRecord | null) {
+  if (!user || userRoleIds(user).includes('admin')) return false
+  return Boolean(effectiveRole(roles, user)?.requiresApproval)
 }
 
 export function getPermissions(data: ERPData | null, user: UserRecord | null) {
@@ -386,6 +470,42 @@ export function computeCustomerTotals(data: ERPData | null) {
   }, {})
 }
 
+export type SupplierPayable = {
+  openingDue: number
+  purchaseTotal: number
+  paid: number
+  pendingPayment: number
+  /** Opening due + purchases - approved payments. Negative means we paid in advance. */
+  payable: number
+}
+
+/** What the company owes each supplier, keyed by supplier id. Only approved payments reduce it. */
+export function computeSupplierPayables(data: ERPData | null) {
+  const payables: Record<string, SupplierPayable> = {}
+  const entry = (supplierId: string) =>
+    (payables[supplierId] ??= {
+      openingDue: data?.suppliers[supplierId]?.openingDue ?? 0,
+      purchaseTotal: 0,
+      paid: 0,
+      pendingPayment: 0,
+      payable: 0,
+    })
+
+  toArray(data?.suppliers).forEach((supplier) => entry(supplier.id))
+  toArray(data?.purchases).forEach((purchase) => {
+    entry(purchase.supplierId).purchaseTotal += purchase.total
+  })
+  toArray(data?.supplierPayments).forEach((payment) => {
+    if (payment.status === 'approved') entry(payment.supplierId).paid += payment.amount
+    if (payment.status === 'pending') entry(payment.supplierId).pendingPayment += payment.amount
+  })
+  Object.values(payables).forEach((row) => {
+    row.payable = row.openingDue + row.purchaseTotal - row.paid
+  })
+
+  return payables
+}
+
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {
   const XLSX = await import('xlsx')
   const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
@@ -442,6 +562,31 @@ export const TARGET_ACHIEVEMENT_HOLD_THRESHOLD = 80
 
 export function currentMonthKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** A local calendar day as `YYYY-MM-DD`, the key attendance is stored under. */
+export function dayKey(date = new Date()) {
+  return `${currentMonthKey(date)}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+/** Every day of a `YYYY-MM` month as `dayKey`s. */
+export function monthDayKeys(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  if (!year || !monthNumber) return []
+  const days = new Date(year, monthNumber, 0).getDate()
+  return Array.from({ length: days }, (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`)
+}
+
+/** An employee's attendance for a month and the DA it earns: present days × their DA per day. */
+export function monthlyAttendance(attendance: ERPData['attendance'] | undefined, employee: Pick<EmployeeRecord, 'id' | 'daPerDay'>, month: string) {
+  let present = 0
+  let absent = 0
+  for (const day of monthDayKeys(month)) {
+    const status = attendance?.[day]?.[employee.id]?.status
+    if (status === 'present') present += 1
+    if (status === 'absent') absent += 1
+  }
+  return { present, absent, daAmount: present * (employee.daPerDay ?? 0) }
 }
 
 export function formatMonthLabel(month: string) {
@@ -513,19 +658,162 @@ export function computeCommission(unitsSold: number, commissionPerUnit: number) 
   return Math.max(unitsSold, 0) * Math.max(commissionPerUnit, 0)
 }
 
+export type SalaryFigureOptions = {
+  /** Advances taken during the month, deducted from the pay. */
+  advanceAmount?: number
+  /** The owner approved commission although the target was missed. */
+  ownerAuthorized?: boolean
+}
+
+/**
+ * A month's pay. Commission is earned per unit sold, but only paid when the employee reached
+ * 80% of their target (or the owner authorized it), and then only for the share of their sales
+ * they collected the money for. Advances taken during the month come off the net pay.
+ */
 export function computeSalaryFigures(
   employee: Pick<EmployeeRecord, 'baseSalary' | 'commissionPerUnit'> &
     Partial<Pick<EmployeeRecord, 'taDa' | 'houseRent' | 'mobileBill'>>,
-  target: Pick<SalesTargetRecord, 'unitsSold' | 'unitTarget' | 'amountSold' | 'amountTarget'> | null
+  target: (Pick<SalesTargetRecord, 'unitsSold' | 'unitTarget' | 'amountSold' | 'amountTarget'> & { amountCollected?: number }) | null,
+  options: SalaryFigureOptions = {}
 ) {
   const unitsSold = target?.unitsSold ?? 0
+  const amountSold = target?.amountSold ?? 0
+  const amountCollected = Math.max(target?.amountCollected ?? 0, 0)
   const { achievementPercent } = target
     ? getTargetAchievement(target)
     : { achievementPercent: 0 }
-  const commissionAmount = computeCommission(unitsSold, employee.commissionPerUnit)
-  const holdStatus = getSalaryHoldStatus(achievementPercent)
+  const commissionEarned = computeCommission(unitsSold, employee.commissionPerUnit)
+  const targetReached = achievementPercent >= TARGET_ACHIEVEMENT_HOLD_THRESHOLD
+  const ownerAuthorized = !targetReached && Boolean(options.ownerAuthorized)
+  const commissionEligible = targetReached || ownerAuthorized
+  // Sales recorded without an amount have nothing to collect.
+  const collectionRatio = amountSold > 0 ? Math.min(amountCollected / amountSold, 1) : 1
+  const commissionAmount = commissionEligible ? Math.round(commissionEarned * collectionRatio) : 0
+  const holdStatus: SalaryHoldStatus = commissionEligible ? 'released' : 'hold'
   const allowances = (employee.taDa ?? 0) + (employee.houseRent ?? 0) + (employee.mobileBill ?? 0)
-  const grossPayable = employee.baseSalary + allowances + commissionAmount
+  const fixedPay = employee.baseSalary + allowances
+  const grossPayable = fixedPay + commissionAmount
+  const advanceAmount = Math.max(options.advanceAmount ?? 0, 0)
+  const netPayable = Math.max(grossPayable - advanceAmount, 0)
 
-  return { unitsSold, achievementPercent, commissionAmount, holdStatus, grossPayable }
+  return {
+    unitsSold,
+    amountSold,
+    amountCollected,
+    collectionPercent: Math.round(collectionRatio * 1000) / 10,
+    achievementPercent,
+    commissionEarned,
+    commissionEligible,
+    ownerAuthorized,
+    commissionAmount,
+    holdStatus,
+    fixedPay,
+    grossPayable,
+    advanceAmount,
+    netPayable,
+  }
+}
+
+/** Everything about one employee's pay for a month, worked out from the live records. */
+export function computeMonthlyPay(
+  data: Pick<ERPData, 'salesTargets' | 'salaries' | 'employeeAdvances' | 'commissionAuthorizations'> | null | undefined,
+  employee: EmployeeRecord,
+  month: string
+) {
+  const target = Object.values(data?.salesTargets ?? {}).find((entry) => entry.employeeId === employee.id && entry.month === month) ?? null
+  const salary = Object.values(data?.salaries ?? {}).find((entry) => entry.employeeId === employee.id && entry.month === month) ?? null
+  const advances = Object.values(data?.employeeAdvances ?? {})
+    .filter((advance) => advance.employeeId === employee.id && advance.month === month)
+    .sort((left, right) => left.date.localeCompare(right.date))
+  const authorizations = Object.values(data?.commissionAuthorizations ?? {})
+    .filter((request) => request.employeeId === employee.id && request.month === month)
+    .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
+  const authorization = authorizations.find((request) => request.status === 'approved') ?? authorizations[0] ?? null
+  const figures = computeSalaryFigures(employee, target, {
+    advanceAmount: advances.reduce((sum, advance) => sum + advance.amount, 0),
+    ownerAuthorized: authorization?.status === 'approved',
+  })
+  const paidAmount = salary?.paidAmount ?? 0
+  const dueAmount = Math.max(figures.netPayable - paidAmount, 0)
+  const paymentStatus: SalaryRecord['paymentStatus'] = dueAmount <= 0 ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid'
+  const paid = paidByKind(salary?.payments ?? [])
+  // Advances come off the salary first; whatever they exceed comes off the commission.
+  const salaryPayable = Math.max(figures.fixedPay - figures.advanceAmount, 0)
+  const commissionPayable = Math.max(figures.netPayable - salaryPayable, 0)
+
+  return {
+    ...figures,
+    month,
+    target,
+    salary,
+    advances,
+    authorization,
+    unitTarget: target?.unitTarget ?? employee.monthlyUnitTarget,
+    amountTarget: target?.amountTarget ?? employee.monthlyAmountTarget,
+    paidAmount,
+    dueAmount,
+    paymentStatus,
+    payments: salary?.payments ?? [],
+    salaryPayable,
+    commissionPayable,
+    salaryDue: Math.max(salaryPayable - paid.salary, 0),
+    commissionDue: Math.max(commissionPayable - paid.commission, 0),
+    schedule: payrollSchedule(month),
+  }
+}
+
+/** The month after `month` (`YYYY-MM`). */
+function nextMonthKey(month: string) {
+  const [year, value] = month.split('-').map(Number)
+  const date = new Date(year, value, 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** Commission and the like are paid between these days of the month after it was earned. */
+export const COMMISSION_PAY_WINDOW = { from: 16, to: 20 }
+
+/**
+ * When a payroll month is paid: the salary at the start of the next month, commission (and
+ * the like) on the 16th–20th of the next month. Dates are `YYYY-MM-DD`.
+ */
+export function payrollSchedule(month: string) {
+  const next = nextMonthKey(month)
+  const day = (value: number) => `${next}-${String(value).padStart(2, '0')}`
+  return { salaryDate: day(1), commissionFrom: day(COMMISSION_PAY_WINDOW.from), commissionTo: day(COMMISSION_PAY_WINDOW.to) }
+}
+
+/** Whether `date` (`YYYY-MM-DD`) falls in the commission window of `month`. */
+export function inCommissionWindow(month: string, date: string) {
+  const { commissionFrom, commissionTo } = payrollSchedule(month)
+  return date >= commissionFrom && date <= commissionTo
+}
+
+/** A month's payments split into what went to salary and what went to commission. */
+export function paidByKind(payments: SalaryPaymentEntry[]) {
+  return payments.reduce(
+    (totals, payment) => {
+      if (payment.kind === 'commission') totals.commission += payment.amount
+      else totals.salary += payment.amount
+      return totals
+    },
+    { salary: 0, commission: 0 }
+  )
+}
+
+export const EMPLOYEE_CODE_PREFIX = 'PIL-EMP-'
+
+/** The next staff id after the highest one given so far: PIL-EMP-0001, PIL-EMP-0002, ... */
+export function nextEmployeeCode(employees: Array<Pick<EmployeeRecord, 'employeeCode'>>) {
+  const highest = employees.reduce((max, employee) => {
+    const match = employee.employeeCode?.match(/(\d+)$/)
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 0)
+  return `${EMPLOYEE_CODE_PREFIX}${String(highest + 1).padStart(4, '0')}`
+}
+
+/** The owner decides on commission requests; an admin can act for the owner. */
+export function canAuthorizeCommission(user: Pick<UserRecord, 'roleId' | 'extraRoleIds'> | null | undefined) {
+  if (!user) return false
+  const roles = userRoleIds(user)
+  return roles.includes('owner') || roles.includes('admin')
 }

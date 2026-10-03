@@ -20,7 +20,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierInput, SupplierRecord } from '@/lib/erp/types'
-import { escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { computeSupplierPayables, escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { cn } from '@/lib/utils'
 
 const SUPPLIER_DOCUMENT_FOLDER = 'suppliers'
 
@@ -74,6 +75,7 @@ type SupplierFormState = {
   currency: string
   notes: string
   suppliedProducts: string[]
+  openingDue: string
   bankAccountName: string
   bankAccountNumber: string
   bankName: string
@@ -117,6 +119,7 @@ const emptySupplierForm: SupplierFormState = {
   currency: 'BDT',
   notes: '',
   suppliedProducts: [],
+  openingDue: '0',
   bankAccountName: '',
   bankAccountNumber: '',
   bankName: '',
@@ -206,6 +209,7 @@ function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
     currency: supplier.currency,
     notes: supplier.notes,
     suppliedProducts: supplier.suppliedProducts,
+    openingDue: String(supplier.openingDue),
     bankAccountName: supplier.bankAccountName,
     bankAccountNumber: supplier.bankAccountNumber,
     bankName: supplier.bankName,
@@ -389,7 +393,7 @@ export function SupplierFormDialog({
   supplier: SupplierRecord | null
   onSaved: (message: string) => void
 }) {
-  const { data, saveSupplier } = useERP()
+  const { data, saveSupplier, changesNeedApproval } = useERP()
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const currency = data?.settings.currency
@@ -538,6 +542,7 @@ export function SupplierFormDialog({
         notes: finalForm.notes,
         // A product typed but not yet added with the button still counts.
         suppliedProducts: [...finalForm.suppliedProducts, productDraft],
+        openingDue: Number(finalForm.openingDue) || 0,
         bankAccountName: finalForm.bankAccountName,
         bankAccountNumber: finalForm.bankAccountNumber,
         bankName: finalForm.bankName,
@@ -566,9 +571,18 @@ export function SupplierFormDialog({
 
       await saveSupplier(input, editingSupplier?.id)
 
-      await Promise.all(deletions.map((publicId) => deleteCloudinaryImage(publicId).catch(() => undefined)))
+      // A change waiting for approval still needs the files the supplier has now.
+      if (!changesNeedApproval) {
+        await Promise.all(deletions.map((publicId) => deleteCloudinaryImage(publicId).catch(() => undefined)))
+      }
 
-      onSaved(editingSupplier ? 'Supplier details updated.' : 'New supplier added.')
+      onSaved(
+        changesNeedApproval
+          ? `${editingSupplier ? 'Supplier changes' : 'New supplier'} sent to an admin for approval.`
+          : editingSupplier
+            ? 'Supplier details updated.'
+            : 'New supplier added.'
+      )
       onOpenChange(false)
     } catch (reason) {
       setFormError(reason instanceof Error ? reason.message : 'Unable to save supplier.')
@@ -836,6 +850,12 @@ export function SupplierFormDialog({
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Opening due <span className="font-normal text-muted-foreground">(what we already owe them)</span>
+                  </p>
+                  <Input type="number" min="0" value={supplierForm.openingDue} onChange={(event) => setSupplierForm((current) => ({ ...current, openingDue: event.target.value }))} placeholder="0" />
+                </div>
               </div>
 
               {supplierForm.supplierType !== 'local' ? (
@@ -957,6 +977,8 @@ export function SupplierDetailsDialog({
 }) {
   const { data } = useERP()
   const companyName = data?.settings.companyName ?? 'Power International BD'
+  const currency = data?.settings.currency
+  const payables = useMemo(() => computeSupplierPayables(data), [data])
   const [detailsExportError, setDetailsExportError] = useState<string | null>(null)
   const [isExportingImage, setIsExportingImage] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -978,6 +1000,7 @@ export function SupplierDetailsDialog({
   }
 
   const photo = supplier.supplierPhotoUrl || supplier.passportPhotoUrl
+  const payable = payables[supplier.id]
   const field = ([label, value]: [string, string]) => (
     <div key={label}>
       <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
@@ -1037,6 +1060,26 @@ export function SupplierDetailsDialog({
           <div className="sm:col-span-2">{field(['Products supplied', supplier.suppliedProducts.join(', ')])}</div>
         </div>
       </div>
+
+      {payable ? (
+        <div className="space-y-3 rounded-2xl border border-border/70 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payable</p>
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            {field(['Opening due', formatCurrency(payable.openingDue, currency)])}
+            {field(['Purchases', formatCurrency(payable.purchaseTotal, currency)])}
+            {field(['Paid (approved)', formatCurrency(payable.paid, currency)])}
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">{payable.payable < 0 ? 'Advance' : 'Due'}</p>
+              <p className={cn('mt-0.5 font-semibold', payable.payable > 0 && 'text-rose-600 dark:text-rose-400')}>
+                {formatCurrency(Math.abs(payable.payable), currency)}
+              </p>
+            </div>
+          </div>
+          {payable.pendingPayment > 0 ? (
+            <p className="text-xs text-muted-foreground">{formatCurrency(payable.pendingPayment, currency)} in payments awaiting approval.</p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="space-y-3 rounded-2xl border border-border/70 p-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Bank details</p>

@@ -12,7 +12,7 @@ import { useERP } from '@/lib/erp/provider'
 
 export function LoginScreen() {
   const router = useRouter()
-  const { currentUser, error: sessionError, loading, login } = useERP()
+  const { currentUser, isPortalUser, error: sessionError, loading, login } = useERP()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -27,8 +27,11 @@ export function LoginScreen() {
   useEffect(() => {
     if (currentUser) {
       router.replace('/admin/dashboard')
+    } else if (isPortalUser) {
+      // Dealers and suppliers have their own portal, not the ERP workspace.
+      router.replace('/portal')
     }
-  }, [currentUser, router])
+  }, [currentUser, isPortalUser, router])
 
   // The password was accepted but the ERP account was refused (missing or inactive): let them try again.
   useEffect(() => {
@@ -50,17 +53,17 @@ export function LoginScreen() {
     setError(null)
 
     try {
-      await login(loginName, secret)
+      const { portal } = await login(loginName, secret)
       // Stay in the signing-in state until the dashboard replaces this screen, so the
       // button never looks ready for a second click while the dashboard loads.
-      router.replace('/admin/dashboard')
+      router.replace(portal ? '/portal' : '/admin/dashboard')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to log in.')
       setSubmitting(false)
     }
   }
 
-  const signedIn = Boolean(currentUser)
+  const signedIn = Boolean(currentUser) || isPortalUser
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background">
@@ -163,7 +166,7 @@ export function LoginScreen() {
               {error ?? sessionError ? <p className="text-sm text-rose-600 dark:text-rose-400">{error ?? sessionError}</p> : null}
 
               <Button type="submit" className="h-11 w-full rounded-xl text-sm font-medium" disabled={submitting || loading || signedIn}>
-                {signedIn ? 'Opening dashboard...' : submitting ? 'Signing in...' : loading ? 'Loading users...' : (
+                {signedIn ? (isPortalUser ? 'Opening your account...' : 'Opening dashboard...') : submitting ? 'Signing in...' : loading ? 'Loading users...' : (
                   <span className="flex items-center justify-center gap-2">
                     Enter dashboard <ArrowRight className="h-4 w-4" />
                   </span>
@@ -172,7 +175,7 @@ export function LoginScreen() {
             </form>
 
             <div className="mt-8 border-t border-border/60 pt-6 text-sm leading-6 text-muted-foreground">
-              <p>Your account and first password are set up by an administrator.</p>
+              <p>Your account and first password are set up by an administrator. Dealers and suppliers sign in here too.</p>
               <p className="mt-1">Once signed in, you can change your password from the menu. Lost it? Ask an administrator to reset it.</p>
             </div>
           </section>

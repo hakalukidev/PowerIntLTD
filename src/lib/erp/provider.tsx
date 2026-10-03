@@ -12,6 +12,27 @@ import { onValue, ref, set, update } from 'firebase/database'
 
 import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
+  AdvanceRequestInput,
+  AdvanceRequestRecord,
+  BatteryReportInput,
+  BatteryReportRecord,
+  BusinessEntryInput,
+  BusinessEntryRecord,
+  BusinessInput,
+  BusinessRecord,
+  AttendanceStatus,
+  AuditEntryRecord,
+  ChangeRequestAction,
+  ChangeRequestKind,
+  ChangeRequestRecord,
+  DeliveryDetailsInput,
+  DeliveryPostInput,
+  OrderDelivery,
+  EditableSubmissionKind,
+  OrderRequestEdit,
+  SubmissionEdit,
+  SubmissionPatch,
+  BankAccountInput,
   CourierInput,
   CourierRecord,
   CreditLedgerEntryInput,
@@ -21,6 +42,10 @@ import type {
   CustomerRecord,
   DamageProductInput,
   DamageProductRecord,
+  ComplaintInput,
+  ReplacementInput,
+  ReplacementReturnInput,
+  DepositInput,
   LeadInput,
   EmployeeApprovalInput,
   EmployeeInput,
@@ -42,7 +67,9 @@ import type {
   SalesTargetRecord,
   SellerInput,
   SellerTransactionInput,
+  SettingsRecord,
   SupplierInput,
+  SupplierPaymentInput,
   SupplierRecord,
   TaskInput,
   TaskRecord,
@@ -52,20 +79,39 @@ import type {
   WarehouseInput,
   ZoneInput,
   ZoneRecord,
+  DepotInput,
+  DepotRecord,
+  PortalTransactionKind,
+  EmployeeAdvanceInput,
+  EmployeeAdvanceRecord,
+  CommissionAuthorizationInput,
+  CommissionAuthorizationRecord,
 } from '@/lib/erp/types'
 import {
-  computeSalaryFigures,
+  canAuthorizeCommission,
+  computeMonthlyPay,
   createId,
+  CUSTOMER_CODE_PREFIX,
   currentMonthKey,
+  dayKey,
+  inCommissionWindow,
   DEFAULT_COMMISSION_PER_UNIT,
   DEFAULT_MONTHLY_AMOUNT_TARGET,
   DEFAULT_MONTHLY_UNIT_TARGET,
   DEFAULT_PROBATION_MONTHS,
+  EMPLOYEE_EXPENSE_CATEGORIES,
+  changesNeedApproval as changesNeedApprovalFor,
   getPermissions,
   getProductStatus,
   getTargetAchievement,
   hasPermission as hasPermissionCheck,
+  nextEmployeeCode,
+  nextPartyCode,
+  SUPPLIER_CODE_PREFIX,
+  TA_CATEGORY,
   toArray,
+  userRoleIds,
+  userRoleNames,
 } from '@/lib/erp/utils'
 import {
   inMemoryPersistence,
@@ -78,10 +124,38 @@ import {
 } from 'firebase/auth'
 
 import { auth, database } from '@/lib/firebase/config'
+import { BUSINESS_ENTRY_LABELS } from './business'
 import { resolveRoles } from './roles'
 import { scopeDataToUserZones } from './zones'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
+
+const ATTENDANCE_HANDLER_PERMISSIONS = ['attendance.view', 'attendance.edit']
+
+/** What an inventory manager picked by an admin can do: all of inventory, stock and warehouses, and damage products. */
+export const INVENTORY_MANAGER_PERMISSIONS = [
+  'dashboard.view',
+  'inventory.view',
+  'inventory.edit',
+  'inventory.delete',
+  'damage_products.view',
+  'damage_products.edit',
+  'damage_products.delete',
+  'suppliers.view',
+]
+
+const CHANGE_KIND_LABELS: Record<ChangeRequestKind, string> = {
+  customer: 'dealer',
+  supplier: 'supplier',
+  credit_entry: 'credit sheet entry',
+  expense: 'expense',
+}
+
+const CHANGE_ACTION_LABELS: Record<ChangeRequestAction, string> = {
+  create: 'add',
+  update: 'edit',
+  delete: 'delete',
+}
 
 type ERPContextValue = {
   data: ERPData | null
@@ -90,7 +164,12 @@ type ERPContextValue = {
   users: UserRecord[]
   currentUser: UserRecord | null
   currentPermissions: string[]
-  login: (identifier: string, password: string) => Promise<void>
+  /** Resolves with where the account belongs: the ERP workspace, or the dealer/supplier portal. */
+  login: (identifier: string, password: string) => Promise<{ portal: boolean }>
+  /** Signed in as a dealer or supplier: no ERP data is loaded, the portal APIs serve their own sheet. */
+  isPortalUser: boolean
+  /** Calls one of the app's API routes as the signed-in account and returns its JSON, throwing its error. */
+  authorizedFetch: <T = unknown>(path: string, init?: { method?: string; body?: unknown }) => Promise<T>
   logout: () => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   fetchLoginHistory: (userId: string) => Promise<LoginHistoryEntry[]>
@@ -102,12 +181,26 @@ type ERPContextValue = {
   deleteRole: (roleId: string, reassignRoleId?: string) => Promise<void>
   reviewRoleRequest: (userId: string, roleId: string, decision: 'approve' | 'reject') => Promise<void>
   hasPermission: (permission: string) => boolean
+  /**
+   * The signed-in user's role needs an admin's approval for changes (the Accountant). Their saves
+   * and deletes of dealers, suppliers, credit sheet entries and expenses then only file a change
+   * request, and saves resolve with an empty id.
+   */
+  changesNeedApproval: boolean
+  reviewChangeRequest: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
   saveCustomer: (input: CustomerInput, customerId?: string) => Promise<string>
   deleteCustomer: (customerId: string) => Promise<void>
   saveCustomerCommitment: (customerId: string, input: CustomerCommitmentInput, commitmentId?: string) => Promise<void>
   deleteCustomerCommitment: (customerId: string, commitmentId: string) => Promise<void>
   saveZone: (input: ZoneInput, zoneId?: string) => Promise<string>
   deleteZone: (zoneId: string) => Promise<void>
+  /** Saves a depot; a new depot also gets its own warehouse for its dealers' deliveries. */
+  saveDepot: (input: DepotInput, depotId?: string) => Promise<string>
+  deleteDepot: (depotId: string) => Promise<void>
+  /** Puts dealers under a saved depot, or takes them out of their depot when `depotId` is empty. */
+  setDealersDepot: (customerIds: string[], depotId: string) => Promise<void>
+  /** Depot prices by product id; `null` drops a product back to the zone or wholesale price. */
+  saveDepotPrices: (depotId: string, prices: Record<string, number | null>) => Promise<void>
   saveSupplier: (input: SupplierInput, supplierId?: string) => Promise<string>
   deleteSupplier: (supplierId: string) => Promise<void>
   saveProduct: (input: ProductInput, productId?: string) => Promise<string>
@@ -115,8 +208,45 @@ type ERPContextValue = {
   saveWarehouse: (input: WarehouseInput, warehouseId?: string) => Promise<string>
   deleteWarehouse: (warehouseId: string) => Promise<void>
   recordPurchase: (input: PurchaseInput) => Promise<void>
-  createOrder: (input: OrderInput) => Promise<void>
+  createOrder: (input: OrderInput) => Promise<string | undefined>
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
+  setCustomerCreditLimit: (customerId: string, creditLimit: number) => Promise<void>
+  saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
+  /** Prices for every dealer: each product's general (wholesale) price. */
+  saveGeneralPrices: (prices: Record<string, number>) => Promise<void>
+  /** Prices for one dealer only; `null` drops the dealer back to their depot, zone or general price. */
+  saveDealerPrices: (customerId: string, prices: Record<string, number | null>) => Promise<void>
+  /** Dealers of a zone who keep the general price instead of the zone's prices. */
+  saveZonePriceExclusions: (zoneId: string, customerIds: string[]) => Promise<void>
+  updateSettings: (input: Partial<SettingsRecord>) => Promise<void>
+  submitDeposit: (input: DepositInput) => Promise<void>
+  reviewDeposit: (depositId: string, decision: 'approve' | 'reject') => Promise<void>
+  submitComplaint: (input: ComplaintInput) => Promise<void>
+  reviewComplaint: (complaintId: string, decision: 'approve' | 'reject') => Promise<void>
+  submitReplacement: (input: ReplacementInput) => Promise<void>
+  reviewReplacement: (replacementId: string, decision: 'approve' | 'reject') => Promise<void>
+  submitReplacementReturn: (input: ReplacementReturnInput) => Promise<void>
+  reviewReplacementReturn: (returnId: string, decision: 'approve' | 'reject') => Promise<void>
+  submitExpense: (input: ExpenseInput) => Promise<void>
+  reviewExpense: (expenseId: string, decision: 'approve' | 'reject') => Promise<void>
+  saveBankAccount: (input: BankAccountInput, accountId?: string) => Promise<void>
+  deleteBankAccount: (accountId: string) => Promise<void>
+  submitSupplierPayment: (input: SupplierPaymentInput) => Promise<void>
+  reviewSupplierPayment: (paymentId: string, decision: 'approve' | 'reject') => Promise<void>
+  submitOrderRequest: (input: OrderInput) => Promise<void>
+  editOrderRequest: (requestId: string, edit: OrderRequestEdit) => Promise<void>
+  reviewOrderRequest: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
+  /** Picks the warehouse, delivery man and courier for an approved order and sends it out. */
+  postDelivery: (orderId: string, input: DeliveryPostInput) => Promise<void>
+  /** Changes the delivery details of a posted delivery that is not submitted yet. */
+  updateDeliveryDetails: (orderId: string, input: DeliveryDetailsInput) => Promise<void>
+  /** Attaches the delivery document and sends the delivery to the audit. */
+  submitDelivery: (orderId: string, document: { url: string; publicId: string }) => Promise<void>
+  editSubmission: (kind: EditableSubmissionKind, id: string, patch: SubmissionPatch) => Promise<void>
+  /** Marks employees present or absent on a day (`YYYY-MM-DD`); `null` clears a mark. */
+  markAttendance: (day: string, marks: Record<string, AttendanceStatus | null>) => Promise<void>
+  /** Admin, a role with `attendance.edit`, or a user an admin picked as an attendance handler. */
+  canTakeAttendance: boolean
   createTask: (input: TaskInput) => Promise<void>
   updateTaskStatus: (taskId: string, status: TaskRecord['status']) => Promise<void>
   markNotificationRead: (notificationId: string) => Promise<void>
@@ -140,10 +270,29 @@ type ERPContextValue = {
   deleteLead: (leadId: string) => Promise<void>
   /** `submitForApproval` saves a new entry as a pending joining form even when an admin fills it in. */
   saveEmployee: (input: EmployeeInput, employeeId?: string, options?: { submitForApproval?: boolean }) => Promise<string>
-  reviewEmployee: (employeeId: string, decision: 'approve' | 'reject', input?: EmployeeApprovalInput) => Promise<void>
+  /** Approving gives the employee their staff id; the approved record is returned so the joining letter can be made from it. */
+  reviewEmployee: (employeeId: string, decision: 'approve' | 'reject', input?: EmployeeApprovalInput) => Promise<EmployeeRecord>
+  /** Gives an approved employee a staff id if they have none and marks the joining letter issued. */
+  issueJoiningLetter: (employeeId: string) => Promise<EmployeeRecord>
   deleteEmployee: (employeeId: string) => Promise<void>
   recordSale: (input: RecordSaleInput) => Promise<void>
   saveSalaryPayment: (input: SalaryPaymentInput) => Promise<void>
+  saveEmployeeAdvance: (input: EmployeeAdvanceInput) => Promise<void>
+  deleteEmployeeAdvance: (advanceId: string) => Promise<void>
+  saveBatteryReport: (input: BatteryReportInput, reportId?: string) => Promise<string>
+  deleteBatteryReport: (reportId: string) => Promise<void>
+  saveBusiness: (input: BusinessInput, businessId?: string) => Promise<string>
+  deleteBusiness: (businessId: string) => Promise<void>
+  /** An admin's entry is booked at once; anyone else's waits for an admin. */
+  submitBusinessEntry: (input: BusinessEntryInput) => Promise<void>
+  reviewBusinessEntry: (entryId: string, decision: 'approve' | 'reject') => Promise<void>
+  deleteBusinessEntry: (entryId: string) => Promise<void>
+  requestAdvance: (input: AdvanceRequestInput) => Promise<void>
+  reviewAdvanceRequest: (requestId: string, decision: 'approve' | 'reject', options?: { amount?: number; method?: string; note?: string }) => Promise<void>
+  /** Asks the owner to allow commission for a month the employee missed the 80% target. */
+  requestCommissionAuthorization: (input: CommissionAuthorizationInput) => Promise<void>
+  /** Owner (or admin) approves or rejects a commission request. */
+  reviewCommissionAuthorization: (requestId: string, decision: 'approve' | 'reject', note?: string) => Promise<void>
 }
 
 const ERPContext = createContext<ERPContextValue | undefined>(undefined)
@@ -228,6 +377,7 @@ function normalizeSupplierRecord(supplier: SupplierRecord): SupplierRecord {
     notes: supplier.notes || '',
     // Firebase drops empty arrays, so older suppliers come back without this.
     suppliedProducts: Array.isArray(supplier.suppliedProducts) ? supplier.suppliedProducts : [],
+    openingDue: Number(supplier.openingDue ?? 0),
     bankAccountName: supplier.bankAccountName || '',
     bankAccountNumber: supplier.bankAccountNumber || '',
     bankName: supplier.bankName || '',
@@ -281,6 +431,7 @@ function normalizeEmployeeRecord(employee: EmployeeRecord): EmployeeRecord {
     approvedAt: employee.approvedAt || '',
     baseSalary: Number(employee.baseSalary ?? 0),
     taDa: Number(employee.taDa ?? 0),
+    daPerDay: Number(employee.daPerDay ?? 0),
     houseRent: Number(employee.houseRent ?? 0),
     mobileBill: Number(employee.mobileBill ?? 0),
     commissionPerUnit: Number(employee.commissionPerUnit ?? 0),
@@ -313,6 +464,21 @@ function normalizeOrderRecord(order: OrderRecord): OrderRecord {
   }
 }
 
+const SUBMISSION_KIND_LABELS: Record<EditableSubmissionKind, string> = {
+  deposits: 'deposit',
+  supplierPayments: 'supplier payment',
+  expenses: 'expense',
+}
+
+const SUBMISSION_FIELD_LABELS: Record<keyof SubmissionPatch, string> = {
+  amount: 'Amount',
+  date: 'Date',
+  note: 'Note',
+  method: 'Method',
+  purpose: 'Purpose',
+  category: 'Category',
+}
+
 function normalizeOrderMap(orders?: Record<string, OrderRecord> | null) {
   return Object.fromEntries(
     Object.entries(orders ?? {}).map(([id, order]) => [id, normalizeOrderRecord(order)])
@@ -330,6 +496,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     suppliers: normalizeSupplierMap(source.suppliers),
     customers: normalizeCustomerMap(source.customers),
     zones: normalizeZoneMap(source.zones),
+    depots: source.depots ?? {},
     products: normalizeProductMap(source.products),
     orders: normalizeOrderMap(source.orders),
     purchases: source.purchases ?? {},
@@ -340,6 +507,16 @@ function normalizeERPData(data: ERPData | null): ERPData {
     sellers: source.sellers ?? {},
     sellerTransactions: source.sellerTransactions ?? {},
     creditLedgerEntries: source.creditLedgerEntries ?? {},
+    deposits: source.deposits ?? {},
+    complaints: source.complaints ?? {},
+    replacements: source.replacements ?? {},
+    replacementReturns: source.replacementReturns ?? {},
+    bankAccounts: source.bankAccounts ?? {},
+    supplierPayments: source.supplierPayments ?? {},
+    orderRequests: source.orderRequests ?? {},
+    changeRequests: source.changeRequests ?? {},
+    auditLog: source.auditLog ?? {},
+    attendance: source.attendance ?? {},
     couriers: source.couriers ?? {},
     damageProducts: source.damageProducts ?? {},
     leads: source.leads ?? {},
@@ -349,6 +526,12 @@ function normalizeERPData(data: ERPData | null): ERPData {
     ),
     salesTargets: source.salesTargets ?? {},
     salaries: source.salaries ?? {},
+    employeeAdvances: source.employeeAdvances ?? {},
+    commissionAuthorizations: source.commissionAuthorizations ?? {},
+    advanceRequests: source.advanceRequests ?? {},
+    batteryReports: source.batteryReports ?? {},
+    businesses: source.businesses ?? {},
+    businessEntries: source.businessEntries ?? {},
     settings: {
       ...DEFAULT_ERP_DATA.settings,
       ...source.settings,
@@ -445,6 +628,8 @@ function normalizeCustomerInput(input: CustomerInput) {
     signatureUrl: input.signatureUrl ?? '',
     signaturePublicId: input.signaturePublicId ?? '',
     zoneId: input.zoneId ?? '',
+    creditLimit: Math.max(input.creditLimit ?? 0, 0),
+    depotId: input.depotId ?? '',
   }
 }
 
@@ -469,6 +654,7 @@ function normalizeSupplierInput(input: SupplierInput, existing?: SupplierRecord 
     currency: input.currency?.trim().toUpperCase() || 'BDT',
     notes: input.notes?.trim() ?? '',
     suppliedProducts: Array.from(new Set((input.suppliedProducts ?? []).map((name) => name.trim()).filter(Boolean))),
+    openingDue: Math.max(input.openingDue ?? existing?.openingDue ?? 0, 0),
     bankAccountName: bankField(input.bankAccountName, existing?.bankAccountName),
     bankAccountNumber: bankField(input.bankAccountNumber, existing?.bankAccountNumber),
     bankName: bankField(input.bankName, existing?.bankName),
@@ -502,7 +688,33 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [authUser, setAuthUser] = useState<FirebaseUser | null>(null)
   const [authReady, setAuthReady] = useState(false)
+  // Which session the token is for. Until its claims are read, nothing is loaded, so a dealer's
+  // session never tries (and fails) to open the ERP data.
+  const [portalClaim, setPortalClaim] = useState<{ uid: string; portal: boolean } | null>(null)
   const currentUserId = authUser?.uid ?? null
+  const claimResolved = !authUser || portalClaim?.uid === authUser.uid
+  const isPortalUser = Boolean(authUser && portalClaim?.uid === authUser.uid && portalClaim.portal)
+
+  useEffect(() => {
+    if (!authUser) {
+      setPortalClaim(null)
+      return
+    }
+
+    let cancelled = false
+    authUser
+      .getIdTokenResult()
+      .then((result) => {
+        if (!cancelled) setPortalClaim({ uid: authUser.uid, portal: result.claims.portal === true })
+      })
+      .catch(() => {
+        if (!cancelled) setPortalClaim({ uid: authUser.uid, portal: false })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authUser])
 
   useEffect(() => {
     clearLegacySession()
@@ -542,6 +754,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    if (!claimResolved) {
+      setLoading(true)
+      return
+    }
+
+    // Dealers and suppliers cannot read the ERP data; the portal pages load their own sheet.
+    if (isPortalUser) {
+      setData(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
 
     let unsubscribe = () => undefined
@@ -567,7 +792,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     return () => unsubscribe()
-  }, [authReady, authUser])
+  }, [authReady, authUser, claimResolved, isPortalUser])
 
   const users = useMemo(() => {
     return [...toArray(data?.users)].sort((left, right) => left.name.localeCompare(right.name))
@@ -578,7 +803,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     [currentUserId, users]
   )
 
-  const currentPermissions = useMemo(() => getPermissions(data, currentUser), [currentUser, data])
+  const currentPermissions = useMemo(() => {
+    const permissions = new Set(getPermissions(data, currentUser))
+    // Users an admin picked as attendance handlers get attendance access whatever their role.
+    if (currentUser && data?.settings.attendanceHandlerIds?.includes(currentUser.id)) {
+      ATTENDANCE_HANDLER_PERMISSIONS.forEach((permission) => permissions.add(permission))
+    }
+    // Likewise, the users an admin put in charge of inventory run stock and the warehouses.
+    if (currentUser && data?.settings.inventoryManagerIds?.includes(currentUser.id)) {
+      INVENTORY_MANAGER_PERMISSIONS.forEach((permission) => permissions.add(permission))
+    }
+    return Array.from(permissions)
+  }, [currentUser, data])
+  const canTakeAttendance = currentPermissions.includes('attendance.edit')
+  const needsApproval = useMemo(() => changesNeedApprovalFor(data?.roles, currentUser), [currentUser, data?.roles])
 
   // A Firebase account is not enough on its own: the matching ERP record has to
   // exist and still be active, otherwise we drop the session immediately.
@@ -600,6 +838,30 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       void signOut(getAuthOrThrow())
     }
   }, [authUser, data])
+
+  // Clients and suppliers opened before system codes existed get one, oldest first, the
+  // first time an admin opens the ERP; new ones get theirs when they are saved.
+  useEffect(() => {
+    if (!data || !currentUser || !userRoleIds(currentUser).includes('admin')) {
+      return
+    }
+
+    const updates: Record<string, string> = {}
+    const assign = (path: 'customers' | 'suppliers', records: Array<{ id: string; code?: string; createdAt: string }>, prefix: string) => {
+      const coded = records.filter((record) => record.code)
+      for (const record of records.filter((item) => !item.code).sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''))) {
+        const code = nextPartyCode(coded, prefix)
+        coded.push({ ...record, code })
+        updates[`${path}/${record.id}/code`] = code
+      }
+    }
+    assign('customers', Object.values(data.customers), CUSTOMER_CODE_PREFIX)
+    assign('suppliers', Object.values(data.suppliers), SUPPLIER_CODE_PREFIX)
+
+    if (Object.keys(updates).length > 0) {
+      void update(ref(getDatabaseOrThrow(), 'erp'), updates).catch(() => undefined)
+    }
+  }, [currentUser, data])
 
   useEffect(() => {
     if (!data) {
@@ -663,12 +925,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Network error. Check your connection and try again.')
     }
 
-    const result = (await response.json().catch(() => null)) as { token?: string; error?: string } | null
+    const result = (await response.json().catch(() => null)) as { token?: string; portal?: boolean; error?: string } | null
     if (!response.ok || !result?.token) {
       throw new Error(result?.error ?? 'Unable to log in.')
     }
 
     await signInWithCustomToken(getAuthOrThrow(), result.token)
+    return { portal: result.portal === true }
   }
 
   async function changePassword(currentPassword: string, newPassword: string) {
@@ -677,7 +940,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in first.')
     }
 
-    const response = await fetch('/api/account/password', {
+    const response = await fetch(isPortalUser ? '/api/portal/password' : '/api/account/password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await signedInUser.getIdToken()}` },
       body: JSON.stringify({ currentPassword, newPassword }),
@@ -711,6 +974,37 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   async function logout() {
     clearLegacySession()
     await signOut(getAuthOrThrow())
+  }
+
+  async function authorizedFetch<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}) {
+    const signedInUser = getAuthOrThrow().currentUser
+    if (!signedInUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const response = await fetch(path, {
+      method: init.method ?? 'GET',
+      headers: {
+        Authorization: `Bearer ${await signedInUser.getIdToken()}`,
+        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    })
+    const result = (await response.json().catch(() => null)) as (T & { error?: string }) | null
+    if (!response.ok) {
+      throw new Error(result?.error ?? 'Something went wrong. Please try again.')
+    }
+    return result as T
+  }
+
+  /**
+   * Sends the dealer or supplier a bank-style alert (portal inbox and WhatsApp) for a row just
+   * added to their sheet. It runs in the background: a failed alert never undoes the entry.
+   */
+  function notifyTransaction(kind: PortalTransactionKind, id: string) {
+    void authorizedFetch('/api/admin/portal/transaction', { method: 'POST', body: { kind, id } }).catch((reason) => {
+      console.warn('Sheet alert was not sent:', reason)
+    })
   }
 
   /** Attaches the caller's ID token so the API route can authorize the request. */
@@ -810,6 +1104,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const product = {
       id,
       ...normalized,
+      ...(existingProduct?.zonePrices ? { zonePrices: existingProduct.zonePrices } : {}),
       status: getProductStatus(normalized.stockQty, normalized.minStock),
       createdAt: existingProduct?.createdAt ?? now,
       updatedAt: now,
@@ -952,6 +1247,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       signatureUrl: input.signatureUrl ?? existingCustomer?.signatureUrl ?? '',
       signaturePublicId: input.signaturePublicId ?? existingCustomer?.signaturePublicId ?? '',
       zoneId: input.zoneId ?? existingCustomer?.zoneId ?? '',
+      creditLimit: input.creditLimit ?? existingCustomer?.creditLimit ?? 0,
+      depotId: input.depotId ?? existingCustomer?.depotId ?? '',
     })
 
     if (!normalized.name) {
@@ -962,13 +1259,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer phone number is required.')
     }
 
+    if (needsApproval) {
+      await requestChange('customer', existingCustomer ? 'update' : 'create', existingCustomer?.id ?? '', normalized.name, input)
+      return ''
+    }
+
     const db = getDatabaseOrThrow()
     const id = existingCustomer?.id ?? createId('customer')
     const now = new Date().toISOString()
     const customer = {
       id,
+      code: existingCustomer?.code || nextPartyCode(Object.values(data.customers), CUSTOMER_CODE_PREFIX),
       ...normalized,
       ...(existingCustomer?.commitments ? { commitments: existingCustomer.commitments } : {}),
+      ...(existingCustomer?.prices ? { prices: existingCustomer.prices } : {}),
       createdAt: existingCustomer?.createdAt ?? now,
       updatedAt: now,
     }
@@ -977,7 +1281,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       existingCustomer ? 'customer_updated' : 'customer_created',
       'customers',
-      existingCustomer ? `Updated ${customer.name} CRM details.` : `Added customer ${customer.name}.`
+      existingCustomer ? `Updated ${customer.name} CRM details.` : `Added customer ${customer.name} (${customer.code}).`
     )
 
     return id
@@ -996,6 +1300,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const hasOrders = Object.values(data.orders).some((order) => order.customerId === customerId)
     if (hasOrders) {
       throw new Error('Customers with purchase history cannot be deleted.')
+    }
+
+    if (needsApproval) {
+      await requestChange('customer', 'delete', customerId, customer.name)
+      return
     }
 
     const db = getDatabaseOrThrow()
@@ -1091,6 +1400,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       ),
       districts: Array.from(new Set(input.districts ?? existingZone?.districts ?? [])),
       managerIds: Array.from(new Set(input.managerIds ?? existingZone?.managerIds ?? [])),
+      ...(existingZone?.priceExcludedCustomerIds ? { priceExcludedCustomerIds: existingZone.priceExcludedCustomerIds } : {}),
       createdAt: existingZone?.createdAt ?? now,
       updatedAt: now,
     }
@@ -1129,6 +1439,139 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('zone_deleted', 'zones', `Deleted ${zone.name} zone.`)
   }
 
+  async function saveDepot(input: DepotInput, depotId?: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Depot name is required.')
+    }
+    const ownerName = input.ownerName.trim()
+    if (!ownerName) {
+      throw new Error('Depot owner name is required.')
+    }
+    const phone = input.phone.trim()
+    if (!phone) {
+      throw new Error('Depot phone number is required.')
+    }
+
+    const existingDepot = depotId ? data.depots[depotId] : null
+    const duplicate = Object.values(data.depots).find(
+      (depot) => depot.id !== existingDepot?.id && depot.name.trim().toLowerCase() === name.toLowerCase()
+    )
+    if (duplicate) {
+      throw new Error(`A depot named ${duplicate.name} already exists.`)
+    }
+
+    const id = existingDepot?.id ?? createId('depot')
+    const address = input.address?.trim() ?? ''
+    // The depot's dealers get their deliveries from its own warehouse, kept in step with the depot.
+    const warehouseId = existingDepot?.warehouseId && data.warehouses[existingDepot.warehouseId] ? existingDepot.warehouseId : createId('warehouse')
+    const now = new Date().toISOString()
+    const depot: DepotRecord = {
+      id,
+      name,
+      ownerName,
+      phone,
+      address,
+      zoneId: input.zoneId ?? existingDepot?.zoneId ?? '',
+      ownerUserId: input.ownerUserId ?? existingDepot?.ownerUserId ?? '',
+      warehouseId,
+      ...(existingDepot?.prices ? { prices: existingDepot.prices } : {}),
+      notes: input.notes?.trim() ?? existingDepot?.notes ?? '',
+      createdAt: existingDepot?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`depots/${id}`]: depot,
+      [`warehouses/${warehouseId}`]: { id: warehouseId, name: `${name} Depot`, location: address },
+    })
+    await writeActivity(
+      existingDepot ? 'depot_updated' : 'depot_created',
+      'customers',
+      existingDepot ? `Updated ${depot.name} depot.` : `Added ${depot.name} depot owned by ${depot.ownerName}.`
+    )
+
+    return id
+  }
+
+  async function deleteDepot(depotId: string) {
+    if (!data) {
+      return
+    }
+
+    const depot = data.depots[depotId]
+    if (!depot) {
+      throw new Error('Depot not found.')
+    }
+
+    // Its dealers go back to ordinary dealers. The warehouse stays, since deliveries and stock may point at it.
+    const updates: Record<string, null | string> = { [`depots/${depotId}`]: null }
+    for (const customer of Object.values(data.customers)) {
+      if (customer.depotId === depotId) {
+        updates[`customers/${customer.id}/depotId`] = ''
+      }
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('depot_deleted', 'customers', `Deleted ${depot.name} depot.`)
+  }
+
+  async function setDealersDepot(customerIds: string[], depotId: string) {
+    if (!data) {
+      return
+    }
+
+    const depot = depotId ? data.depots[depotId] : null
+    if (depotId && !depot) {
+      throw new Error('Save the depot before adding dealers to it.')
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, string> = {}
+    const names: string[] = []
+    for (const customerId of customerIds) {
+      const customer = data.customers[customerId]
+      if (!customer) continue
+      updates[`customers/${customerId}/depotId`] = depotId
+      updates[`customers/${customerId}/updatedAt`] = now
+      names.push(customer.name)
+    }
+    if (!names.length) {
+      throw new Error('Select at least one dealer.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      depot ? 'depot_dealers_added' : 'depot_dealers_removed',
+      'customers',
+      depot ? `Added ${names.join(', ')} to ${depot.name} depot.` : `Took ${names.join(', ')} out of their depot.`
+    )
+  }
+
+  async function saveDepotPrices(depotId: string, prices: Record<string, number | null>) {
+    const depot = data?.depots[depotId]
+    if (!depot) {
+      throw new Error('Depot not found.')
+    }
+
+    const updates: Record<string, number | null> = {}
+    Object.entries(prices).forEach(([productId, price]) => {
+      if (!data.products[productId]) return
+      updates[`depots/${depotId}/prices/${productId}`] = price === null ? null : Math.max(price, 0)
+    })
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('depot_prices_updated', 'inventory', `Updated product prices for ${depot.name} depot.`)
+  }
+
   async function saveSupplier(input: SupplierInput, supplierId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -1145,11 +1588,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Supplier phone number is required.')
     }
 
+    if (needsApproval) {
+      await requestChange('supplier', existingSupplier ? 'update' : 'create', existingSupplier?.id ?? '', normalized.name, input)
+      return ''
+    }
+
     const db = getDatabaseOrThrow()
     const id = existingSupplier?.id ?? createId('supplier')
     const now = new Date().toISOString()
     const supplier = {
       id,
+      code: existingSupplier?.code || nextPartyCode(Object.values(data.suppliers), SUPPLIER_CODE_PREFIX),
       ...normalized,
       createdAt: existingSupplier?.createdAt ?? now,
       updatedAt: now,
@@ -1161,7 +1610,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'suppliers',
       existingSupplier
         ? `Updated ${supplier.name} supplier and import details.`
-        : `Added supplier ${supplier.name}.`
+        : `Added supplier ${supplier.name} (${supplier.code}).`
     )
 
     return id
@@ -1181,6 +1630,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const hasPurchases = Object.values(data.purchases).some((purchase) => purchase.supplierId === supplierId)
     if (hasProducts || hasPurchases) {
       throw new Error('Suppliers with product or purchase history cannot be deleted.')
+    }
+
+    if (needsApproval) {
+      await requestChange('supplier', 'delete', supplierId, supplier.name)
+      return
     }
 
     const db = getDatabaseOrThrow()
@@ -1248,6 +1702,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`products/${product.id}/updatedAt`]: now,
     })
 
+    notifyTransaction('purchase', purchaseId)
     await writeActivity('purchase_received', 'inventory', `Restocked ${product.name} by ${input.quantity} units.`)
     await writeNotification(
       'Purchase recorded',
@@ -1257,10 +1712,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  async function createOrder(input: OrderInput) {
+  /** `seller` books the order under someone else, e.g. the staff member whose order request an admin approved. */
+  async function createOrder(input: OrderInput, seller?: { id: string; name: string }) {
     if (!data || !currentUser) {
       return
     }
+    const salesPerson = seller ?? currentUser
 
     const db = getDatabaseOrThrow()
     const customer = data.customers[input.customerId]
@@ -1303,6 +1760,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const orderId = createId('order')
     const paid = Math.min(Math.max(input.paid, 0), total)
     const due = total - paid
+
+    const creditLimit = customer.creditLimit ?? 0
+    const overCreditLimit = creditLimit > 0 && (customer.due ?? 0) + due > creditLimit
+    if (overCreditLimit && data.settings.blockOverLimitOrders) {
+      throw new Error(`This order takes ${customer.name} over their credit limit, and over-limit orders are blocked.`)
+    }
+
+    const employee = input.employeeId ? data.employees[input.employeeId] : null
+    if (input.employeeId && !employee) {
+      throw new Error('Employee not found.')
+    }
     const now = new Date().toISOString()
     const orderDate = input.orderDate?.trim() || now
     const defaultDueDate = new Date(orderDate)
@@ -1314,8 +1782,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         billNumber: input.billNumber?.trim() || `INV-${Date.now().toString().slice(-8)}`,
         customerId: customer.id,
         customerName: customer.name,
-        salesPersonId: currentUser.id,
-        salesPersonName: currentUser.name,
+        salesPersonId: salesPerson.id,
+        salesPersonName: salesPerson.name,
         status: 'pending',
         paymentStatus: due === 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid',
         total,
@@ -1327,6 +1795,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         paymentDueDate: input.paymentDueDate?.trim() || defaultDueDate.toISOString(),
         dueReference: due > 0 ? input.dueReference || 'owner' : '',
         overdueNotified: false,
+        employeeId: employee?.id ?? '',
+        employeeName: employee?.name ?? '',
+        courierName: input.courierName?.trim() ?? '',
+        overCreditLimit,
         createdAt: orderDate,
         items: orderItems,
       },
@@ -1342,6 +1814,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
 
     await update(ref(db, 'erp'), updates)
+    notifyTransaction('order', orderId)
 
     await writeActivity('order_created', 'sales', `Created order for ${customer.name} with ${orderItems.length} product line(s).`)
     await writeNotification(
@@ -1350,6 +1823,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'info',
       ['admin', 'sales_person', 'accountant']
     )
+
+    if (overCreditLimit) {
+      await writeNotification(
+        'Over-limit order',
+        `Order for ${customer.name} went over their credit limit of ${creditLimit.toLocaleString()} (submitted by ${currentUser.name}).`,
+        'warning',
+        ['admin', 'accountant']
+      )
+    }
 
     for (const [productId, quantity] of requestedByProduct) {
       const product = data.products[productId]
@@ -1362,6 +1844,105 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         ['admin', 'store_manager']
       )
     }
+
+    return orderId
+  }
+
+  async function setCustomerCreditLimit(customerId: string, creditLimit: number) {
+    if (!data?.customers[customerId]) {
+      throw new Error('Customer not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const customer = data.customers[customerId]
+    const limit = Math.max(Number.isFinite(creditLimit) ? creditLimit : 0, 0)
+    await update(ref(db, `erp/customers/${customerId}`), { creditLimit: limit, updatedAt: new Date().toISOString() })
+    await writeActivity('customer_credit_limit', 'customers', `Set ${customer.name}'s credit limit to ${limit.toLocaleString()}.`)
+  }
+
+  async function saveZonePrices(zoneId: string, prices: Record<string, number | null>) {
+    if (!data?.zones[zoneId]) {
+      throw new Error('Zone not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const updates: Record<string, number | null> = {}
+    Object.entries(prices).forEach(([productId, price]) => {
+      if (!data.products[productId]) return
+      updates[`products/${productId}/zonePrices/${zoneId}`] = price === null ? null : Math.max(price, 0)
+    })
+
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('zone_prices_updated', 'inventory', `Updated product prices for zone ${data.zones[zoneId].name}.`)
+  }
+
+  async function saveGeneralPrices(prices: Record<string, number>) {
+    requireAdminUser('change prices')
+    if (!data) {
+      return
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string> = {}
+    let changed = 0
+    Object.entries(prices).forEach(([productId, price]) => {
+      const product = data.products[productId]
+      if (!product || !(price >= 0) || price === product.wholesalePrice) return
+      updates[`products/${productId}/wholesalePrice`] = price
+      updates[`products/${productId}/updatedAt`] = now
+      changed += 1
+    })
+    if (changed === 0) {
+      return
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity('general_prices_updated', 'inventory', `Changed the price of ${changed} product${changed === 1 ? '' : 's'} for every dealer.`)
+  }
+
+  async function saveDealerPrices(customerId: string, prices: Record<string, number | null>) {
+    requireAdminUser('change prices')
+    const customer = data?.customers[customerId]
+    if (!data || !customer) {
+      throw new Error('Dealer not found.')
+    }
+
+    const updates: Record<string, number | null> = {}
+    Object.entries(prices).forEach(([productId, price]) => {
+      if (!data.products[productId]) return
+      updates[`customers/${customerId}/prices/${productId}`] = price === null ? null : Math.max(price, 0)
+    })
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity('dealer_prices_updated', 'inventory', `Updated the dealer prices of ${customer.name}.`)
+  }
+
+  async function saveZonePriceExclusions(zoneId: string, customerIds: string[]) {
+    requireAdminUser('change prices')
+    const zone = data?.zones[zoneId]
+    if (!data || !zone) {
+      throw new Error('Zone not found.')
+    }
+
+    const valid = Array.from(new Set(customerIds.filter((id) => data.customers[id])))
+    await update(ref(getDatabaseOrThrow(), `erp/zones/${zoneId}`), { priceExcludedCustomerIds: valid, updatedAt: new Date().toISOString() })
+    await writeActivity(
+      'zone_price_exclusions_updated',
+      'inventory',
+      valid.length
+        ? `${valid.length} dealer${valid.length === 1 ? '' : 's'} of ${zone.name} now keep the general price.`
+        : `Every dealer of ${zone.name} now follows its zone prices.`
+    )
+  }
+
+  async function updateSettings(input: Partial<SettingsRecord>) {
+    if (!currentUser || !userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can change these settings.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/settings'), input)
+    await writeActivity('settings_updated', 'settings', `Updated settings: ${Object.keys(input).join(', ')}.`)
   }
 
   async function updateOrderStatus(orderId: string, status: OrderRecord['status']) {
@@ -1582,6 +2163,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       permissions,
       zoneIds,
       dataScope: input.dataScope === 'assigned' ? 'assigned' : 'all',
+      requiresApproval: Boolean(input.requiresApproval),
     }
 
     await update(ref(db, 'erp/roles'), { [id]: role })
@@ -1628,6 +2210,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       zoneIds,
       // The admin role always sees everything.
       dataScope: roleId !== 'admin' && input.dataScope === 'assigned' ? 'assigned' : 'all',
+      requiresApproval: roleId !== 'admin' && Boolean(input.requiresApproval),
     }
 
     await update(ref(db, `erp/roles/${roleId}`), updatedRole)
@@ -1714,8 +2297,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Expense amount must be greater than zero.')
     }
 
-    const db = getDatabaseOrThrow()
     const existingExpense = expenseId ? data.expenses[expenseId] : null
+    if (needsApproval) {
+      await requestChange('expense', existingExpense ? 'update' : 'create', existingExpense?.id ?? '', category, input)
+      return
+    }
+
+    const db = getDatabaseOrThrow()
     const id = existingExpense?.id ?? createId('expense')
     const now = new Date().toISOString()
     const expense = {
@@ -1763,6 +2351,160 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(existing ? 'investor_updated' : 'investor_created', 'finance', `${existing ? 'Updated' : 'Added'} investor ${name}.`)
   }
 
+  async function submitExpense(input: ExpenseInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const category = input.category.trim()
+    if (!category) {
+      throw new Error('Select an expense category.')
+    }
+    if (EMPLOYEE_EXPENSE_CATEGORIES.includes(category) && !input.expenseBy?.trim()) {
+      throw new Error(`Select the employee this ${category} is for.`)
+    }
+
+    const isTa = category === TA_CATEGORY
+    const taType = isTa ? (input.taType ?? 'fixed') : undefined
+    const taEntries =
+      taType === 'actual'
+        ? (input.taEntries ?? []).map((entry) => ({
+            date: entry.date,
+            from: entry.from.trim(),
+            to: entry.to.trim(),
+            reason: entry.reason.trim(),
+            person: entry.person.trim(),
+            vehicle: entry.vehicle.trim(),
+            amount: entry.amount,
+          }))
+        : []
+    if (taType === 'actual') {
+      if (!taEntries.length) {
+        throw new Error('Add at least one day to the actual TA form.')
+      }
+      if (taEntries.some((entry) => !entry.date || !entry.from || !entry.to || !entry.reason || !entry.vehicle || !(entry.amount > 0))) {
+        throw new Error('Every TA trip needs from, to, reason, vehicle and an amount.')
+      }
+    }
+    const amount = taType === 'actual' ? taEntries.reduce((sum, entry) => sum + entry.amount, 0) : input.amount
+
+    if (!(amount > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+    if (!input.documentUrl) {
+      throw new Error('Attach a picture of the voucher.')
+    }
+    const expenseBy = input.expenseBy?.trim() || currentUser.name
+
+    const db = getDatabaseOrThrow()
+    const id = createId('expense')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/expenses'), {
+      [id]: {
+        id,
+        category,
+        amount,
+        note: input.note?.trim() ?? '',
+        date: input.date?.trim() || now,
+        expenseBy,
+        documentUrl: input.documentUrl ?? '',
+        documentPublicId: input.documentPublicId ?? '',
+        ...(taType ? { taType, taEntries } : {}),
+        ...(input.employeeId ? { employeeId: input.employeeId } : {}),
+        ...(input.daMonth ? { daMonth: input.daMonth } : {}),
+        status: 'pending',
+        createdBy: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+      },
+    })
+
+    const label = taType ? `${category} (${taType})` : category
+    await writeActivity('expense_submitted', 'finance', `Submitted a ${amount.toLocaleString()} ${label} expense for approval.`)
+    await writeNotification(
+      'Expense awaiting approval',
+      `${currentUser.name} submitted a ${amount.toLocaleString()} ${label} expense (by ${expenseBy}).`,
+      'info',
+      ['admin', 'accountant']
+    )
+  }
+
+  async function reviewExpense(expenseId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve expenses.')
+    }
+
+    const expense = data.expenses[expenseId]
+    if (!expense) {
+      throw new Error('Expense not found.')
+    }
+    if (expense.status !== 'pending') {
+      throw new Error('This expense has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/expenses/${expenseId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: now,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'expense_approved' : 'expense_rejected',
+      'finance',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${expense.amount.toLocaleString()} ${expense.category} expense.`
+    )
+    await writeAuditEntry({
+      kind: 'expense',
+      refId: expenseId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: expense.expenseBy || expense.createdByName,
+      summary: [expense.category, expense.note].filter(Boolean).join(' · '),
+      amount: expense.amount,
+      submittedByName: expense.createdByName,
+      submittedByRole: roleNameOf(expense.createdBy),
+      submittedAt: expense.createdAt,
+      edits: expense.edits,
+    })
+  }
+
+  async function markAttendance(day: string, marks: Record<string, AttendanceStatus | null>) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!canTakeAttendance) {
+      throw new Error('You do not have access to take attendance. Ask an admin.')
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      throw new Error('Pick a valid date.')
+    }
+    if (day > dayKey()) {
+      throw new Error('Attendance cannot be taken for a future date.')
+    }
+
+    // Handlers limited to a zone only mark the employees they can see.
+    const visibleEmployees = scopeDataToUserZones(data, currentUser).employees
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {}
+    for (const [employeeId, status] of Object.entries(marks)) {
+      if (!visibleEmployees[employeeId]) continue
+      updates[`${day}/${employeeId}`] =
+        status === null ? null : { status, markedById: currentUser.id, markedByName: currentUser.name, markedAt: now }
+    }
+    if (!Object.keys(updates).length) {
+      return
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/attendance'), updates)
+    await writeActivity('attendance_marked', 'employees', `Took attendance for ${Object.keys(updates).length} employee(s) on ${day}.`)
+  }
+
   async function deleteExpense(expenseId: string) {
     if (!data) {
       return
@@ -1771,6 +2513,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const expense = data.expenses[expenseId]
     if (!expense) {
       throw new Error('Expense not found.')
+    }
+
+    if (needsApproval) {
+      await requestChange('expense', 'delete', expenseId, expense.category)
+      return
     }
 
     const db = getDatabaseOrThrow()
@@ -1899,6 +2646,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer not found.')
     }
 
+    if (needsApproval) {
+      await requestChange('credit_entry', 'create', '', customer.name, input)
+      return
+    }
+
     const db = getDatabaseOrThrow()
     const entryId = createId('credit_entry')
     const now = new Date().toISOString()
@@ -1918,7 +2670,1121 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       },
     })
 
+    notifyTransaction('ledger_entry', entryId)
     await writeActivity('credit_entry_recorded', 'customers', `Recorded a credit sheet entry for ${customer.name}.`)
+  }
+
+  async function submitDeposit(input: DepositInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+    if (!(input.amount > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+    if (!input.method.trim()) {
+      throw new Error('Select a payment method.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const depositId = createId('deposit')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/deposits'), {
+      [depositId]: {
+        id: depositId,
+        customerId: customer.id,
+        customerName: customer.name,
+        date: input.date?.trim() || now,
+        amount: input.amount,
+        method: input.method.trim(),
+        note: input.note?.trim() ?? '',
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('deposit_submitted', 'customers', `Submitted a ${input.amount.toLocaleString()} deposit for ${customer.name}.`)
+    await writeNotification(
+      'Deposit awaiting approval',
+      `${currentUser.name} submitted a ${input.amount.toLocaleString()} deposit (${input.method.trim()}) for ${customer.name}.`,
+      'info',
+      ['admin', 'accountant']
+    )
+  }
+
+  async function reviewDeposit(depositId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve deposits.')
+    }
+
+    const deposit = data.deposits[depositId]
+    if (!deposit) {
+      throw new Error('Deposit not found.')
+    }
+    if (deposit.status !== 'pending') {
+      throw new Error('This deposit has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {
+      [`deposits/${depositId}/status`]: decision === 'approve' ? 'approved' : 'rejected',
+      [`deposits/${depositId}/reviewedById`]: currentUser.id,
+      [`deposits/${depositId}/reviewedByName`]: currentUser.name,
+      [`deposits/${depositId}/reviewedAt`]: now,
+      [`deposits/${depositId}/updatedAt`]: now,
+    }
+
+    const customer = data.customers[deposit.customerId]
+    // The approved deposit lands on the dealer's sheet as a ledger entry.
+    const entryId = decision === 'approve' && customer ? createId('credit_entry') : ''
+    if (entryId && customer) {
+      updates[`customers/${customer.id}/due`] = Math.max((customer.due ?? 0) - deposit.amount, 0)
+      updates[`creditLedgerEntries/${entryId}`] = {
+        id: entryId,
+        customerId: customer.id,
+        customerName: customer.name,
+        date: deposit.date,
+        particulars: [`Deposit (${deposit.method})`, deposit.note].filter(Boolean).join(' — '),
+        qty: 0,
+        unitPrice: 0,
+        debit: 0,
+        credit: deposit.amount,
+        createdAt: now,
+      }
+    }
+
+    await update(ref(db, 'erp'), updates)
+    if (entryId) notifyTransaction('ledger_entry', entryId)
+    await writeActivity(
+      decision === 'approve' ? 'deposit_approved' : 'deposit_rejected',
+      'customers',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${deposit.amount.toLocaleString()} deposit for ${deposit.customerName}.`
+    )
+    await writeAuditEntry({
+      kind: 'deposit',
+      refId: depositId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: deposit.customerName,
+      summary: [deposit.method, deposit.note].filter(Boolean).join(' · '),
+      amount: deposit.amount,
+      submittedByName: deposit.submittedByName,
+      submittedByRole: roleNameOf(deposit.submittedById),
+      submittedAt: deposit.createdAt,
+      edits: deposit.edits,
+    })
+  }
+
+  async function submitComplaint(input: ComplaintInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Dealer not found.')
+    }
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+    if (!input.problem.trim()) {
+      throw new Error('Describe the problem.')
+    }
+    if (!input.endCustomerName.trim() || !input.endCustomerPhone.trim()) {
+      throw new Error('Enter the customer name and phone number.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const complaintId = createId('complaint')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/complaints'), {
+      [complaintId]: {
+        id: complaintId,
+        customerId: customer.id,
+        customerName: customer.name,
+        productId: product.id,
+        productName: product.name,
+        guaranteeDate: input.guaranteeDate.trim(),
+        serialNumber: input.serialNumber.trim(),
+        problem: input.problem.trim(),
+        endCustomerName: input.endCustomerName.trim(),
+        endCustomerPhone: input.endCustomerPhone.trim(),
+        endCustomerAddress: input.endCustomerAddress.trim(),
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('complaint_submitted', 'support', `Submitted a complaint for ${product.name} (${customer.name}).`)
+    await writeNotification(
+      'Complaint awaiting approval',
+      `${currentUser.name} submitted a complaint for ${product.name} from ${customer.name}.`,
+      'info',
+      ['admin']
+    )
+  }
+
+  async function reviewComplaint(complaintId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve complaints.')
+    }
+
+    const complaint = data.complaints[complaintId]
+    if (!complaint) {
+      throw new Error('Complaint not found.')
+    }
+    if (complaint.status !== 'pending') {
+      throw new Error('This complaint has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/complaints/${complaintId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'complaint_approved' : 'complaint_rejected',
+      'support',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the complaint for ${complaint.productName} (${complaint.customerName}).`
+    )
+  }
+
+  async function submitReplacement(input: ReplacementInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Dealer not found.')
+    }
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+    if (!input.guaranteeDate) {
+      throw new Error('Enter the guarantee date.')
+    }
+    if (!input.problem.trim()) {
+      throw new Error('Describe the problem.')
+    }
+    const quantity = Math.floor(Number(input.quantity ?? 1))
+    if (!(quantity >= 1)) {
+      throw new Error('Quantity must be at least 1.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const replacementId = createId('replacement')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/replacements'), {
+      [replacementId]: {
+        id: replacementId,
+        customerId: customer.id,
+        customerName: customer.name,
+        productId: product.id,
+        productName: product.name,
+        guaranteeDate: input.guaranteeDate,
+        serialNumber: input.serialNumber?.trim() ?? '',
+        problem: input.problem.trim(),
+        note: input.note?.trim() ?? '',
+        quantity,
+        courierName: input.courierName?.trim() ?? '',
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('replacement_submitted', 'support', `Submitted a replacement request for ${product.name} (${customer.name}).`)
+    await writeNotification(
+      'Replacement awaiting approval',
+      `${currentUser.name} submitted a replacement request for ${product.name} from ${customer.name}.`,
+      'info',
+      ['admin']
+    )
+  }
+
+  async function reviewReplacement(replacementId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve replacements.')
+    }
+
+    const replacement = data.replacements[replacementId]
+    if (!replacement) {
+      throw new Error('Replacement request not found.')
+    }
+    if (replacement.status !== 'pending') {
+      throw new Error('This replacement request has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/replacements/${replacementId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'replacement_approved' : 'replacement_rejected',
+      'support',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the replacement for ${replacement.productName} (${replacement.customerName}).`
+    )
+  }
+
+  async function submitReplacementReturn(input: ReplacementReturnInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Dealer not found.')
+    }
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+    if (!input.date) {
+      throw new Error('Enter the return date.')
+    }
+    const quantity = Math.floor(Number(input.quantity ?? 1))
+    if (!(quantity >= 1)) {
+      throw new Error('Quantity must be at least 1.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const returnId = createId('replacement_return')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/replacementReturns'), {
+      [returnId]: {
+        id: returnId,
+        customerId: customer.id,
+        customerName: customer.name,
+        productId: product.id,
+        productName: product.name,
+        date: input.date,
+        note: input.note?.trim() ?? '',
+        quantity,
+        courierName: input.courierName?.trim() ?? '',
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('replacement_return_submitted', 'support', `Submitted a replacement return for ${product.name} (${customer.name}).`)
+    await writeNotification(
+      'Replacement return awaiting approval',
+      `${currentUser.name} submitted a replacement return for ${product.name} from ${customer.name}.`,
+      'info',
+      ['admin']
+    )
+  }
+
+  async function reviewReplacementReturn(returnId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve replacement returns.')
+    }
+
+    const item = data.replacementReturns[returnId]
+    if (!item) {
+      throw new Error('Replacement return not found.')
+    }
+    if (item.status !== 'pending') {
+      throw new Error('This replacement return has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/replacementReturns/${returnId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'replacement_return_approved' : 'replacement_return_rejected',
+      'support',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the replacement return for ${item.productName} (${item.customerName}).`
+    )
+  }
+
+  function bankAccountLabel(accountId: string) {
+    const account = data?.bankAccounts[accountId]
+    return account ? `${account.bankName} — ${account.accountName} (${account.accountNumber})` : ''
+  }
+
+  async function saveBankAccount(input: BankAccountInput, accountId?: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can manage bank accounts.')
+    }
+
+    const bankName = input.bankName.trim()
+    const accountName = input.accountName.trim()
+    const accountNumber = input.accountNumber.trim()
+    if (!bankName || !accountName || !accountNumber) {
+      throw new Error('Bank name, account holder name, and account number are required.')
+    }
+
+    const existing = accountId ? data.bankAccounts[accountId] : null
+    if (accountId && !existing) {
+      throw new Error('Bank account not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('bank')
+    const now = new Date().toISOString()
+    await update(ref(db, 'erp/bankAccounts'), {
+      [id]: {
+        id,
+        side: input.side,
+        bankName,
+        accountName,
+        accountNumber,
+        branch: input.branch?.trim() ?? '',
+        routingNumber: input.routingNumber?.trim() ?? '',
+        supplierId: input.side === 'receiver' ? input.supplierId ?? '' : '',
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    })
+    await writeActivity(
+      existing ? 'bank_account_updated' : 'bank_account_created',
+      'finance',
+      `${existing ? 'Updated' : 'Added'} bank account ${bankName} (${accountNumber}).`
+    )
+  }
+
+  async function deleteBankAccount(accountId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can manage bank accounts.')
+    }
+
+    const account = data.bankAccounts[accountId]
+    if (!account) {
+      throw new Error('Bank account not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/bankAccounts'), { [accountId]: null })
+    await writeActivity('bank_account_deleted', 'finance', `Removed bank account ${account.bankName} (${account.accountNumber}).`)
+  }
+
+  async function submitSupplierPayment(input: SupplierPaymentInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const supplier = data.suppliers[input.supplierId]
+    if (!supplier) {
+      throw new Error('Supplier not found.')
+    }
+    if (!(input.amount > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+    if (!input.purpose.trim()) {
+      throw new Error('Enter the purpose of the payment.')
+    }
+
+    const isBank = input.method === 'bank'
+    const fromAccountId = isBank ? input.fromAccountId ?? '' : ''
+    const isCashDeposit = fromAccountId === 'cash'
+    const toAccountId = isBank ? input.toAccountId ?? '' : ''
+    if (isBank) {
+      if (!isCashDeposit && !data.bankAccounts[fromAccountId]) {
+        throw new Error('Select the bank the payment is sent from.')
+      }
+      if (!data.bankAccounts[toAccountId]) {
+        throw new Error('Select the receiving bank.')
+      }
+      if (!input.sendingType?.trim()) {
+        throw new Error('Select the sending type.')
+      }
+    } else if (!input.cashReceiver?.trim()) {
+      throw new Error('Enter who received the cash.')
+    }
+    if ((!isBank || isCashDeposit) && !input.proofUrl) {
+      throw new Error('Attach a deposit proof (voucher or slip).')
+    }
+
+    const db = getDatabaseOrThrow()
+    const paymentId = createId('supplier_payment')
+    const now = new Date().toISOString()
+
+    await update(ref(db, 'erp/supplierPayments'), {
+      [paymentId]: {
+        id: paymentId,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        date: input.date?.trim() || now,
+        method: input.method,
+        fromAccountId,
+        fromLabel: isCashDeposit ? 'Cash deposit' : bankAccountLabel(fromAccountId),
+        toAccountId,
+        toLabel: bankAccountLabel(toAccountId),
+        sendingType: isBank ? input.sendingType?.trim() ?? '' : '',
+        cashReceiver: isBank ? '' : input.cashReceiver?.trim() ?? '',
+        proofUrl: input.proofUrl ?? '',
+        proofPublicId: input.proofPublicId ?? '',
+        amount: input.amount,
+        purpose: input.purpose.trim(),
+        note: input.note?.trim() ?? '',
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('supplier_payment_submitted', 'suppliers', `Submitted a ${input.amount.toLocaleString()} payment to ${supplier.name}.`)
+    await writeNotification(
+      'Supplier payment awaiting approval',
+      `${currentUser.name} submitted a ${input.amount.toLocaleString()} ${isBank ? 'bank' : 'cash'} payment to ${supplier.name}.`,
+      'info',
+      ['admin', 'accountant']
+    )
+  }
+
+  async function reviewSupplierPayment(paymentId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!userRoleIds(currentUser).includes('admin')) {
+      throw new Error('Only an admin can approve supplier payments.')
+    }
+
+    const payment = data.supplierPayments[paymentId]
+    if (!payment) {
+      throw new Error('Payment not found.')
+    }
+    if (payment.status !== 'pending') {
+      throw new Error('This payment has already been reviewed.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/supplierPayments/${paymentId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    if (decision === 'approve') notifyTransaction('supplier_payment', paymentId)
+    await writeActivity(
+      decision === 'approve' ? 'supplier_payment_approved' : 'supplier_payment_rejected',
+      'suppliers',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${payment.amount.toLocaleString()} payment to ${payment.supplierName}.`
+    )
+    await writeAuditEntry({
+      kind: 'supplier_payment',
+      refId: paymentId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: payment.supplierName,
+      summary: [payment.method === 'bank' ? `Bank${payment.sendingType ? ` (${payment.sendingType})` : ''}` : 'Cash', payment.purpose].filter(Boolean).join(' · '),
+      amount: payment.amount,
+      submittedByName: payment.submittedByName,
+      submittedByRole: roleNameOf(payment.submittedById),
+      submittedAt: payment.createdAt,
+      edits: payment.edits,
+    })
+  }
+
+  function roleNameOf(userId: string) {
+    const user = data?.users[userId]
+    return user ? userRoleNames(data?.roles, user) : ''
+  }
+
+  function editSummaries(edits: SubmissionEdit[] | undefined) {
+    return (edits ?? []).map((edit) => `Edited by ${edit.byName}${edit.byRole ? ` (${edit.byRole})` : ''}: ${edit.changes.map((change) => change.field).join(', ')}`)
+  }
+
+  /** Adds a reviewed submission to the Daily Audit, stamped with the reviewing admin. */
+  async function writeAuditEntry(
+    entry: Omit<AuditEntryRecord, 'id' | 'day' | 'reviewedByName' | 'reviewedByRole' | 'reviewedAt' | 'edits'> & { edits?: SubmissionEdit[] }
+  ) {
+    if (!currentUser) {
+      return
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('audit')
+    const now = new Date()
+    await update(ref(db, 'erp/auditLog'), {
+      [id]: {
+        ...entry,
+        id,
+        day: dayKey(now),
+        reviewedByName: currentUser.name,
+        reviewedByRole: roleNameOf(currentUser.id),
+        reviewedAt: now.toISOString(),
+        edits: editSummaries(entry.edits),
+      },
+    })
+  }
+
+  /** Files a change that waits for an admin, for users whose role needs approval. */
+  async function requestChange(
+    kind: ChangeRequestKind,
+    action: ChangeRequestAction,
+    targetId: string,
+    targetName: string,
+    input?: ChangeRequestRecord['input']
+  ) {
+    if (!currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('change')
+    const now = new Date().toISOString()
+    const request: ChangeRequestRecord = {
+      id,
+      kind,
+      action,
+      targetId,
+      targetName,
+      // The database refuses undefined values, which optional form fields leave behind.
+      ...(input ? { input: JSON.parse(JSON.stringify(input)) } : {}),
+      status: 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    const what = `${CHANGE_ACTION_LABELS[action]} ${CHANGE_KIND_LABELS[kind]}`
+    await update(ref(db, 'erp/changeRequests'), { [id]: request })
+    await writeActivity('change_requested', 'approvals', `Asked to ${what} ${targetName}.`)
+    await writeNotification('Change awaiting approval', `${currentUser.name} asked to ${what} ${targetName}.`, 'info', ['admin'])
+  }
+
+  /** Approving applies the requested change as the admin; rejecting leaves everything as it was. */
+  async function reviewChangeRequest(requestId: string, decision: 'approve' | 'reject') {
+    const reviewer = requireAdminUser('approve changes')
+    if (!data) {
+      return
+    }
+
+    const request = data.changeRequests[requestId]
+    if (!request) {
+      throw new Error('Change request not found.')
+    }
+    if (request.status !== 'pending') {
+      throw new Error('This change has already been reviewed.')
+    }
+
+    const what = `${CHANGE_ACTION_LABELS[request.action]} ${CHANGE_KIND_LABELS[request.kind]}`
+    const input = request.input
+    let amount = 0
+    if (decision === 'approve') {
+      const targets: Record<ChangeRequestKind, Record<string, unknown>> = {
+        customer: data.customers,
+        supplier: data.suppliers,
+        credit_entry: data.creditLedgerEntries,
+        expense: data.expenses,
+      }
+      if (request.action !== 'create' && !targets[request.kind][request.targetId]) {
+        throw new Error(`This ${CHANGE_KIND_LABELS[request.kind]} no longer exists. Reject the change instead.`)
+      }
+
+      // These apply the change directly, because an admin's changes never wait for approval.
+      if (request.kind === 'customer') {
+        if (request.action === 'delete') await deleteCustomer(request.targetId)
+        else await saveCustomer(input as CustomerInput, request.targetId || undefined)
+      } else if (request.kind === 'supplier') {
+        if (request.action === 'delete') await deleteSupplier(request.targetId)
+        else await saveSupplier(input as SupplierInput, request.targetId || undefined)
+      } else if (request.kind === 'credit_entry') {
+        if (request.action === 'delete') {
+          const entry = data.creditLedgerEntries[request.targetId]
+          amount = Math.max(entry.debit, entry.credit)
+          await deleteCreditLedgerEntry(request.targetId)
+        } else {
+          const entry = input as CreditLedgerEntryInput
+          amount = Math.max(entry.debit ?? 0, entry.credit ?? 0)
+          await recordCreditLedgerEntry(entry)
+        }
+      } else if (request.action === 'delete') {
+        amount = data.expenses[request.targetId].amount
+        await deleteExpense(request.targetId)
+      } else {
+        amount = (input as ExpenseInput).amount
+        await saveExpense(input as ExpenseInput, request.targetId || undefined)
+      }
+    }
+
+    const now = new Date().toISOString()
+    await update(ref(getDatabaseOrThrow(), `erp/changeRequests/${requestId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: reviewer.id,
+      reviewedByName: reviewer.name,
+      reviewedAt: now,
+      updatedAt: now,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'change_approved' : 'change_rejected',
+      'approvals',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} ${request.submittedByName}'s request to ${what} ${request.targetName}.`
+    )
+    await writeAuditEntry({
+      kind: 'change',
+      refId: requestId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: request.targetName,
+      summary: `${what[0].toUpperCase()}${what.slice(1)}`,
+      amount,
+      submittedByName: request.submittedByName,
+      submittedByRole: roleNameOf(request.submittedById),
+      submittedAt: request.createdAt,
+    })
+  }
+
+  function requireAdminUser(action: string) {
+    if (!currentUser || !userRoleIds(currentUser).includes('admin')) {
+      throw new Error(`Only an admin can ${action}.`)
+    }
+    return currentUser
+  }
+
+  /** Prices the lines of an order request and works out its due and credit-limit standing. */
+  function priceOrderRequest(customer: CustomerRecord, items: OrderRequestEdit['items'], paidInput: number) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+    if (!items.length) {
+      throw new Error('Add at least one product.')
+    }
+
+    const orderItems = items.map((item) => {
+      const product = data.products[item.productId]
+      if (!product) throw new Error('Product not found.')
+      if (!(item.quantity > 0)) throw new Error(`Quantity for ${product.name} must be greater than zero.`)
+      if (item.unitPrice < 0) throw new Error(`Price for ${product.name} cannot be negative.`)
+      return {
+        productId: product.id,
+        productName: product.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        purchasePrice: product.purchasePrice,
+      }
+    })
+    const total = orderItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const paid = Math.min(Math.max(paidInput, 0), total)
+    const due = total - paid
+    const creditLimit = customer.creditLimit ?? 0
+    const overCreditLimit = creditLimit > 0 && (customer.due ?? 0) + due > creditLimit
+    return { items: orderItems, total, paid, due, overCreditLimit }
+  }
+
+  async function submitOrderRequest(input: OrderInput) {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+    const employee = input.employeeId ? data.employees[input.employeeId] : null
+    if (input.employeeId && !employee) {
+      throw new Error('Employee not found.')
+    }
+
+    const priced = priceOrderRequest(customer, input.items, input.paid)
+    if (priced.overCreditLimit && data.settings.blockOverLimitOrders) {
+      throw new Error(`This order takes ${customer.name} over their credit limit, and over-limit orders are blocked.`)
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('order_request')
+    const now = new Date().toISOString()
+    await update(ref(db, 'erp/orderRequests'), {
+      [id]: {
+        id,
+        customerId: customer.id,
+        customerName: customer.name,
+        employeeId: employee?.id ?? '',
+        employeeName: employee?.name ?? '',
+        ...priced,
+        orderDate: input.orderDate?.trim() || now,
+        deliveryDate: input.deliveryDate,
+        courierName: input.courierName?.trim() ?? '',
+        status: 'pending',
+        submittedById: currentUser.id,
+        submittedByName: currentUser.name,
+        submittedByRole: roleNameOf(currentUser.id),
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+
+    await writeActivity('order_request_submitted', 'sales', `Submitted an order of ${priced.total.toLocaleString()} for ${customer.name} for approval.`)
+    await writeNotification(
+      priced.overCreditLimit ? 'Over-limit order awaiting approval' : 'Order awaiting approval',
+      `${currentUser.name} submitted a ${priced.total.toLocaleString()} order for ${customer.name}${priced.overCreditLimit ? ' over their credit limit' : ''}.`,
+      priced.overCreditLimit ? 'warning' : 'info',
+      ['admin']
+    )
+  }
+
+  async function editOrderRequest(requestId: string, edit: OrderRequestEdit) {
+    const editor = requireAdminUser('edit orders')
+    const request = data?.orderRequests[requestId]
+    if (!data || !request) {
+      throw new Error('Order not found.')
+    }
+    if (request.status !== 'pending') {
+      throw new Error('Only orders awaiting approval can be edited.')
+    }
+    const customer = data.customers[request.customerId]
+    if (!customer) {
+      throw new Error('Customer not found.')
+    }
+
+    const priced = priceOrderRequest(customer, edit.items, edit.paid)
+    const changes: SubmissionEdit['changes'] = []
+    const productIds = new Set([...request.items.map((item) => item.productId), ...priced.items.map((item) => item.productId)])
+    productIds.forEach((productId) => {
+      const before = request.items.find((item) => item.productId === productId)
+      const after = priced.items.find((item) => item.productId === productId)
+      const name = after?.productName ?? before?.productName ?? productId
+      if (!before || !after) {
+        changes.push({
+          field: `${name}`,
+          from: before ? `${before.quantity} × ${before.unitPrice}` : 'not in order',
+          to: after ? `${after.quantity} × ${after.unitPrice}` : 'removed',
+        })
+        return
+      }
+      if (before.quantity !== after.quantity) changes.push({ field: `${name} quantity`, from: String(before.quantity), to: String(after.quantity) })
+      if (before.unitPrice !== after.unitPrice) changes.push({ field: `${name} price`, from: String(before.unitPrice), to: String(after.unitPrice) })
+    })
+    if (request.paid !== priced.paid) changes.push({ field: 'Paid', from: String(request.paid), to: String(priced.paid) })
+    if (request.deliveryDate.slice(0, 10) !== edit.deliveryDate.slice(0, 10)) {
+      changes.push({ field: 'Delivery date', from: request.deliveryDate.slice(0, 10), to: edit.deliveryDate.slice(0, 10) })
+    }
+    if (request.courierName !== edit.courierName.trim()) changes.push({ field: 'Courier', from: request.courierName, to: edit.courierName.trim() })
+    if (!changes.length) {
+      throw new Error('Nothing was changed.')
+    }
+
+    const now = new Date().toISOString()
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/orderRequests/${requestId}`), {
+      ...priced,
+      deliveryDate: edit.deliveryDate,
+      courierName: edit.courierName.trim(),
+      edits: [...(request.edits ?? []), { byId: editor.id, byName: editor.name, byRole: roleNameOf(editor.id), at: now, changes }],
+      updatedAt: now,
+    })
+    await writeActivity('order_request_edited', 'sales', `Edited the order for ${request.customerName}: ${changes.map((change) => change.field).join(', ')}.`)
+  }
+
+  async function reviewOrderRequest(requestId: string, decision: 'approve' | 'reject') {
+    const reviewer = requireAdminUser('approve orders')
+    const request = data?.orderRequests[requestId]
+    if (!request) {
+      throw new Error('Order not found.')
+    }
+    if (request.status !== 'pending') {
+      throw new Error('This order has already been reviewed.')
+    }
+
+    // The order itself (stock, due, customer history, credit sheet) only exists once approved.
+    const orderId =
+      decision === 'approve'
+        ? await createOrder(
+            {
+              customerId: request.customerId,
+              employeeId: request.employeeId || undefined,
+              items: request.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })),
+              paid: request.paid,
+              orderDate: request.orderDate,
+              deliveryDate: request.deliveryDate,
+              courierName: request.courierName,
+            },
+            { id: request.submittedById, name: request.submittedByName }
+          )
+        : undefined
+
+    const db = getDatabaseOrThrow()
+    const now = new Date().toISOString()
+    await update(ref(db, `erp/orderRequests/${requestId}`), {
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: reviewer.id,
+      reviewedByName: reviewer.name,
+      reviewedAt: now,
+      orderId: orderId ?? '',
+      updatedAt: now,
+    })
+    await writeAuditEntry({
+      kind: 'order',
+      refId: orderId || requestId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: request.customerName,
+      summary: `${request.items.map((item) => `${item.productName} × ${item.quantity}`).join(', ')}${request.courierName ? ` · ${request.courierName}` : ''}`,
+      amount: request.total,
+      submittedByName: request.submittedByName,
+      submittedByRole: request.submittedByRole,
+      submittedAt: request.createdAt,
+      edits: request.edits,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'order_request_approved' : 'order_request_rejected',
+      'sales',
+      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${request.total.toLocaleString()} order for ${request.customerName}.`
+    )
+  }
+
+  /** The approved order behind a delivery; orders that never went through approval cannot be delivered here. */
+  function approvedOrderFor(orderId: string) {
+    const order = data?.orders[orderId]
+    const request = toArray(data?.orderRequests).find((item) => item.orderId === orderId && item.status === 'approved')
+    if (!order || !request) {
+      throw new Error('Only approved orders can be delivered.')
+    }
+    return { order, request }
+  }
+
+  function resolveDeliveryParties(input: DeliveryPostInput, order: OrderRecord) {
+    const warehouse = data?.warehouses[input.warehouseId]
+    if (!warehouse) {
+      throw new Error('Choose the warehouse the goods leave from.')
+    }
+    // A depot's dealers are delivered from their depot.
+    const depotId = data?.customers[order.customerId]?.depotId
+    const depot = depotId ? data?.depots[depotId] : null
+    if (depot && data?.warehouses[depot.warehouseId] && warehouse.id !== depot.warehouseId) {
+      throw new Error(`${order.customerName} is a dealer of ${depot.name} depot, so this order is delivered from ${data.warehouses[depot.warehouseId].name}.`)
+    }
+    const deliveryMan = data?.employees[input.deliveryManId]
+    if (!deliveryMan) {
+      throw new Error('Choose the delivery man.')
+    }
+    return { warehouse, deliveryMan }
+  }
+
+  async function postDelivery(orderId: string, input: DeliveryPostInput) {
+    if (!currentUser) {
+      return
+    }
+    const { order } = approvedOrderFor(orderId)
+    if (order.delivery) {
+      throw new Error('This order has already been posted for delivery.')
+    }
+    const { warehouse, deliveryMan } = resolveDeliveryParties(input, order)
+
+    const now = new Date().toISOString()
+    const delivery: OrderDelivery = {
+      status: 'posted',
+      warehouseId: warehouse.id,
+      warehouseName: warehouse.name,
+      deliveryManId: deliveryMan.id,
+      deliveryManName: deliveryMan.name,
+      courierName: input.courierName.trim(),
+      trackingNumber: '',
+      vehicle: '',
+      deliveryCharge: 0,
+      note: '',
+      documentUrl: '',
+      documentPublicId: '',
+      postedById: currentUser.id,
+      postedByName: currentUser.name,
+      postedAt: now,
+      submittedById: '',
+      submittedByName: '',
+      submittedAt: '',
+      updatedAt: now,
+    }
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/orders/${orderId}`), {
+      delivery,
+      status: 'shipped',
+      courierName: delivery.courierName || order.courierName || '',
+    })
+    await writeActivity(
+      'delivery_posted',
+      'sales',
+      `Posted ${order.billNumber} for ${order.customerName} from ${warehouse.name} with ${deliveryMan.name}${delivery.courierName ? ` via ${delivery.courierName}` : ''}.`
+    )
+  }
+
+  async function updateDeliveryDetails(orderId: string, input: DeliveryDetailsInput) {
+    if (!currentUser) {
+      return
+    }
+    const { order } = approvedOrderFor(orderId)
+    if (!order.delivery) {
+      throw new Error('Post this order for delivery first.')
+    }
+    if (order.delivery.status === 'submitted') {
+      throw new Error('A submitted delivery can no longer be changed.')
+    }
+    if (!(input.deliveryCharge >= 0)) {
+      throw new Error('Delivery charge cannot be negative.')
+    }
+    const { warehouse, deliveryMan } = resolveDeliveryParties(input, order)
+
+    const db = getDatabaseOrThrow()
+    const courierName = input.courierName.trim()
+    await update(ref(db, `erp/orders/${orderId}`), {
+      'delivery/warehouseId': warehouse.id,
+      'delivery/warehouseName': warehouse.name,
+      'delivery/deliveryManId': deliveryMan.id,
+      'delivery/deliveryManName': deliveryMan.name,
+      'delivery/courierName': courierName,
+      'delivery/trackingNumber': input.trackingNumber.trim(),
+      'delivery/vehicle': input.vehicle.trim(),
+      'delivery/deliveryCharge': input.deliveryCharge,
+      'delivery/note': input.note.trim(),
+      'delivery/updatedAt': new Date().toISOString(),
+      courierName: courierName || order.courierName || '',
+    })
+    await writeActivity('delivery_updated', 'sales', `Updated the delivery details of ${order.billNumber} (${order.customerName}).`)
+  }
+
+  async function submitDelivery(orderId: string, document: { url: string; publicId: string }) {
+    if (!currentUser) {
+      return
+    }
+    const { order, request } = approvedOrderFor(orderId)
+    const delivery = order.delivery
+    if (!delivery) {
+      throw new Error('Post this order for delivery first.')
+    }
+    if (delivery.status === 'submitted') {
+      throw new Error('This delivery has already been submitted.')
+    }
+    if (!document.url) {
+      throw new Error('Add the delivery document before submitting.')
+    }
+
+    const now = new Date().toISOString()
+    const db = getDatabaseOrThrow()
+    // The document lives on the order, so the dealer's credit sheet shows it next to the bill.
+    await update(ref(db, `erp/orders/${orderId}`), {
+      'delivery/status': 'submitted',
+      'delivery/documentUrl': document.url,
+      'delivery/documentPublicId': document.publicId,
+      'delivery/submittedById': currentUser.id,
+      'delivery/submittedByName': currentUser.name,
+      'delivery/submittedAt': now,
+      'delivery/updatedAt': now,
+      status: 'completed',
+    })
+    await writeAuditEntry({
+      kind: 'delivery',
+      refId: orderId,
+      decision: 'approved',
+      party: order.customerName,
+      summary: [
+        order.billNumber,
+        `from ${delivery.warehouseName}`,
+        `by ${delivery.deliveryManName}`,
+        delivery.courierName && `via ${delivery.courierName}`,
+        delivery.trackingNumber && `tracking ${delivery.trackingNumber}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      amount: order.total,
+      submittedByName: delivery.postedByName,
+      submittedByRole: roleNameOf(delivery.postedById),
+      submittedAt: delivery.postedAt || request.reviewedAt || now,
+    })
+    await writeActivity('delivery_submitted', 'sales', `Submitted the delivery document for ${order.billNumber} (${order.customerName}).`)
+  }
+
+  /** Admin edits of a pending deposit, supplier payment or expense; every changed field is kept in its edit history. */
+  async function editSubmission(kind: EditableSubmissionKind, id: string, patch: SubmissionPatch) {
+    const editor = requireAdminUser('edit submissions')
+    const record = data?.[kind][id] as (SubmissionPatch & { status?: string; edits?: SubmissionEdit[]; taType?: string }) | undefined
+    if (!record) {
+      throw new Error('Submission not found.')
+    }
+    if (record.status !== 'pending') {
+      throw new Error('Only submissions awaiting approval can be edited.')
+    }
+    if (patch.amount !== undefined && !(patch.amount > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+    if (patch.amount !== undefined && record.taType === 'actual' && patch.amount !== record.amount) {
+      throw new Error('An actual TA amount is the sum of its trips and cannot be edited here.')
+    }
+
+    const changes: SubmissionEdit['changes'] = []
+    const values: Record<string, string | number> = {}
+    ;(Object.keys(patch) as Array<keyof SubmissionPatch>).forEach((field) => {
+      const raw = patch[field]
+      if (raw === undefined) return
+      const next = typeof raw === 'string' ? raw.trim() : raw
+      const before = record[field] ?? ''
+      const same = field === 'date' ? String(before).slice(0, 10) === String(next).slice(0, 10) : before === next
+      if (same) return
+      values[field] = next
+      changes.push({
+        field: SUBMISSION_FIELD_LABELS[field],
+        from: field === 'date' ? String(before).slice(0, 10) : String(before),
+        to: field === 'date' ? String(next).slice(0, 10) : String(next),
+      })
+    })
+    if (!changes.length) {
+      throw new Error('Nothing was changed.')
+    }
+
+    const now = new Date().toISOString()
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/${kind}/${id}`), {
+      ...values,
+      edits: [...(record.edits ?? []), { byId: editor.id, byName: editor.name, byRole: roleNameOf(editor.id), at: now, changes }],
+      ...(kind === 'expenses' ? {} : { updatedAt: now }),
+    })
+    await writeActivity('submission_edited', 'finance', `Edited a pending ${SUBMISSION_KIND_LABELS[kind]}: ${changes.map((change) => change.field).join(', ')}.`)
   }
 
   async function deleteCreditLedgerEntry(entryId: string) {
@@ -1929,6 +3795,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const entry = data.creditLedgerEntries[entryId]
     if (!entry) {
       throw new Error('Ledger entry not found.')
+    }
+
+    if (needsApproval) {
+      await requestChange('credit_entry', 'delete', entryId, entry.customerName)
+      return
     }
 
     const db = getDatabaseOrThrow()
@@ -2220,8 +4091,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       canSetPay ? Math.max(value ?? current ?? 0, 0) : current ?? 0
     const salaryPay = (value: number | undefined, current: number | undefined) => (salaryBased ? pay(value, current) : 0)
 
+    const userId = input.userId !== undefined ? input.userId.trim() : existingEmployee?.userId ?? ''
+    const linkedElsewhere = userId
+      ? Object.values(data.employees).find((other) => other.id !== id && other.userId === userId)
+      : null
+    if (linkedElsewhere) {
+      throw new Error(`That login is already linked to ${linkedElsewhere.name}.`)
+    }
+
     const employee: EmployeeRecord = {
       id,
+      employeeCode:
+        existingEmployee?.employeeCode ||
+        (approvalStatus === 'approved' ? nextEmployeeCode(Object.values(data.employees)) : ''),
+      joiningLetterIssuedAt: existingEmployee?.joiningLetterIssuedAt ?? '',
       name,
       address: input.address?.trim() ?? existingEmployee?.address ?? '',
       phone,
@@ -2246,6 +4129,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       employmentStatus: input.employmentStatus ?? existingEmployee?.employmentStatus ?? 'active',
       baseSalary: salaryPay(input.baseSalary, existingEmployee?.baseSalary),
       taDa: salaryPay(input.taDa, existingEmployee?.taDa),
+      // DA follows attendance, so commission-based staff can earn it too.
+      daPerDay: pay(input.daPerDay, existingEmployee?.daPerDay),
       houseRent: salaryPay(input.houseRent, existingEmployee?.houseRent),
       mobileBill: salaryPay(input.mobileBill, existingEmployee?.mobileBill),
       monthlyUnitTarget: Math.max(
@@ -2259,7 +4144,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       commissionPerUnit: canSetPay
         ? Math.max(input.commissionPerUnit ?? existingEmployee?.commissionPerUnit ?? DEFAULT_COMMISSION_PER_UNIT, 0)
         : existingEmployee?.commissionPerUnit ?? 0,
-      userId: input.userId?.trim() || existingEmployee?.userId || '',
+      userId,
       notes: input.notes?.trim() ?? existingEmployee?.notes ?? '',
       createdAt: existingEmployee?.createdAt ?? now,
       updatedAt: now,
@@ -2329,12 +4214,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
       next = {
         ...employee,
+        employeeCode: employee.employeeCode || nextEmployeeCode(Object.values(data.employees)),
+        joiningLetterIssuedAt: employee.joiningLetterIssuedAt || now,
         compensationType: input.compensationType,
         baseSalary: amount(input.baseSalary),
         taDa: amount(input.taDa),
+        daPerDay: Math.max(input.daPerDay ?? 0, 0),
         houseRent: amount(input.houseRent),
         mobileBill: amount(input.mobileBill),
         commissionPerUnit,
+        monthlyUnitTarget: Math.max(input.monthlyUnitTarget ?? employee.monthlyUnitTarget, 0),
+        monthlyAmountTarget: Math.max(input.monthlyAmountTarget ?? employee.monthlyAmountTarget, 0),
         notes: input.notes?.trim() ?? employee.notes,
         approvalStatus: 'approved',
         approvedBy: currentUser.id,
@@ -2348,8 +4238,66 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       decision === 'approve' ? 'employee_approved' : 'employee_rejected',
       'employees',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} ${employee.name}'s joining form.`
+      decision === 'approve'
+        ? `Approved ${employee.name}'s joining form as ${next.employeeCode} and issued the joining letter.`
+        : `Rejected ${employee.name}'s joining form.`
     )
+    const submitter = data.users[employee.submittedBy]
+    await writeAuditEntry({
+      kind: 'employee',
+      refId: employeeId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: employee.name,
+      summary: [
+        next.employeeCode,
+        employee.designation,
+        decision === 'approve'
+          ? next.compensationType === 'salary'
+            ? `Salary ${next.baseSalary.toLocaleString()} + allowances ${(next.taDa + next.houseRent + next.mobileBill).toLocaleString()}`
+            : `Commission ${next.commissionPerUnit.toLocaleString()} per unit`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      amount: decision === 'approve' ? next.baseSalary + next.taDa + next.houseRent + next.mobileBill : 0,
+      submittedByName: submitter?.name ?? employee.submittedBy ?? '',
+      submittedByRole: submitter ? roleNameOf(submitter.id) : '',
+      submittedAt: employee.createdAt,
+    })
+
+    return next
+  }
+
+  async function issueJoiningLetter(employeeId: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const employee = data.employees[employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    if (employee.approvalStatus !== 'approved') {
+      throw new Error('The joining letter is issued once the joining form is approved.')
+    }
+
+    if (employee.employeeCode && employee.joiningLetterIssuedAt) {
+      return employee
+    }
+
+    const next: EmployeeRecord = {
+      ...employee,
+      employeeCode: employee.employeeCode || nextEmployeeCode(Object.values(data.employees)),
+      joiningLetterIssuedAt: employee.joiningLetterIssuedAt || new Date().toISOString(),
+    }
+    const db = getDatabaseOrThrow()
+    await update(ref(db, `erp/employees/${employeeId}`), {
+      employeeCode: next.employeeCode,
+      joiningLetterIssuedAt: next.joiningLetterIssuedAt,
+    })
+    await writeActivity('joining_letter_issued', 'employees', `Issued ${employee.name}'s joining letter (${next.employeeCode}).`)
+    return next
   }
 
   async function deleteEmployee(employeeId: string) {
@@ -2373,7 +4321,66 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('employee_deleted', 'employees', `Removed employee ${employee.name}.`)
   }
 
-  /** Upserts the month's target totals, then re-syncs that month's salary record so commission/hold status always reflect the latest sales. */
+  /**
+   * The month's salary record rebuilt from the live figures, with `changes` laid over the loaded
+   * data (`null` removes a record) and `payment` added to its payments.
+   */
+  function salarySnapshot(
+    employee: EmployeeRecord,
+    month: string,
+    changes: {
+      salesTargets?: Record<string, SalesTargetRecord>
+      employeeAdvances?: Record<string, EmployeeAdvanceRecord | null>
+      commissionAuthorizations?: Record<string, CommissionAuthorizationRecord>
+    } = {},
+    payment?: SalaryPaymentEntry
+  ): SalaryRecord {
+    const source = data!
+    const withChanges = <T,>(records: Record<string, T>, overrides: Record<string, T | null> = {}) =>
+      Object.fromEntries(
+        Object.entries({ ...records, ...overrides }).filter((entry): entry is [string, T] => entry[1] !== null)
+      )
+    const pay = computeMonthlyPay(
+      {
+        salesTargets: withChanges(source.salesTargets, changes.salesTargets),
+        salaries: source.salaries,
+        employeeAdvances: withChanges(source.employeeAdvances, changes.employeeAdvances),
+        commissionAuthorizations: withChanges(source.commissionAuthorizations, changes.commissionAuthorizations),
+      },
+      employee,
+      month
+    )
+    const existing = pay.salary
+    const now = new Date().toISOString()
+    const paidAmount = (existing?.paidAmount ?? 0) + (payment?.amount ?? 0)
+    const dueAmount = Math.max(pay.netPayable - paidAmount, 0)
+
+    return {
+      id: existing?.id ?? createId('salary'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month,
+      baseSalary: employee.baseSalary,
+      commissionPerUnit: employee.commissionPerUnit,
+      unitsSold: pay.unitsSold,
+      commissionAmount: pay.commissionAmount,
+      commissionEarned: pay.commissionEarned,
+      amountCollected: pay.amountCollected,
+      achievementPercent: pay.achievementPercent,
+      holdStatus: pay.holdStatus,
+      ownerAuthorized: pay.ownerAuthorized,
+      advanceAmount: pay.advanceAmount,
+      grossPayable: pay.grossPayable,
+      paidAmount,
+      dueAmount,
+      paymentStatus: dueAmount <= 0 ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid',
+      payments: payment ? [...(existing?.payments ?? []), payment] : existing?.payments ?? [],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+  }
+
+  /** Adds to the month's sales and collection totals, then re-syncs that month's salary record. */
   async function recordSale(input: RecordSaleInput) {
     if (!data || !currentUser) {
       return
@@ -2390,8 +4397,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const units = Math.max(input.units ?? 0, 0)
     const amount = Math.max(input.amount ?? 0, 0)
-    if (units <= 0 && amount <= 0) {
-      throw new Error('Enter units sold or a sales amount greater than zero.')
+    const collected = Math.max(input.collected ?? 0, 0)
+    if (units <= 0 && amount <= 0 && collected <= 0) {
+      throw new Error('Enter units sold, a sales amount, or the due money collected.')
     }
 
     const db = getDatabaseOrThrow()
@@ -2411,39 +4419,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       commissionPerUnit: existingTarget?.commissionPerUnit ?? employee.commissionPerUnit,
       unitsSold: Math.max(existingTarget?.unitsSold ?? 0, 0) + units,
       amountSold: Math.max(existingTarget?.amountSold ?? 0, 0) + amount,
+      amountCollected: Math.max(existingTarget?.amountCollected ?? 0, 0) + collected,
       createdAt: existingTarget?.createdAt ?? now,
       updatedAt: now,
     }
 
     const previousAchievement = existingTarget ? getTargetAchievement(existingTarget).achievementPercent : 0
     const nextAchievement = getTargetAchievement(target)
-
-    const existingSalary = Object.values(data.salaries).find(
-      (salary) => salary.employeeId === employee.id && salary.month === month
-    )
-    const figures = computeSalaryFigures(employee, target)
-    const paidAmount = existingSalary?.paidAmount ?? 0
-    const dueAmount = Math.max(figures.grossPayable - paidAmount, 0)
-
-    const salary: SalaryRecord = {
-      id: existingSalary?.id ?? createId('salary'),
-      employeeId: employee.id,
-      employeeName: employee.name,
-      month,
-      baseSalary: employee.baseSalary,
-      commissionPerUnit: employee.commissionPerUnit,
-      unitsSold: figures.unitsSold,
-      commissionAmount: figures.commissionAmount,
-      achievementPercent: figures.achievementPercent,
-      holdStatus: figures.holdStatus,
-      grossPayable: figures.grossPayable,
-      paidAmount,
-      dueAmount,
-      paymentStatus: dueAmount <= 0 ? 'paid' : paidAmount > 0 ? 'partial' : 'unpaid',
-      payments: existingSalary?.payments ?? [],
-      createdAt: existingSalary?.createdAt ?? now,
-      updatedAt: now,
-    }
+    const salary = salarySnapshot(employee, month, { salesTargets: { [target.id]: target } })
 
     await update(ref(db, 'erp'), {
       [`salesTargets/${target.id}`]: target,
@@ -2453,20 +4436,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity(
       'sale_recorded',
       'sales_target',
-      `Recorded ${units} unit(s) / ${amount} BDT sales for ${employee.name} (${month}).`
+      `Recorded ${units} unit(s) / ${amount} BDT sales and ${collected} BDT collected for ${employee.name} (${month}).`
     )
 
     if (nextAchievement.achievementPercent >= 80 && previousAchievement < 80) {
       await writeNotification(
         'Target achieved',
-        `${employee.name} crossed 80% of the ${month} target — salary hold released.`,
+        `${employee.name} crossed 80% of the ${month} target — commission is now payable.`,
         'info',
         ['admin', 'accountant']
       )
     }
   }
 
-  /** Creates the month's salary record on first payment (using live target figures) and appends to its payment history. */
+  /** Adds a payment to the month's salary record, creating it from the live figures on the first payment. */
   async function saveSalaryPayment(input: SalaryPaymentInput) {
     if (!data || !currentUser) {
       return
@@ -2483,55 +4466,594 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const db = getDatabaseOrThrow()
     const month = input.month.trim() || currentMonthKey()
-    const existingSalary = Object.values(data.salaries).find(
-      (salary) => salary.employeeId === employee.id && salary.month === month
-    )
-    const existingTarget = Object.values(data.salesTargets).find(
-      (target) => target.employeeId === employee.id && target.month === month
-    )
     const now = new Date().toISOString()
-    const figures = computeSalaryFigures(employee, existingTarget ?? null)
 
-    const priorPaid = existingSalary?.paidAmount ?? 0
-    const grossPayable = existingSalary?.grossPayable ?? figures.grossPayable
-    const paymentAmount = input.amount
-    const nextPaid = priorPaid + paymentAmount
-    const nextDue = Math.max(grossPayable - nextPaid, 0)
+    const kind = input.kind ?? 'salary'
+    const pay = computeMonthlyPay(data, employee, month)
+    const due = kind === 'commission' ? pay.commissionDue : pay.salaryDue
+    if (input.amount > due) {
+      throw new Error(`Only ${due.toLocaleString()} BDT of ${employee.name}'s ${kind} for ${month} is left to pay.`)
+    }
+    // Commission is paid on the 16th–20th of the next month; only an admin can pay it at another time.
+    if (kind === 'commission' && !inCommissionWindow(month, dayKey()) && !userRoleIds(currentUser).includes('admin')) {
+      throw new Error(`Commission for ${month} is paid from ${pay.schedule.commissionFrom} to ${pay.schedule.commissionTo}. Ask an admin to pay it at another time.`)
+    }
 
     const paymentEntry: SalaryPaymentEntry = {
       id: createId('salary_payment'),
-      amount: paymentAmount,
+      kind,
+      amount: input.amount,
       method: input.method?.trim() || 'cash',
       note: input.note?.trim() ?? '',
       paidBy: currentUser.name,
       paidAt: now,
     }
+    const salary = salarySnapshot(employee, month, {}, paymentEntry)
 
-    const salary: SalaryRecord = {
-      id: existingSalary?.id ?? createId('salary'),
+    await update(ref(db, 'erp'), { [`salaries/${salary.id}`]: salary })
+    await writeActivity('salary_paid', 'salary', `Paid ${input.amount} BDT ${kind} to ${employee.name} for ${month}.`)
+    await writeNotification(
+      'Salary payment recorded',
+      `${employee.name} was paid ${input.amount} BDT for ${month} by ${currentUser?.name ?? 'Admin'}.`,
+      'info',
+      ['admin', 'accountant']
+    )
+  }
+
+  /** Records money an employee took before the month was over; it comes off that month's pay. */
+  async function saveEmployeeAdvance(input: EmployeeAdvanceInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    if (!currentPermissions.includes('salary.edit')) {
+      throw new Error('You do not have permission to record advances.')
+    }
+
+    const employee = data.employees[input.employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    if (employee.approvalStatus !== 'approved') {
+      throw new Error(`${employee.name}'s joining form has not been approved yet.`)
+    }
+
+    const amount = Number(input.amount)
+    if (!(amount > 0)) {
+      throw new Error('Advance amount must be greater than zero.')
+    }
+
+    if (!input.date) {
+      throw new Error('Enter the date the advance was given.')
+    }
+
+    const now = new Date().toISOString()
+    const advance: EmployeeAdvanceRecord = {
+      id: createId('advance'),
       employeeId: employee.id,
       employeeName: employee.name,
-      month,
-      baseSalary: employee.baseSalary,
-      commissionPerUnit: employee.commissionPerUnit,
-      unitsSold: existingSalary?.unitsSold ?? figures.unitsSold,
-      commissionAmount: existingSalary?.commissionAmount ?? figures.commissionAmount,
-      achievementPercent: existingSalary?.achievementPercent ?? figures.achievementPercent,
-      holdStatus: existingSalary?.holdStatus ?? figures.holdStatus,
-      grossPayable,
-      paidAmount: nextPaid,
-      dueAmount: nextDue,
-      paymentStatus: nextDue <= 0 ? 'paid' : nextPaid > 0 ? 'partial' : 'unpaid',
-      payments: [...(existingSalary?.payments ?? []), paymentEntry],
-      createdAt: existingSalary?.createdAt ?? now,
+      month: input.date.slice(0, 7),
+      date: input.date,
+      amount,
+      method: input.method?.trim() || 'cash',
+      note: input.note?.trim() ?? '',
+      givenById: currentUser.id,
+      givenByName: currentUser.name,
+      createdAt: now,
+    }
+    const salary = salarySnapshot(employee, advance.month, { employeeAdvances: { [advance.id]: advance } })
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), {
+      [`employeeAdvances/${advance.id}`]: advance,
+      [`salaries/${salary.id}`]: salary,
+    })
+    await writeActivity('advance_given', 'salary', `Gave ${employee.name} an advance of ${amount} BDT (${advance.month}).`)
+  }
+
+  async function deleteEmployeeAdvance(advanceId: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    if (!currentPermissions.includes('salary.edit')) {
+      throw new Error('You do not have permission to remove advances.')
+    }
+
+    const advance = data.employeeAdvances[advanceId]
+    if (!advance) {
+      throw new Error('Advance not found.')
+    }
+
+    const employee = data.employees[advance.employeeId]
+    const updates: Record<string, unknown> = { [`employeeAdvances/${advanceId}`]: null }
+    if (employee) {
+      const salary = salarySnapshot(employee, advance.month, { employeeAdvances: { [advanceId]: null } })
+      updates[`salaries/${salary.id}`] = salary
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity('advance_removed', 'salary', `Removed ${advance.employeeName}'s ${advance.amount} BDT advance (${advance.month}).`)
+  }
+
+  async function saveBatteryReport(input: BatteryReportInput, reportId?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+    if (!currentPermissions.includes('customers.edit')) {
+      throw new Error('You do not have permission to write battery reports.')
+    }
+
+    const existing = reportId ? data.batteryReports[reportId] : undefined
+    if (reportId && !existing) {
+      throw new Error('Battery report not found.')
+    }
+    const customer = data.customers[input.customerId]
+    if (!customer) {
+      throw new Error('Select the dealer the battery came from.')
+    }
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Select the battery model.')
+    }
+    if (!input.checkDate) {
+      throw new Error('Enter the date of the check.')
+    }
+
+    const number = (value: number) => (Number.isFinite(Number(value)) ? Math.max(Number(value), 0) : 0)
+    const now = new Date().toISOString()
+    const highest = Object.values(data.batteryReports).reduce((max, report) => {
+      const match = report.reportNo?.match(/(\d+)$/)
+      return match ? Math.max(max, Number(match[1])) : max
+    }, 0)
+    const id = existing?.id ?? createId('battery_report')
+    const report: BatteryReportRecord = {
+      id,
+      reportNo: existing?.reportNo ?? `BCR-${String(highest + 1).padStart(4, '0')}`,
+      checkDate: input.checkDate,
+      customerId: customer.id,
+      customerName: customer.name,
+      endCustomerName: input.endCustomerName.trim(),
+      endCustomerPhone: input.endCustomerPhone.trim(),
+      productId: product.id,
+      productName: product.name,
+      serialNumber: input.serialNumber.trim(),
+      saleDate: input.saleDate,
+      warrantyMonths: product.warrantyMonths ?? 0,
+      ...(input.complaintId ? { complaintId: input.complaintId } : {}),
+      ...(input.replacementId ? { replacementId: input.replacementId } : {}),
+      ratedVoltage: number(input.ratedVoltage),
+      ratedCapacityAh: number(input.ratedCapacityAh),
+      openCircuitVoltage: number(input.openCircuitVoltage),
+      loadVoltage: number(input.loadVoltage),
+      measuredCca: number(input.measuredCca),
+      ratedCca: number(input.ratedCca),
+      internalResistance: number(input.internalResistance),
+      specificGravity: input.specificGravity.trim(),
+      afterChargeVoltage: number(input.afterChargeVoltage),
+      condition: input.condition.length ? Array.from(new Set(input.condition)) : ['good'],
+      fault: input.fault,
+      verdict: input.verdict,
+      remarks: input.remarks.trim(),
+      checkedById: existing?.checkedById ?? currentUser.id,
+      checkedByName: existing?.checkedByName ?? currentUser.name,
+      createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp'), { [`salaries/${salary.id}`]: salary })
-    await writeActivity('salary_paid', 'salary', `Paid ${paymentAmount} BDT to ${employee.name} for ${month}.`)
+    await update(ref(getDatabaseOrThrow(), 'erp/batteryReports'), { [id]: report })
+    await writeActivity(
+      existing ? 'battery_report_updated' : 'battery_report_created',
+      'support',
+      `${existing ? 'Updated' : 'Wrote'} battery check report ${report.reportNo} for ${product.name} (${customer.name}).`
+    )
+    return id
+  }
+
+  async function deleteBatteryReport(reportId: string) {
+    requireAdminUser('delete battery reports')
+    const report = data?.batteryReports[reportId]
+    if (!report) {
+      throw new Error('Battery report not found.')
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/batteryReports'), { [reportId]: null })
+    await writeActivity('battery_report_deleted', 'support', `Deleted battery check report ${report.reportNo}.`)
+  }
+
+  async function saveBusiness(input: BusinessInput, businessId?: string) {
+    requireAdminUser('set up sub businesses')
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+    const name = input.name.trim()
+    if (!name) {
+      throw new Error('Enter the business name.')
+    }
+    const existing = businessId ? data.businesses[businessId] : undefined
+    const duplicate = Object.values(data.businesses).find((item) => item.id !== existing?.id && item.name.trim().toLowerCase() === name.toLowerCase())
+    if (duplicate) {
+      throw new Error(`A business named ${duplicate.name} already exists.`)
+    }
+
+    const now = new Date().toISOString()
+    const id = existing?.id ?? createId('business')
+    const business: BusinessRecord = {
+      id,
+      name,
+      description: input.description?.trim() ?? existing?.description ?? '',
+      openingCash: Math.max(Number(input.openingCash ?? existing?.openingCash ?? 0) || 0, 0),
+      openingStockValue: Math.max(Number(input.openingStockValue ?? existing?.openingStockValue ?? 0) || 0, 0),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/businesses'), { [id]: business })
+    await writeActivity(existing ? 'business_updated' : 'business_created', 'finance', `${existing ? 'Updated' : 'Started'} sub business ${name}.`)
+    return id
+  }
+
+  async function deleteBusiness(businessId: string) {
+    requireAdminUser('remove sub businesses')
+    const business = data?.businesses[businessId]
+    if (!data || !business) {
+      throw new Error('Business not found.')
+    }
+    if (Object.values(data.businessEntries).some((entry) => entry.businessId === businessId)) {
+      throw new Error(`${business.name} has entries in its books and cannot be removed.`)
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/businesses'), { [businessId]: null })
+    await writeActivity('business_deleted', 'finance', `Removed sub business ${business.name}.`)
+  }
+
+  function businessEntryAudit(entry: BusinessEntryRecord, decision: 'approved' | 'rejected') {
+    return writeAuditEntry({
+      kind: 'business',
+      refId: entry.id,
+      decision,
+      party: entry.businessName,
+      summary: [BUSINESS_ENTRY_LABELS[entry.kind], entry.party, entry.particulars].filter(Boolean).join(' · '),
+      amount: entry.amount,
+      submittedByName: entry.submittedByName,
+      submittedByRole: roleNameOf(entry.submittedById),
+      submittedAt: entry.createdAt,
+    })
+  }
+
+  async function submitBusinessEntry(input: BusinessEntryInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+    if (!currentPermissions.includes('finance.view')) {
+      throw new Error('You do not have permission to add sub business entries.')
+    }
+    const business = data.businesses[input.businessId]
+    if (!business) {
+      throw new Error('Select the business.')
+    }
+    if (!input.date) {
+      throw new Error('Enter the date.')
+    }
+    const particulars = input.particulars.trim()
+    if (!particulars) {
+      throw new Error('Describe the entry.')
+    }
+
+    const amount = Number(input.amount) || 0
+    const stockValue = Math.max(Number(input.stockValue) || 0, 0)
+    if (input.kind === 'stock_adjustment') {
+      if (amount === 0) throw new Error('Enter the change in stock value.')
+    } else if (input.kind === 'stock_purchase' || input.kind === 'sale') {
+      if (amount < 0) throw new Error('Amount cannot be negative.')
+      if (amount === 0 && stockValue === 0) throw new Error('Enter the amount and the stock value.')
+    } else if (!(amount > 0)) {
+      throw new Error('Amount must be greater than zero.')
+    }
+
+    const isAdmin = userRoleIds(currentUser).includes('admin')
+    const now = new Date().toISOString()
+    const entry: BusinessEntryRecord = {
+      id: createId('business_entry'),
+      businessId: business.id,
+      businessName: business.name,
+      kind: input.kind,
+      date: input.date,
+      amount,
+      stockValue: input.kind === 'stock_purchase' || input.kind === 'sale' ? stockValue : 0,
+      party: input.party?.trim() ?? '',
+      particulars,
+      status: isAdmin ? 'approved' : 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      ...(isAdmin ? { reviewedById: currentUser.id, reviewedByName: currentUser.name, reviewedAt: now } : {}),
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp/businessEntries'), { [entry.id]: entry })
+    await writeActivity('business_entry_submitted', 'finance', `${BUSINESS_ENTRY_LABELS[entry.kind]} of ${amount} for ${business.name}: ${particulars}.`)
+    if (isAdmin) {
+      await businessEntryAudit(entry, 'approved')
+    } else {
+      await writeNotification('Sub business entry awaiting approval', `${currentUser.name} added a ${BUSINESS_ENTRY_LABELS[entry.kind].toLowerCase()} to ${business.name}.`, 'info', ['admin'])
+    }
+  }
+
+  async function reviewBusinessEntry(entryId: string, decision: 'approve' | 'reject') {
+    const reviewer = requireAdminUser('approve sub business entries')
+    const entry = data?.businessEntries[entryId]
+    if (!entry) {
+      throw new Error('Entry not found.')
+    }
+    if (entry.status !== 'pending') {
+      throw new Error('This entry has already been reviewed.')
+    }
+    const now = new Date().toISOString()
+    const next: BusinessEntryRecord = {
+      ...entry,
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: reviewer.id,
+      reviewedByName: reviewer.name,
+      reviewedAt: now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/businessEntries'), { [entryId]: next })
+    await businessEntryAudit(next, decision === 'approve' ? 'approved' : 'rejected')
+  }
+
+  async function deleteBusinessEntry(entryId: string) {
+    requireAdminUser('delete sub business entries')
+    const entry = data?.businessEntries[entryId]
+    if (!entry) {
+      throw new Error('Entry not found.')
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/businessEntries'), { [entryId]: null })
+    await writeActivity('business_entry_deleted', 'finance', `Deleted a ${BUSINESS_ENTRY_LABELS[entry.kind].toLowerCase()} of ${entry.amount} from ${entry.businessName}.`)
+  }
+
+  /** An employee asks for money ahead of payday in an emergency; the office decides the amount. */
+  async function requestAdvance(input: AdvanceRequestInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const employee = data.employees[input.employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+    if (employee.userId !== currentUser.id && !currentPermissions.includes('salary.edit')) {
+      throw new Error('You can only request an advance for yourself.')
+    }
+    if (employee.approvalStatus !== 'approved') {
+      throw new Error(`${employee.name}'s joining form has not been approved yet.`)
+    }
+
+    const amount = Number(input.amount)
+    if (!(amount > 0)) {
+      throw new Error('Enter the amount needed.')
+    }
+    const reason = input.reason.trim()
+    if (!reason) {
+      throw new Error('Explain the emergency.')
+    }
+    if (Object.values(data.advanceRequests).some((request) => request.employeeId === employee.id && request.status === 'pending')) {
+      throw new Error(`${employee.name} already has an advance request waiting for the office.`)
+    }
+
+    const now = new Date().toISOString()
+    const request: AdvanceRequestRecord = {
+      id: createId('advance_request'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      amount,
+      reason,
+      status: 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp/advanceRequests'), { [request.id]: request })
+    await writeActivity('advance_requested', 'salary', `${employee.name} asked for an emergency advance of ${amount} BDT.`)
+    await writeNotification('Emergency advance requested', `${employee.name} asked for ${amount} BDT: ${reason}`, 'warning', ['admin', 'accountant'])
+  }
+
+  /** Approving gives the employee the approved amount as an advance on this month's pay. */
+  async function reviewAdvanceRequest(requestId: string, decision: 'approve' | 'reject', options: { amount?: number; method?: string; note?: string } = {}) {
+    const reviewer = requireAdminUser('approve advances')
+    const request = data?.advanceRequests[requestId]
+    if (!data || !request) {
+      throw new Error('Advance request not found.')
+    }
+    if (request.status !== 'pending') {
+      throw new Error('This request has already been reviewed.')
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {}
+    let approvedAmount = 0
+    let advanceId = ''
+
+    if (decision === 'approve') {
+      const employee = data.employees[request.employeeId]
+      if (!employee) {
+        throw new Error('Employee not found.')
+      }
+      approvedAmount = Number(options.amount ?? request.amount)
+      if (!(approvedAmount > 0)) {
+        throw new Error('Enter the amount to give.')
+      }
+
+      const date = dayKey()
+      const advance: EmployeeAdvanceRecord = {
+        id: createId('advance'),
+        employeeId: employee.id,
+        employeeName: employee.name,
+        month: date.slice(0, 7),
+        date,
+        amount: approvedAmount,
+        method: options.method?.trim() || 'cash',
+        note: ['Emergency', request.reason, options.note?.trim()].filter(Boolean).join(' — '),
+        givenById: reviewer.id,
+        givenByName: reviewer.name,
+        createdAt: now,
+      }
+      advanceId = advance.id
+      const salary = salarySnapshot(employee, advance.month, { employeeAdvances: { [advance.id]: advance } })
+      updates[`employeeAdvances/${advance.id}`] = advance
+      updates[`salaries/${salary.id}`] = salary
+    }
+
+    updates[`advanceRequests/${requestId}`] = {
+      ...request,
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      ...(decision === 'approve' ? { approvedAmount, advanceId, method: options.method?.trim() || 'cash' } : {}),
+      reviewNote: options.note?.trim() ?? '',
+      reviewedById: reviewer.id,
+      reviewedByName: reviewer.name,
+      reviewedAt: now,
+      updatedAt: now,
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeAuditEntry({
+      kind: 'advance',
+      refId: requestId,
+      decision: decision === 'approve' ? 'approved' : 'rejected',
+      party: request.employeeName,
+      summary: [request.reason, decision === 'approve' && approvedAmount !== request.amount ? `asked ${request.amount.toLocaleString()}` : '']
+        .filter(Boolean)
+        .join(' · '),
+      amount: approvedAmount,
+      submittedByName: request.submittedByName,
+      submittedByRole: roleNameOf(request.submittedById),
+      submittedAt: request.createdAt,
+    })
+    await writeActivity(
+      decision === 'approve' ? 'advance_request_approved' : 'advance_request_rejected',
+      'salary',
+      decision === 'approve'
+        ? `Approved ${approvedAmount} BDT emergency advance for ${request.employeeName}.`
+        : `Refused ${request.employeeName}'s emergency advance request.`
+    )
+  }
+
+  async function requestCommissionAuthorization(input: CommissionAuthorizationInput) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    const employee = data.employees[input.employeeId]
+    if (!employee) {
+      throw new Error('Employee not found.')
+    }
+
+    // The employee may apply for themselves; otherwise it takes someone who handles targets or payroll.
+    const isSelf = Boolean(employee.userId && employee.userId === currentUser.id)
+    const canApply =
+      isSelf ||
+      currentPermissions.includes('salary.view') ||
+      currentPermissions.includes('sales_target.view') ||
+      currentPermissions.includes('employees.edit')
+    if (!canApply) {
+      throw new Error('You do not have permission to apply for this employee.')
+    }
+
+    const reason = input.reason.trim()
+    if (!reason) {
+      throw new Error('Explain why the commission should be allowed.')
+    }
+
+    const month = input.month || currentMonthKey()
+    const pay = computeMonthlyPay(data, employee, month)
+    if (pay.achievementPercent >= 80) {
+      throw new Error(`${employee.name} reached the target for this month; the commission is already payable.`)
+    }
+
+    const open = Object.values(data.commissionAuthorizations).find(
+      (request) => request.employeeId === employee.id && request.month === month && request.status !== 'rejected'
+    )
+    if (open) {
+      throw new Error(
+        open.status === 'approved'
+          ? 'The owner already authorized this month’s commission.'
+          : 'A request for this month is already waiting for the owner.'
+      )
+    }
+
+    const now = new Date().toISOString()
+    const request: CommissionAuthorizationRecord = {
+      id: createId('commission_auth'),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month,
+      reason,
+      achievementPercent: pay.achievementPercent,
+      status: 'pending',
+      requestedById: currentUser.id,
+      requestedByName: currentUser.name,
+      requestedAt: now,
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/commissionAuthorizations'), { [request.id]: request })
+    await writeActivity(
+      'commission_authorization_requested',
+      'salary',
+      `Asked the owner to authorize ${employee.name}'s ${month} commission (${pay.achievementPercent.toFixed(1)}% of target).`
+    )
     await writeNotification(
-      'Salary payment recorded',
-      `${employee.name} was paid ${paymentAmount} BDT for ${month} by ${currentUser?.name ?? 'Admin'}.`,
+      'Commission authorization requested',
+      `${currentUser.name} asked to allow ${employee.name}'s commission for ${month} at ${pay.achievementPercent.toFixed(1)}% of target: ${reason}`,
+      'warning',
+      ['owner', 'admin']
+    )
+  }
+
+  async function reviewCommissionAuthorization(requestId: string, decision: 'approve' | 'reject', note?: string) {
+    if (!data || !currentUser) {
+      throw new Error('You need to log in first.')
+    }
+
+    if (!canAuthorizeCommission(currentUser)) {
+      throw new Error('Only the owner can authorize commission.')
+    }
+
+    const request = data.commissionAuthorizations[requestId]
+    if (!request) {
+      throw new Error('Request not found.')
+    }
+
+    if (request.status !== 'pending') {
+      throw new Error('This request was already decided.')
+    }
+
+    const next: CommissionAuthorizationRecord = {
+      ...request,
+      status: decision === 'approve' ? 'approved' : 'rejected',
+      reviewedById: currentUser.id,
+      reviewedByName: currentUser.name,
+      reviewedAt: new Date().toISOString(),
+      reviewNote: note?.trim() ?? '',
+    }
+    const updates: Record<string, unknown> = { [`commissionAuthorizations/${requestId}`]: next }
+    const employee = data.employees[request.employeeId]
+    if (employee) {
+      const salary = salarySnapshot(employee, request.month, { commissionAuthorizations: { [requestId]: next } })
+      updates[`salaries/${salary.id}`] = salary
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp'), updates)
+    await writeActivity(
+      decision === 'approve' ? 'commission_authorized' : 'commission_authorization_rejected',
+      'salary',
+      `${decision === 'approve' ? 'Authorized' : 'Refused'} ${request.employeeName}'s ${request.month} commission below target.`
+    )
+    await writeNotification(
+      decision === 'approve' ? 'Commission authorized by owner' : 'Commission request refused',
+      `${currentUser.name} ${decision === 'approve' ? 'authorized' : 'refused'} ${request.employeeName}'s commission for ${request.month}.`,
       'info',
       ['admin', 'accountant']
     )
@@ -2550,6 +5072,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       currentUser,
       currentPermissions,
       login,
+      isPortalUser,
+      authorizedFetch,
       logout,
       changePassword,
       fetchLoginHistory,
@@ -2560,7 +5084,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updateRole,
       deleteRole,
       reviewRoleRequest,
-      hasPermission: (permission) => hasPermissionCheck(data, currentUser, permission),
+      hasPermission: (permission) => currentPermissions.includes(permission),
+      changesNeedApproval: needsApproval,
+      reviewChangeRequest,
       saveProduct,
       deleteProduct,
       saveCustomer,
@@ -2569,6 +5095,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteCustomerCommitment,
       saveZone,
       deleteZone,
+      saveDepot,
+      deleteDepot,
+      setDealersDepot,
+      saveDepotPrices,
       saveSupplier,
       deleteSupplier,
       saveWarehouse,
@@ -2576,6 +5106,35 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       recordPurchase,
       createOrder,
       updateOrderStatus,
+      setCustomerCreditLimit,
+      saveZonePrices,
+      saveGeneralPrices,
+      saveDealerPrices,
+      saveZonePriceExclusions,
+      updateSettings,
+      submitDeposit,
+      reviewDeposit,
+      submitComplaint,
+      reviewComplaint,
+      submitReplacement,
+      reviewReplacement,
+      submitReplacementReturn,
+      reviewReplacementReturn,
+      submitExpense,
+      reviewExpense,
+      saveBankAccount,
+      deleteBankAccount,
+      submitSupplierPayment,
+      reviewSupplierPayment,
+      submitOrderRequest,
+      editOrderRequest,
+      reviewOrderRequest,
+      postDelivery,
+      updateDeliveryDetails,
+      submitDelivery,
+      editSubmission,
+      markAttendance,
+      canTakeAttendance,
       createTask,
       updateTaskStatus,
       markNotificationRead,
@@ -2599,11 +5158,25 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteLead,
       saveEmployee,
       reviewEmployee,
+      issueJoiningLetter,
       deleteEmployee,
       recordSale,
       saveSalaryPayment,
+      saveEmployeeAdvance,
+      deleteEmployeeAdvance,
+      requestCommissionAuthorization,
+      reviewCommissionAuthorization,
+      requestAdvance,
+      reviewAdvanceRequest,
+      saveBatteryReport,
+      deleteBatteryReport,
+      saveBusiness,
+      deleteBusiness,
+      submitBusinessEntry,
+      reviewBusinessEntry,
+      deleteBusinessEntry,
     }),
-    [currentPermissions, currentUser, data, error, loading, users, visibleData]
+    [canTakeAttendance, currentPermissions, currentUser, data, error, isPortalUser, loading, needsApproval, users, visibleData]
   )
 
   return <ERPContext.Provider value={value}>{children}</ERPContext.Provider>

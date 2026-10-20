@@ -1,14 +1,14 @@
 "use client"
 
-import { useMemo } from 'react'
+import { Fragment, useMemo } from 'react'
 import { Printer } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import type { CourierStatus, OrderStatus } from '@/lib/erp/types'
-import { formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import type { CourierStatus } from '@/lib/erp/types'
+import { formatCurrency, formatDate, getOrderStatus, getOrderStatuses, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 import { EmptyState, SummaryRow, localDay } from './shared'
@@ -70,22 +70,23 @@ export function StockReport({ day }: { day: string }) {
     return [...sold.values()].sort((left, right) => right.quantity - left.quantity)
   }, [data?.orders, day])
 
+  // One block per warehouse, its products sorted by name, with the warehouse subtotal.
   const warehouses = useMemo(() => {
     const rows = toArray(data?.warehouses).map((warehouse) => ({ id: warehouse.id, name: warehouse.name, location: warehouse.location }))
     const unassigned = { id: '', name: 'No warehouse', location: '' }
     return [...rows, unassigned]
       .map((warehouse) => {
-        const items = products.filter((product) => (data?.warehouses[product.warehouseId] ? product.warehouseId : '') === warehouse.id)
+        const items = products
+          .filter((product) => (data?.warehouses[product.warehouseId] ? product.warehouseId : '') === warehouse.id)
+          .sort((left, right) => left.name.localeCompare(right.name))
         return {
           ...warehouse,
-          productCount: items.length,
+          items,
           units: items.reduce((sum, product) => sum + product.stockQty, 0),
           value: items.reduce((sum, product) => sum + product.stockQty * product.purchasePrice, 0),
-          low: items.filter((product) => product.status === 'low-stock').length,
-          out: items.filter((product) => product.status === 'out-of-stock').length,
         }
       })
-      .filter((warehouse) => warehouse.id || warehouse.productCount)
+      .filter((warehouse) => warehouse.id || warehouse.items.length)
   }, [data?.warehouses, products])
 
   const lowStock = products
@@ -108,26 +109,36 @@ export function StockReport({ day }: { day: string }) {
         </CardHeader>
         <CardContent>
           {purchases.length ? (
-            <Table>
+            <Table className="md:min-w-[640px]" data-report="new-stock">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Product</TableHead>
+                  <TableHead sticky>Product</TableHead>
                   <TableHead>Supplier</TableHead>
-                  <TableHead className="text-right">Qty</TableHead>
-                  <TableHead className="text-right">Unit cost</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="whitespace-normal text-right">Previous stock qty</TableHead>
+                  <TableHead className="whitespace-normal text-right">New stock qty</TableHead>
+                  <TableHead className="whitespace-normal text-right">Unit cost (new stock)</TableHead>
+                  <TableHead className="whitespace-normal text-right">Total qty</TableHead>
+                  <TableHead className="whitespace-normal text-right">Total value</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {purchases.map((purchase) => (
-                  <TableRow key={purchase.id}>
-                    <TableCell className="font-medium">{purchase.productName}</TableCell>
-                    <TableCell>{purchase.supplierName}</TableCell>
-                    <TableCell className="text-right tabular-nums">{purchase.quantity}</TableCell>
-                    <TableCell className="text-right tabular-nums">{purchase.unitCost.toLocaleString()} {purchase.currency}</TableCell>
-                    <TableCell className="text-right tabular-nums">{purchase.total.toLocaleString()} {purchase.currency}</TableCell>
-                  </TableRow>
-                ))}
+                {purchases.map((purchase) => {
+                  // Purchases received before stock was recorded have no previous qty; show "—" rather than guess.
+                  const totalQty = typeof purchase.stockBefore === 'number' ? purchase.stockBefore + purchase.quantity : null
+                  return (
+                    <TableRow key={purchase.id} data-purchase-id={purchase.id}>
+                      <TableCell sticky className="font-medium">{purchase.productName}</TableCell>
+                      <TableCell>{purchase.supplierName}</TableCell>
+                      <TableCell className="text-right tabular-nums">{totalQty === null ? '—' : purchase.stockBefore}</TableCell>
+                      <TableCell className="text-right tabular-nums">{purchase.quantity}</TableCell>
+                      <TableCell className="text-right tabular-nums">{purchase.unitCost.toLocaleString()} {purchase.currency}</TableCell>
+                      <TableCell className="text-right tabular-nums">{totalQty ?? '—'}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {totalQty === null ? '—' : `${(totalQty * purchase.unitCost).toLocaleString()} ${purchase.currency}`}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           ) : (
@@ -142,32 +153,81 @@ export function StockReport({ day }: { day: string }) {
           <CardDescription>Current stock in each warehouse, valued at purchase price.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <Table>
+          <Table className="md:min-w-[640px]" data-report="warehouse">
             <TableHeader>
               <TableRow>
-                <TableHead>Warehouse</TableHead>
-                <TableHead className="text-right">Products</TableHead>
-                <TableHead className="text-right">Units</TableHead>
+                <TableHead sticky>Warehouse</TableHead>
+                <TableHead>Product name</TableHead>
+                <TableHead className="text-right">Quantity</TableHead>
+                <TableHead className="text-right">Purchase price</TableHead>
                 <TableHead className="text-right">Stock value</TableHead>
-                <TableHead className="text-right">Low</TableHead>
-                <TableHead className="text-right">Out</TableHead>
+                <TableHead className="text-right">Low-stock qty</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
-              {warehouses.map((warehouse) => (
-                <TableRow key={warehouse.id || 'none'}>
-                  <TableCell>
+            {/* Merged warehouse cells would make the default zebra striping look broken. */}
+            <TableBody className="[&>tr:nth-child(even)]:bg-transparent">
+              {warehouses.map((warehouse) => {
+                const warehouseCell = (
+                  <TableCell
+                    rowSpan={warehouse.items.length ? warehouse.items.length + 1 : 1}
+                    data-warehouse-id={warehouse.id || 'none'}
+                    sticky
+                    className="border-r border-border bg-muted/30 align-middle [--sticky-tint:hsl(var(--muted)/0.3)] md:min-w-36"
+                  >
                     <span className="block font-medium">{warehouse.name}</span>
                     {warehouse.location ? <span className="block text-xs text-muted-foreground">{warehouse.location}</span> : null}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{warehouse.productCount}</TableCell>
-                  <TableCell className="text-right tabular-nums">{warehouse.units}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatCurrency(warehouse.value)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{warehouse.low}</TableCell>
-                  <TableCell className={cn('text-right tabular-nums', warehouse.out > 0 && 'text-rose-600')}>{warehouse.out}</TableCell>
-                </TableRow>
-              ))}
+                )
+                if (!warehouse.items.length) {
+                  return (
+                    <TableRow key={warehouse.id || 'none'} className="border-b-2 border-border">
+                      {warehouseCell}
+                      <TableCell colSpan={5} className="text-muted-foreground">
+                        No products
+                      </TableCell>
+                    </TableRow>
+                  )
+                }
+                return (
+                  <Fragment key={warehouse.id || 'none'}>
+                    {warehouse.items.map((product, index) => {
+                      const stockState = product.stockQty <= 0 ? 'out' : product.stockQty <= product.minStock ? 'low' : 'ok'
+                      // On the product cells, not the row, so the merged warehouse cell keeps its own look.
+                      const tone = cn(
+                        stockState === 'out' && 'bg-rose-500/10 text-rose-700 dark:text-rose-300',
+                        stockState === 'low' && 'bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                      )
+                      return (
+                        <TableRow key={product.id} data-product-id={product.id} data-stock-state={stockState}>
+                          {index === 0 ? warehouseCell : null}
+                          <TableCell className={cn('font-medium', tone)}>{product.name}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{product.stockQty}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{formatCurrency(product.purchasePrice)}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{formatCurrency(product.stockQty * product.purchasePrice)}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{product.minStock}</TableCell>
+                        </TableRow>
+                      )
+                    })}
+                    <TableRow data-row="subtotal" className="border-b-2 border-border font-semibold">
+                      <TableCell className="text-muted-foreground">Subtotal</TableCell>
+                      <TableCell className="text-right tabular-nums">{warehouse.units}</TableCell>
+                      <TableCell />
+                      <TableCell className="text-right tabular-nums">{formatCurrency(warehouse.value)}</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </Fragment>
+                )
+              })}
             </TableBody>
+            <TableFooter>
+              <TableRow data-row="grand-total" className="font-semibold">
+                <TableCell colSpan={2}>Grand total</TableCell>
+                <TableCell className="text-right tabular-nums">{warehouses.reduce((sum, warehouse) => sum + warehouse.units, 0)}</TableCell>
+                <TableCell />
+                <TableCell className="text-right tabular-nums">{formatCurrency(warehouses.reduce((sum, warehouse) => sum + warehouse.value, 0))}</TableCell>
+                <TableCell />
+              </TableRow>
+            </TableFooter>
           </Table>
         </CardContent>
       </Card>
@@ -321,7 +381,6 @@ export function DailyClosingReport({ day }: { day: string }) {
   )
 }
 
-const ORDER_STATUSES: OrderStatus[] = ['pending', 'ready', 'shipped', 'completed', 'hold']
 const COURIER_STATUSES: CourierStatus[] = ['in-transit', 'delivered', 'returned', 'cod-collected']
 
 /** Orders due for delivery, late deliveries, and courier parcels. */
@@ -330,7 +389,8 @@ export function DeliveryReport({ day }: { day: string }) {
 
   const orders = useMemo(() => toArray(data?.orders), [data?.orders])
   const parcels = useMemo(() => toArray(data?.couriers), [data?.couriers])
-  const open = orders.filter((order) => order.status !== 'shipped' && order.status !== 'completed')
+  const statuses = getOrderStatuses(data?.settings)
+  const open = orders.filter((order) => order.status !== 'shipped' && !getOrderStatus(data?.settings, order.status).isFinal)
   const dueOnDay = orders.filter((order) => localDay(order.deliveryDate) === day)
   const late = open.filter((order) => localDay(order.deliveryDate) && localDay(order.deliveryDate) < day)
   const byCourier = sumBy(open, (order) => order.courierName ?? '', () => 1)
@@ -354,7 +414,7 @@ export function DeliveryReport({ day }: { day: string }) {
               <TableCell className="font-medium">{order.customerName}</TableCell>
               <TableCell>{order.courierName || '—'}</TableCell>
               <TableCell>{formatDate(order.deliveryDate)}</TableCell>
-              <TableCell className="capitalize">{order.status}</TableCell>
+              <TableCell>{getOrderStatus(data?.settings, order.status).label}</TableCell>
               <TableCell className="text-right tabular-nums">{formatCurrency(order.total)}</TableCell>
             </TableRow>
           ))}
@@ -366,9 +426,9 @@ export function DeliveryReport({ day }: { day: string }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {ORDER_STATUSES.map((status) => (
-          <Stat key={status} label={`Orders ${status}`} value={orders.filter((order) => order.status === status).length} />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {statuses.map((status) => (
+          <Stat key={status.id} label={`Orders ${status.label}`} value={orders.filter((order) => order.status === status.id).length} />
         ))}
       </div>
 

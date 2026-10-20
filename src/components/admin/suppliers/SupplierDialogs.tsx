@@ -854,7 +854,7 @@ export function SupplierFormDialog({
                   <p className="text-sm font-medium text-foreground">
                     Opening due <span className="font-normal text-muted-foreground">(what we already owe them)</span>
                   </p>
-                  <Input type="number" min="0" value={supplierForm.openingDue} onChange={(event) => setSupplierForm((current) => ({ ...current, openingDue: event.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="any" value={supplierForm.openingDue} onChange={(event) => setSupplierForm((current) => ({ ...current, openingDue: event.target.value }))} placeholder="0" />
                 </div>
               </div>
 
@@ -895,19 +895,19 @@ export function SupplierFormDialog({
               <div className="grid gap-4 pt-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Typical product cost</p>
-                  <Input type="number" min="0" value={supplierForm.productCost} onChange={(event) => setSupplierForm((current) => ({ ...current, productCost: event.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="any" value={supplierForm.productCost} onChange={(event) => setSupplierForm((current) => ({ ...current, productCost: event.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Shipping cost</p>
-                  <Input type="number" min="0" value={supplierForm.shippingCost} onChange={(event) => setSupplierForm((current) => ({ ...current, shippingCost: event.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="any" value={supplierForm.shippingCost} onChange={(event) => setSupplierForm((current) => ({ ...current, shippingCost: event.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Customs duty</p>
-                  <Input type="number" min="0" value={supplierForm.customsDuty} onChange={(event) => setSupplierForm((current) => ({ ...current, customsDuty: event.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="any" value={supplierForm.customsDuty} onChange={(event) => setSupplierForm((current) => ({ ...current, customsDuty: event.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-foreground">Other cost</p>
-                  <Input type="number" min="0" value={supplierForm.otherCost} onChange={(event) => setSupplierForm((current) => ({ ...current, otherCost: event.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="any" value={supplierForm.otherCost} onChange={(event) => setSupplierForm((current) => ({ ...current, otherCost: event.target.value }))} placeholder="0" />
                 </div>
                 <div className="sm:col-span-2 rounded-xl border border-border/70 bg-card p-4">
                   <p className="text-sm text-muted-foreground">Calculated landed cost</p>

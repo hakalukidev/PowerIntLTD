@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
@@ -221,11 +222,11 @@ export default function SupplierCrmPage() {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
-                <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <DateInput value={dateFrom} onChange={(value) => setDateFrom(value)} />
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">To date</p>
-                <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                <DateInput value={dateTo} onChange={(value) => setDateTo(value)} />
               </div>
             </div>
 
@@ -233,7 +234,7 @@ export default function SupplierCrmPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead>Supplier</TableHead>
+                    <TableHead sticky>Supplier</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Bank</TableHead>
                     <TableHead>Documents</TableHead>
@@ -250,16 +251,17 @@ export default function SupplierCrmPage() {
 
                     return (
                       <TableRow key={supplier.id}>
-                        <TableCell className="min-w-56">
+                        <TableCell sticky className="md:min-w-56">
                           <div className="flex items-center gap-3">
-                            <Avatar className="h-10 w-10 shrink-0">
+                            {/* Hidden on phones to leave room for more columns. */}
+                            <Avatar className="hidden h-10 w-10 shrink-0 md:flex">
                               {photo ? <AvatarImage src={photo} alt={supplier.name} className="object-cover" /> : null}
                               <AvatarFallback className="bg-muted text-muted-foreground">{supplierInitials(supplier.name)}</AvatarFallback>
                             </Avatar>
                             <div>
                               <p className="font-semibold">{supplier.name}</p>
-                              <p className="text-sm text-muted-foreground">
-                                <span className="font-mono text-xs">{partyCode(supplier)}</span>
+                              <p className="text-[11px] text-muted-foreground md:text-sm">
+                                <span className="font-mono text-[10px] max-md:whitespace-nowrap md:text-xs">{partyCode(supplier)}</span>
                                 {supplier.company ? ` · ${supplier.company}` : ''}
                               </p>
                               <Badge variant="outline" className={cn('mt-1 rounded-full text-xs', typeToneClass(supplier.supplierType))}>
@@ -268,8 +270,8 @@ export default function SupplierCrmPage() {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="min-w-48">
-                          <div className="space-y-1 text-sm">
+                        <TableCell className="md:min-w-48">
+                          <div className="space-y-1 md:text-sm">
                             <div className="flex items-center gap-2">
                               <Phone className="h-3.5 w-3.5 text-muted-foreground" />
                               <span>{supplier.phone}</span>
@@ -281,9 +283,9 @@ export default function SupplierCrmPage() {
                             {supplier.email ? <p className="break-all text-xs text-muted-foreground">{supplier.email}</p> : null}
                           </div>
                         </TableCell>
-                        <TableCell className="min-w-48">
+                        <TableCell className="md:min-w-48">
                           {hasBankDetails(supplier) ? (
-                            <div className="flex items-start gap-2 text-sm">
+                            <div className="flex items-start gap-2 md:text-sm">
                               <Landmark className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                               <div>
                                 <p className="font-medium">{supplier.bankName}</p>
@@ -296,7 +298,7 @@ export default function SupplierCrmPage() {
                             <span className="text-xs text-muted-foreground">Not added</span>
                           )}
                         </TableCell>
-                        <TableCell className="min-w-32">
+                        <TableCell className="md:min-w-32">
                           <Badge
                             variant="outline"
                             className={cn(
@@ -309,12 +311,12 @@ export default function SupplierCrmPage() {
                             {documentCount} / {DOCUMENT_FIELDS.length} attached
                           </Badge>
                         </TableCell>
-                        <TableCell className="min-w-28 text-sm">{formatDate(supplier.createdAt)}</TableCell>
-                        <TableCell className="min-w-32">
+                        <TableCell className="md:min-w-28 md:text-sm">{formatDate(supplier.createdAt)}</TableCell>
+                        <TableCell className="md:min-w-32">
                           <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                           <p className="text-xs text-muted-foreground">{purchaseCount} purchases</p>
                         </TableCell>
-                        <TableCell className="min-w-32">
+                        <TableCell className="md:min-w-32">
                           <p className={cn('font-medium', payable > 0 && 'text-rose-600 dark:text-rose-400')}>
                             {formatTableAmount(Math.abs(payable), currency)}
                           </p>

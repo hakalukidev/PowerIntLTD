@@ -6,7 +6,7 @@ import { PencilLine } from 'lucide-react'
 import { AdminShell } from '@/components/admin/AdminShell'
 import { EmptyState, StatusPill, todayInput } from '@/components/admin/approvals/shared'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { AuditKind } from '@/lib/erp/types'
@@ -63,7 +63,7 @@ export default function DailyAuditPage() {
             <h2 className="text-lg font-semibold">Daily audit — {formatDate(day)}</h2>
             <p className="text-sm text-muted-foreground">Everything an admin approved or rejected on this day, with who submitted and who edited it.</p>
           </div>
-          <Input type="date" className="w-auto" value={day} onChange={(event) => setDay(event.target.value || todayInput())} />
+          <DateInput className="w-auto" value={day} onChange={(value) => setDay(value || todayInput())} />
         </div>
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-9">

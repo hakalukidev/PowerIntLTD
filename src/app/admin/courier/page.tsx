@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -451,10 +452,9 @@ export default function CourierUpdatePage() {
                   <p className="text-sm font-medium text-foreground">
                     Sent date<span className="ml-0.5 text-rose-500">*</span>
                   </p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={courierForm.sentDate}
-                    onChange={(event) => setCourierForm((current) => ({ ...current, sentDate: event.target.value }))}
+                    onChange={(value) => setCourierForm((current) => ({ ...current, sentDate: value }))}
                     required
                   />
                 </div>

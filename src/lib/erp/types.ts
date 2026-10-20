@@ -315,7 +315,8 @@ export type ProductRecord = {
   updatedAt: string
 }
 
-export type OrderStatus = 'pending' | 'ready' | 'shipped' | 'completed' | 'hold'
+/** The id of a configured status (`settings.orderStatuses`); the defaults are pending, ready, shipped, completed and hold. */
+export type OrderStatus = string
 export type PaymentStatus = 'unpaid' | 'partial' | 'paid'
 
 export type OrderItem = {
@@ -408,6 +409,9 @@ export type PurchaseRecord = {
   currency: string
   total: number
   status: 'pending' | 'received'
+  /** Product stock just before and after this purchase was received; missing on older purchases. */
+  stockBefore?: number
+  stockAfter?: number
   createdAt: string
 }
 
@@ -462,6 +466,21 @@ export type SettingsRecord = {
   attendanceHandlerIds?: string[]
   /** Users an admin put in charge of inventory, stock and warehouses, on top of roles that have `inventory.edit`. */
   inventoryManagerIds?: string[]
+  /** The order statuses admins configured, keyed by id; missing means DEFAULT_ORDER_STATUSES. */
+  orderStatuses?: Record<string, OrderStatusConfig>
+}
+
+/** A colour from the fixed badge palette, so every status stays readable in light and dark mode. */
+export type OrderStatusColor = 'slate' | 'sky' | 'amber' | 'emerald' | 'violet' | 'rose' | 'orange' | 'teal'
+
+/** One step of the order workflow. The id never changes, so renaming keeps every order on it. */
+export type OrderStatusConfig = {
+  id: string
+  label: string
+  color: OrderStatusColor
+  order: number
+  /** The order is finished: it no longer counts as open. */
+  isFinal: boolean
 }
 
 export type AttendanceStatus = 'present' | 'absent'

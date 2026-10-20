@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -153,7 +154,7 @@ export default function ComplaintPage() {
                 </div>
                 <div className="space-y-2">
                   <Label text="Guarantee date" optional />
-                  <Input type="date" value={guaranteeDate} onChange={(event) => setGuaranteeDate(event.target.value)} />
+                  <DateInput value={guaranteeDate} onChange={(value) => setGuaranteeDate(value)} />
                 </div>
                 <div className="space-y-2">
                   <Label text="Product SL No." optional />

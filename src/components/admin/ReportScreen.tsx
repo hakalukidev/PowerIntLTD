@@ -16,12 +16,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatReportValue, reportExportValue, REPORT_SOURCES } from '@/lib/erp/reportSources'
-import { buildUserReport, exportPdf, exportXlsx, formatDate, toArray } from '@/lib/erp/utils'
+import { buildUserReport, exportPdf, exportXlsx, formatDate, getReadableOrderState, toArray } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -240,7 +241,7 @@ export function ReportScreen() {
           `${order.billNumber} - ${order.customerName}`,
           order.customerName,
           String(order.total),
-          order.status,
+          getReadableOrderState(order, data?.settings),
         ]),
         ...customers.map((customer, index) => [
           'Customers',
@@ -329,11 +330,11 @@ export function ReportScreen() {
                 <>
                   <div className="space-y-2">
                     <p className="text-sm font-medium">From ({primaryDateColumn.label})</p>
-                    <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                    <DateInput value={dateFrom} onChange={(value) => setDateFrom(value)} />
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium">To ({primaryDateColumn.label})</p>
-                    <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                    <DateInput value={dateTo} onChange={(value) => setDateTo(value)} />
                   </div>
                 </>
               ) : null}

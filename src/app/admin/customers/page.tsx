@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -27,7 +28,17 @@ import type { CustomerCommitment, CustomerInput, CustomerRecord, DocumentPhoto }
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { groupRemindersByDate, localToday, pendingCommitmentReminders } from '@/lib/erp/commitmentReminders'
 import { customerZoneId, subZoneKey, subZoneKeyFor, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME, zoneSubZones } from '@/lib/erp/zones'
-import { escapeHtml, formatCurrency, formatDate, formatTableAmount, isCommitmentApproved, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
+import {
+  escapeHtml,
+  formatCurrency,
+  formatDate,
+  formatTableAmount,
+  getReadableOrderState,
+  isCommitmentApproved,
+  isZoneInCharge,
+  partyCode,
+  toArray,
+} from '@/lib/erp/utils'
 
 const CUSTOMER_DOCUMENT_FOLDER = 'customers'
 
@@ -770,10 +781,9 @@ export default function CustomersPage() {
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">Due date (optional)</p>
-              <Input
-                type="date"
+              <DateInput
                 value={commitmentDueDate}
-                onChange={(event) => setCommitmentDueDate(event.target.value)}
+                onChange={(value) => setCommitmentDueDate(value)}
                 className="h-9 w-44"
               />
             </div>
@@ -945,7 +955,7 @@ export default function CustomersPage() {
                     <TableRow key={order.id}>
                       <TableCell className="font-medium">{order.billNumber}</TableCell>
                       <TableCell>{formatDate(order.createdAt)}</TableCell>
-                      <TableCell className="capitalize">{order.status}</TableCell>
+                      <TableCell>{getReadableOrderState(order, data?.settings)}</TableCell>
                       <TableCell className="text-right">{formatTableAmount(order.total, currency)}</TableCell>
                       <TableCell className="text-right">{formatTableAmount(order.due, currency)}</TableCell>
                     </TableRow>
@@ -1409,11 +1419,11 @@ export default function CustomersPage() {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
-                <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <DateInput value={dateFrom} onChange={(value) => setDateFrom(value)} />
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">To date</p>
-                <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                <DateInput value={dateTo} onChange={(value) => setDateTo(value)} />
               </div>
             </div>
             {reminderOnly ? renderCommitmentReminders() : null}
@@ -1421,7 +1431,7 @@ export default function CustomersPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead>Dealer</TableHead>
+                    <TableHead sticky>Dealer</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Joined</TableHead>
@@ -1433,9 +1443,10 @@ export default function CustomersPage() {
                 <TableBody>
                   {filteredRows.map(({ customer, orderCount, purchaseTotal, dueTotal, lastPurchaseDate, hasOrders }) => (
                     <TableRow key={customer.id}>
-                      <TableCell className="min-w-56">
+                      <TableCell sticky className="md:min-w-56">
                         <div className="flex items-center gap-3">
-                          <Avatar className="h-10 w-10 shrink-0">
+                          {/* Hidden on phones to leave room for more columns. */}
+                          <Avatar className="hidden h-10 w-10 shrink-0 md:flex">
                             {customer.dealerPhotoUrl || customer.passportPhotoUrl ? (
                               <AvatarImage
                                 src={customer.dealerPhotoUrl || customer.passportPhotoUrl}
@@ -1449,11 +1460,11 @@ export default function CustomersPage() {
                           </Avatar>
                           <div>
                             <p className="font-semibold">{customer.name}</p>
-                            <p className="text-sm text-muted-foreground">
-                              <span className="font-mono text-xs">{partyCode(customer)}</span> · {customer.company || 'Retail'}
+                            <p className="text-[11px] text-muted-foreground md:text-sm">
+                              <span className="font-mono text-[10px] max-md:whitespace-nowrap md:text-xs">{partyCode(customer)}</span> · {customer.company || 'Retail'}
                             </p>
                             <div className="mt-1 flex flex-wrap gap-1.5">
-                              <Badge variant="outline" className="text-xs font-normal">
+                              <Badge variant="outline" className="hidden text-xs font-normal md:inline-flex">
                                 {customer.leadSource === 'facebook' ? 'From Facebook' : 'From Local Marketing'}
                               </Badge>
                               {customer.reminderCustomer && !hasOrders ? (
@@ -1464,10 +1475,17 @@ export default function CustomersPage() {
                               {(() => {
                                 const pending = sortedCommitments(customer).filter((item) => item.status === 'pending' && item.approvalStage !== 'rejected').length
                                 return pending ? (
-                                  <button type="button" onClick={() => openDetailsDialog(customer.id, true)}>
+                                  <button
+                                    type="button"
+                                    onClick={() => openDetailsDialog(customer.id, true)}
+                                    title={`${pending} commitment${pending > 1 ? 's' : ''}`}
+                                  >
                                     <Badge className="gap-1 bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 dark:text-amber-300">
                                       <Handshake className="h-3 w-3" />
-                                      {pending} commitment{pending > 1 ? 's' : ''}
+                                      <span>
+                                        {pending}
+                                        <span className="hidden md:inline"> commitment{pending > 1 ? 's' : ''}</span>
+                                      </span>
                                     </Badge>
                                   </button>
                                 ) : null
@@ -1476,20 +1494,20 @@ export default function CustomersPage() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-44">
+                      <TableCell className="md:min-w-44">
                         <div className="flex items-center gap-2">
-                          <Phone className="h-4 w-4 text-muted-foreground" />
-                          <span>{customer.phone}</span>
+                          <Phone className="hidden h-4 w-4 text-muted-foreground md:block" />
+                          <span className="max-md:whitespace-nowrap">{customer.phone}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-48">
+                      <TableCell className="md:min-w-48">
                         <div className="flex items-center gap-2">
-                          <MapPin className="h-4 w-4 text-muted-foreground" />
+                          <MapPin className="hidden h-4 w-4 text-muted-foreground md:block" />
                           <span>{customer.location || 'N/A'}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-32">{formatDate(customer.createdAt)}</TableCell>
-                      <TableCell className="min-w-44">
+                      <TableCell className="md:min-w-32">{formatDate(customer.createdAt)}</TableCell>
+                      <TableCell className="md:min-w-44">
                         <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                         <p className="text-xs text-muted-foreground">
                           {orderCount} orders, last {formatDate(lastPurchaseDate)}

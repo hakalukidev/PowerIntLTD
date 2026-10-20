@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -333,11 +334,11 @@ export default function OrderFormPage() {
             <CardContent className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <p className="text-sm font-medium">Date<span className="ml-0.5 text-rose-500">*</span></p>
-                <Input type="date" value={orderDate} onChange={(event) => setOrderDate(event.target.value)} required />
+                <DateInput value={orderDate} onChange={(value) => setOrderDate(value)} required />
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium">Delivery date<span className="ml-0.5 text-rose-500">*</span></p>
-                <Input type="date" value={deliveryDate} min={orderDate} onChange={(event) => setDeliveryDate(event.target.value)} required />
+                <DateInput value={deliveryDate} min={orderDate} onChange={(value) => setDeliveryDate(value)} required />
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium">Courier<span className="ml-0.5 text-rose-500">*</span></p>

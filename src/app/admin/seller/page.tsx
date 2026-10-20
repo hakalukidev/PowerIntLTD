@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
@@ -518,10 +519,9 @@ export default function SellerListPage() {
                   <p className="text-sm font-medium text-foreground">
                     Date<span className="ml-0.5 text-rose-500">*</span>
                   </p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={txnForm.date}
-                    onChange={(event) => setTxnForm((current) => ({ ...current, date: event.target.value }))}
+                    onChange={(value) => setTxnForm((current) => ({ ...current, date: value }))}
                     required
                   />
                 </div>

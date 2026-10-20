@@ -1,5 +1,5 @@
 import type { ERPData } from '@/lib/erp/types'
-import { formatCurrency, formatDate, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
 
@@ -41,7 +41,7 @@ export const REPORT_SOURCES: ReportSource[] = [
           customerName: order.customerName,
           customerPhone: customer?.phone ?? '',
           salesPerson: order.salesPersonName,
-          status: order.status,
+          status: getReadableOrderState(order, data.settings),
           paymentStatus: order.paymentStatus,
           total: order.total,
           paid: order.paid,

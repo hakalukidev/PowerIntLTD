@@ -6,12 +6,15 @@ import type {
   ERPData,
   NotificationRecord,
   OrderRecord,
+  OrderStatusColor,
+  OrderStatusConfig,
   ProductRecord,
   SalaryHoldStatus,
   RoleRecord,
   SalaryPaymentEntry,
   SalaryRecord,
   SalesTargetRecord,
+  SettingsRecord,
   UserRecord,
   ZoneRecord,
 } from '@/lib/erp/types'
@@ -42,10 +45,21 @@ export function formatTableAmount(value: number, currency?: string) {
   return !currency || currency === 'BDT' ? formatAmount(value) : formatCurrency(value, currency)
 }
 
+const pad2 = (value: number) => String(value).padStart(2, '0')
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/** Parses a stored date. A bare `YYYY-MM-DD` is read as that local day, not UTC midnight. */
+function parseDisplayDate(value: string) {
+  const dateOnly = DATE_ONLY.exec(value)
+  if (dateOnly) return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+  return new Date(value)
+}
+
+/** Display date, always day first: `DD/MM/YYYY`. Storage stays ISO. */
 export function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-BD', {
-    dateStyle: 'medium',
-  }).format(new Date(value))
+  const date = parseDisplayDate(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`
 }
 
 export function escapeHtml(value: string) {
@@ -57,11 +71,17 @@ export function escapeHtml(value: string) {
     .replaceAll("'", '&#39;')
 }
 
+/** Display date and time: `DD/MM/YYYY, hh:mm AM`. */
 export function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('en-BD', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value))
+  const date = parseDisplayDate(value)
+  if (Number.isNaN(date.getTime())) return value
+  const hours = date.getHours()
+  return `${formatDate(value)}, ${pad2(hours % 12 || 12)}:${pad2(date.getMinutes())} ${hours < 12 ? 'AM' : 'PM'}`
+}
+
+/** A stored value that is a date (`YYYY-MM-DD…`) shown day first; anything else unchanged. */
+export function formatIfDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? formatDate(value) : value
 }
 
 export function isSameCalendarDay(value: string, target = new Date()) {
@@ -579,8 +599,54 @@ export function activitySummary(activity: ActivityRecord) {
   return `${activity.userName} · ${activity.message}`
 }
 
-export function getReadableOrderState(order: OrderRecord) {
-  return order.status.replace('-', ' ')
+/** The five statuses the app shipped with; used until an admin saves their own list. */
+export const DEFAULT_ORDER_STATUSES: OrderStatusConfig[] = [
+  { id: 'pending', label: 'Pending', color: 'amber', order: 0, isFinal: false },
+  { id: 'ready', label: 'Ready', color: 'sky', order: 1, isFinal: false },
+  { id: 'shipped', label: 'Shipped', color: 'violet', order: 2, isFinal: false },
+  { id: 'completed', label: 'Completed', color: 'emerald', order: 3, isFinal: true },
+  { id: 'hold', label: 'Hold', color: 'rose', order: 4, isFinal: false },
+]
+
+/** Statuses the order and delivery workflow sets by id: they can be renamed but not deleted. */
+export const PROTECTED_ORDER_STATUS_IDS = ['pending', 'shipped', 'completed']
+
+export const ORDER_STATUS_COLORS: Record<OrderStatusColor, { label: string; badge: string; chart: string }> = {
+  slate: { label: 'Grey', badge: 'border-slate-300 bg-slate-500/10 text-slate-700 dark:border-slate-700 dark:text-slate-300', chart: '#64748b' },
+  sky: { label: 'Blue', badge: 'border-sky-200 bg-sky-500/10 text-sky-700 dark:border-sky-900 dark:text-sky-300', chart: '#0ea5e9' },
+  amber: { label: 'Amber', badge: 'border-amber-200 bg-amber-500/10 text-amber-700 dark:border-amber-900 dark:text-amber-300', chart: '#f59e0b' },
+  emerald: { label: 'Green', badge: 'border-emerald-200 bg-emerald-500/10 text-emerald-700 dark:border-emerald-900 dark:text-emerald-300', chart: '#10b981' },
+  violet: { label: 'Purple', badge: 'border-violet-200 bg-violet-500/10 text-violet-700 dark:border-violet-900 dark:text-violet-300', chart: '#8b5cf6' },
+  rose: { label: 'Red', badge: 'border-rose-200 bg-rose-500/10 text-rose-700 dark:border-rose-900 dark:text-rose-300', chart: '#f43f5e' },
+  orange: { label: 'Orange', badge: 'border-orange-200 bg-orange-500/10 text-orange-700 dark:border-orange-900 dark:text-orange-300', chart: '#f97316' },
+  teal: { label: 'Teal', badge: 'border-teal-200 bg-teal-500/10 text-teal-700 dark:border-teal-900 dark:text-teal-300', chart: '#14b8a6' },
+}
+
+/** The configured order statuses in workflow order, or the defaults when none were saved. */
+export function getOrderStatuses(settings?: Pick<SettingsRecord, 'orderStatuses'> | null) {
+  const saved = Object.values(settings?.orderStatuses ?? {})
+  return (saved.length ? saved : DEFAULT_ORDER_STATUSES).slice().sort((left, right) => left.order - right.order)
+}
+
+/** A status's config; an id that is no longer configured falls back to its raw id in grey. */
+export function getOrderStatus(settings: Pick<SettingsRecord, 'orderStatuses'> | null | undefined, statusId: string): OrderStatusConfig {
+  return (
+    getOrderStatuses(settings).find((status) => status.id === statusId) ?? {
+      id: statusId,
+      label: statusId.replace('-', ' '),
+      color: 'slate',
+      order: Number.MAX_SAFE_INTEGER,
+      isFinal: false,
+    }
+  )
+}
+
+export function orderStatusBadgeClass(color: OrderStatusColor) {
+  return (ORDER_STATUS_COLORS[color] ?? ORDER_STATUS_COLORS.slate).badge
+}
+
+export function getReadableOrderState(order: OrderRecord, settings?: Pick<SettingsRecord, 'orderStatuses'> | null) {
+  return getOrderStatus(settings, order.status).label
 }
 
 // ---- Employee / Sales Target / Salary helpers ----

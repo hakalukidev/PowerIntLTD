@@ -19,6 +19,7 @@ import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -349,7 +350,7 @@ export default function FinancePage() {
               </SelectContent>
             </Select>
             {mode === 'daily' ? (
-              <Input className="w-full sm:w-52" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+              <DateInput className="w-full sm:w-52" value={selectedDate} onChange={(value) => setSelectedDate(value)} />
             ) : (
               <Input className="w-full sm:w-52" type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
             )}
@@ -564,10 +565,9 @@ export default function FinancePage() {
                       <p className="text-sm font-medium text-foreground">
                         Date<span className="ml-0.5 text-rose-500">*</span>
                       </p>
-                      <Input
-                        type="date"
+                      <DateInput
                         value={expenseForm.date}
-                        onChange={(event) => setExpenseForm((current) => ({ ...current, date: event.target.value }))}
+                        onChange={(value) => setExpenseForm((current) => ({ ...current, date: value }))}
                         required
                       />
                     </div>

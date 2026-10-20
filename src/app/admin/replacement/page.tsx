@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -125,7 +126,7 @@ export default function ReplacementPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Guarantee date<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input type="date" value={guaranteeDate} onChange={(event) => setGuaranteeDate(event.target.value)} required />
+                  <DateInput value={guaranteeDate} onChange={(value) => setGuaranteeDate(value)} required />
                   {guaranteeExpired ? <p className="text-xs text-amber-600 dark:text-amber-400">This guarantee date has already passed.</p> : null}
                 </div>
                 <div className="space-y-2">

@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
@@ -509,10 +510,9 @@ export default function DamageProductsPage() {
                   <p className="text-sm font-medium text-foreground">
                     Reported date<span className="ml-0.5 text-rose-500">*</span>
                   </p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={form.reportedDate}
-                    onChange={(event) => setForm((current) => ({ ...current, reportedDate: event.target.value }))}
+                    onChange={(value) => setForm((current) => ({ ...current, reportedDate: value }))}
                     required
                   />
                 </div>

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
@@ -263,7 +264,7 @@ export function JoiningFormSections({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Joining</p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <FormField label="Joining date" required>
-                  <Input type="date" value={form.joiningDate} onChange={(event) => setField('joiningDate', event.target.value)} required />
+                  <DateInput value={form.joiningDate} onChange={(value) => setField('joiningDate', value)} required />
                 </FormField>
                 <FormField label="Designation" required>
                   <Input value={form.designation} onChange={(event) => setField('designation', event.target.value)} placeholder="e.g. Sales Officer" required />
@@ -327,7 +328,7 @@ export function JoiningFormSections({
                   <Input value={form.motherName} onChange={(event) => setField('motherName', event.target.value)} />
                 </FormField>
                 <FormField label="Date of birth" optional>
-                  <Input type="date" value={form.dateOfBirth} onChange={(event) => setField('dateOfBirth', event.target.value)} />
+                  <DateInput value={form.dateOfBirth} onChange={(value) => setField('dateOfBirth', value)} />
                 </FormField>
                 <FormField label="NID number" optional>
                   <Input value={form.nid} onChange={(event) => setField('nid', event.target.value)} placeholder="National ID" />

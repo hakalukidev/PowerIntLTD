@@ -174,7 +174,7 @@ export function QuickCreateProductDialog({
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Purchase cost</p>
-                <Input inputMode="numeric" value={purchasePrice} onChange={(event) => setPurchasePrice(event.target.value)} placeholder="330000" />
+                <Input type="number" min="0" step="any" value={purchasePrice} onChange={(event) => setPurchasePrice(event.target.value)} placeholder="330000" />
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">

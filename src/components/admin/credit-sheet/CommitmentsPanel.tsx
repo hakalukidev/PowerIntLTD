@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Check, FileCheck, FileX, ImagePlus, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
@@ -238,7 +238,7 @@ export function CommitmentsPanel({ customer, canEdit, canAdd = canEdit }: { cust
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Commitment date (optional)</p>
-                <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="h-9 w-44" />
+                <DateInput value={dueDate} onChange={(value) => setDueDate(value)} className="h-9 w-44" />
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">Image (optional)</p>

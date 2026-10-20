@@ -7,6 +7,7 @@ import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
@@ -187,7 +188,7 @@ export default function AttendancePage() {
                 </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Input type="date" value={day} max={today} onChange={(event) => event.target.value && setDay(event.target.value)} className="w-40" />
+                <DateInput value={day} max={today} onChange={(value) => value && setDay(value)} className="w-40" />
                 {canTakeAttendance ? (
                   <Button type="button" variant="outline" className="gap-1.5" disabled={!unmarked.length || busyKey === 'all'} onClick={markAllPresent}>
                     <CheckCheck className="h-4 w-4" />

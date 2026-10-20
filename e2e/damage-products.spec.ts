@@ -83,7 +83,7 @@ test.describe('Damage Products', () => {
         await expect(page.getByText('Report damage product')).toBeVisible()
 
         await page.fill('input[placeholder="e.g. Two Post Service Lift"]', productName)
-        await page.fill('input[type="number"]', '3')
+        await page.fill('input[data-number-input]', '3')
         const zoneName = await selectZoneByIndex(page, 'button:has-text("Select zone")', 0)
         test.skip(!zoneName, 'Create at least one zone to run this test.')
 

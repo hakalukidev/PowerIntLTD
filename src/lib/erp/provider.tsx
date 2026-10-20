@@ -57,6 +57,7 @@ import type {
   InvestorInput,
   OrderInput,
   OrderRecord,
+  OrderStatusConfig,
   ProductInput,
   ProductRecord,
   PurchaseInput,
@@ -105,8 +106,11 @@ import {
   DEFAULT_PROBATION_MONTHS,
   EMPLOYEE_EXPENSE_CATEGORIES,
   changesNeedApproval as changesNeedApprovalFor,
+  getOrderStatus,
+  getOrderStatuses,
   getPermissions,
   getProductStatus,
+  PROTECTED_ORDER_STATUS_IDS,
   getTargetAchievement,
   hasPermission as hasPermissionCheck,
   isZoneInCharge,
@@ -227,6 +231,12 @@ type ERPContextValue = {
   /** Dealers of a zone who keep the general price instead of the zone's prices. */
   saveZonePriceExclusions: (zoneId: string, customerIds: string[]) => Promise<void>
   updateSettings: (input: Partial<SettingsRecord>) => Promise<void>
+  /** Admin only: adds a status, or renames / recolours one when `statusId` is given. Returns its id. */
+  saveOrderStatus: (input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal'>, statusId?: string) => Promise<string>
+  /** Admin only: saves the workflow order of every status, first to last. */
+  reorderOrderStatuses: (statusIds: string[]) => Promise<void>
+  /** Admin only: removes a status, moving every order on it to `replacementId` first. */
+  deleteOrderStatus: (statusId: string, replacementId: string) => Promise<void>
   submitDeposit: (input: DepositInput) => Promise<void>
   reviewDeposit: (depositId: string, decision: 'approve' | 'reject') => Promise<void>
   submitComplaint: (input: ComplaintInput) => Promise<void>
@@ -1796,6 +1806,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         currency: input.currency,
         total: input.quantity * input.unitCost,
         status: 'received',
+        stockBefore: product.stockQty,
+        stockAfter: nextStock,
         createdAt: now,
       },
       [`products/${product.id}/stockQty`]: nextStock,
@@ -2047,9 +2059,112 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('settings_updated', 'settings', `Updated settings: ${Object.keys(input).join(', ')}.`)
   }
 
+  /** The status list as shown: the saved one, or the defaults until an admin first edits it. */
+  function orderStatusMap() {
+    return Object.fromEntries(getOrderStatuses(data?.settings).map((status) => [status.id, status]))
+  }
+
+  /** True while the database has no status list yet, so the first edit must also write the defaults. */
+  function orderStatusesUnsaved() {
+    return Object.keys(data?.settings.orderStatuses ?? {}).length === 0
+  }
+
+  async function saveOrderStatus(input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal'>, statusId?: string) {
+    requireAdminUser('change order statuses')
+    const label = input.label.trim()
+    if (!label) {
+      throw new Error('Enter a status name.')
+    }
+
+    const statuses = orderStatusMap()
+    if (Object.values(statuses).some((status) => status.id !== statusId && status.label.toLowerCase() === label.toLowerCase())) {
+      throw new Error(`A status called "${label}" already exists.`)
+    }
+    if (statusId && !statuses[statusId]) {
+      throw new Error('That status no longer exists.')
+    }
+
+    const id = statusId ?? createId('status')
+    const order = statusId ? statuses[statusId].order : Math.max(-1, ...Object.values(statuses).map((status) => status.order)) + 1
+    const previous = statusId ? statuses[statusId] : null
+    statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal }
+
+    // Only this status's path is written, so the rest of the saved list is left as it is.
+    await update(ref(getDatabaseOrThrow(), 'erp/settings/orderStatuses'), orderStatusesUnsaved() ? statuses : { [id]: statuses[id] })
+    await writeActivity(
+      'order_status_saved',
+      'settings',
+      previous ? `Updated order status "${previous.label}"${previous.label === label ? '' : ` to "${label}"`}.` : `Added order status "${label}".`
+    )
+    return id
+  }
+
+  async function reorderOrderStatuses(statusIds: string[]) {
+    requireAdminUser('change order statuses')
+    const statuses = orderStatusMap()
+    const ordered = [...statusIds.filter((id) => statuses[id]), ...Object.keys(statuses).filter((id) => !statusIds.includes(id))]
+    const unsaved = orderStatusesUnsaved()
+    const changes: Record<string, unknown> = {}
+    ordered.forEach((id, index) => {
+      statuses[id] = { ...statuses[id], order: index }
+      if (unsaved) changes[id] = statuses[id]
+      else changes[`${id}/order`] = index
+    })
+
+    await update(ref(getDatabaseOrThrow(), 'erp/settings/orderStatuses'), changes)
+    await writeActivity('order_statuses_reordered', 'settings', `Reordered order statuses: ${ordered.map((id) => statuses[id].label).join(' → ')}.`)
+  }
+
+  async function deleteOrderStatus(statusId: string, replacementId: string) {
+    requireAdminUser('change order statuses')
+    if (!data) {
+      return
+    }
+    if (PROTECTED_ORDER_STATUS_IDS.includes(statusId)) {
+      throw new Error('This status is set by the order and delivery workflow. Rename it instead of deleting it.')
+    }
+
+    const statuses = orderStatusMap()
+    const removed = statuses[statusId]
+    if (!removed) {
+      return
+    }
+
+    const affected = toArray(data.orders).filter((order) => order.status === statusId)
+    if (affected.length && (!statuses[replacementId] || replacementId === statusId)) {
+      throw new Error('Pick another status for the orders that use this one.')
+    }
+
+    // One multi-path write, so the orders and the list never disagree.
+    const changes: Record<string, unknown> = { [`settings/orderStatuses/${statusId}`]: null }
+    if (orderStatusesUnsaved()) {
+      for (const [id, status] of Object.entries(statuses)) {
+        if (id !== statusId) changes[`settings/orderStatuses/${id}`] = status
+      }
+    }
+    for (const order of affected) {
+      changes[`orders/${order.id}/status`] = replacementId
+    }
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), changes)
+    await writeActivity(
+      'order_status_deleted',
+      'settings',
+      affected.length
+        ? `Deleted order status "${removed.label}" and moved ${affected.length} order${affected.length === 1 ? '' : 's'} to "${statuses[replacementId].label}".`
+        : `Deleted order status "${removed.label}".`
+    )
+  }
+
   async function updateOrderStatus(orderId: string, status: OrderRecord['status']) {
     if (!data) {
       return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'sales.edit')) {
+      throw new Error('You do not have permission to change order status.')
+    }
+    if (!getOrderStatuses(data.settings).some((entry) => entry.id === status)) {
+      throw new Error('That status no longer exists.')
     }
 
     const db = getDatabaseOrThrow()
@@ -2058,11 +2173,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    const label = getOrderStatus(data.settings, status).label
+    const billNumber = order.billNumber || orderId
     await update(ref(db, `erp/orders/${orderId}`), { status })
-    await writeActivity('order_status_changed', 'sales', `Moved order ${orderId} to ${status}.`)
+    await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} to ${label}.`)
     await writeNotification(
       'Order status updated',
-      `Order ${orderId} status was updated to "${status}" by ${currentUser?.name ?? 'Admin'}.`,
+      `Order ${billNumber} status was updated to "${label}" by ${currentUser?.name ?? 'Admin'}.`,
       'info',
       ['admin', 'sales_person', 'accountant']
     )
@@ -5394,6 +5511,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveDealerPrices: viewOnlyForZone(saveDealerPrices),
       saveZonePriceExclusions: viewOnlyForZone(saveZonePriceExclusions),
       updateSettings,
+      saveOrderStatus,
+      reorderOrderStatuses,
+      deleteOrderStatus,
       submitDeposit: viewOnlyForZone(submitDeposit),
       reviewDeposit: viewOnlyForZone(reviewDeposit),
       submitComplaint: viewOnlyForZone(submitComplaint),

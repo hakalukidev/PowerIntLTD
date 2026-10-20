@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -362,7 +363,7 @@ export default function BatteryReportPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Check date<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input type="date" value={form.checkDate} onChange={(event) => set('checkDate', event.target.value)} required />
+                  <DateInput value={form.checkDate} onChange={(value) => set('checkDate', value)} required />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Dealer<span className="ml-0.5 text-rose-500">*</span></p>
@@ -378,7 +379,7 @@ export default function BatteryReportPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Sale / guarantee date</p>
-                  <Input type="date" value={form.saleDate} onChange={(event) => set('saleDate', event.target.value)} />
+                  <DateInput value={form.saleDate} onChange={(value) => set('saleDate', value)} />
                   {warrantyEndsOn ? (
                     <p className={cn('text-xs', inWarranty ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
                       {inWarranty ? 'In warranty' : 'Warranty expired'} — until {formatDate(warrantyEndsOn)}

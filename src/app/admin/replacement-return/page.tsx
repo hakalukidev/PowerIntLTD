@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -124,7 +125,7 @@ export default function ReplacementReturnPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Date<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+                  <DateInput value={date} onChange={(value) => setDate(value)} required />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Quantity<span className="ml-0.5 text-rose-500">*</span></p>

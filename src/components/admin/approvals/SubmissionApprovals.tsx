@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
@@ -15,7 +16,7 @@ import { approvalStage, canActAtStage, formatCurrency, formatDate, getExpenseCat
 
 import { ApprovalStageNote, EditHistory, EmptyState, FeedbackBanner, NotifyButtons, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
 
-type SubmissionRow = {
+export type SubmissionRow = {
   id: string
   party: string
   amount: number
@@ -46,7 +47,7 @@ const KIND_COPY: Record<EditableSubmissionKind, { empty: string; noun: string }>
   expenses: { empty: 'No expenses are waiting for approval.', noun: 'expense' },
 }
 
-function buildRows(kind: EditableSubmissionKind, data: ERPData): SubmissionRow[] {
+export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData): SubmissionRow[] {
   const roleOf = (userId: string) => {
     const user = data.users[userId]
     return user ? userRoleNames(data.roles, user) : ''
@@ -147,25 +148,12 @@ function buildRows(kind: EditableSubmissionKind, data: ERPData): SubmissionRow[]
   }))
 }
 
-export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissionKind; isAdmin: boolean }) {
-  const { data, currentUser, reviewDeposit, reviewSupplierPayment, reviewExpense } = useERP()
-  const [feedback, setFeedback] = useState<Feedback>(null)
+/** Approve or reject a deposit, supplier payment or expense, reporting the result through `setFeedback`. */
+export function useSubmissionReview(setFeedback: (feedback: Feedback) => void) {
+  const { reviewDeposit, reviewSupplierPayment, reviewExpense } = useERP()
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [editing, setEditing] = useState<SubmissionRow | null>(null)
 
-  const rows = useMemo(() => (data ? buildRows(kind, data) : []), [data, kind])
-  const pending = rows.filter((row) => row.status === 'pending')
-  const today = todayInput()
-  const reviewedToday = rows.filter((row) => row.status !== 'pending' && localDay(row.reviewedAt) === today)
-
-  // Expenses are shown by category, each with its subtotal.
-  const groups = useMemo(() => {
-    const map = new Map<string, SubmissionRow[]>()
-    pending.forEach((row) => map.set(row.group, [...(map.get(row.group) ?? []), row]))
-    return [...map.entries()].sort(([left], [right]) => left.localeCompare(right))
-  }, [pending])
-
-  async function review(row: SubmissionRow, decision: 'approve' | 'reject') {
+  async function review(kind: EditableSubmissionKind, row: SubmissionRow, decision: 'approve' | 'reject') {
     setBusyId(row.id)
     setFeedback(null)
     try {
@@ -185,6 +173,27 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
     }
   }
 
+  return { busyId, review }
+}
+
+export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissionKind; isAdmin: boolean }) {
+  const { data } = useERP()
+  const [feedback, setFeedback] = useState<Feedback>(null)
+  const { busyId, review } = useSubmissionReview(setFeedback)
+  const [editing, setEditing] = useState<SubmissionRow | null>(null)
+
+  const rows = useMemo(() => (data ? buildSubmissionRows(kind, data) : []), [data, kind])
+  const pending = rows.filter((row) => row.status === 'pending')
+  const today = todayInput()
+  const reviewedToday = rows.filter((row) => row.status !== 'pending' && localDay(row.reviewedAt) === today)
+
+  // Expenses are shown by category, each with its subtotal.
+  const groups = useMemo(() => {
+    const map = new Map<string, SubmissionRow[]>()
+    pending.forEach((row) => map.set(row.group, [...(map.get(row.group) ?? []), row]))
+    return [...map.entries()].sort(([left], [right]) => left.localeCompare(right))
+  }, [pending])
+
   return (
     <div className="space-y-6">
       <FeedbackBanner feedback={feedback} />
@@ -199,63 +208,17 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
               </span>
             </div>
           ) : null}
-          {groupRows.map((row) => {
-            const stage = kind === 'deposits' ? approvalStage(row) : null
-            const canReview = kind === 'deposits' ? canActAtStage(currentUser, stage) : isAdmin
-            return (
-            <Card key={row.id}>
-              <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1.5">
-                  <p className="font-medium">
-                    {row.party} · <span className="tabular-nums">{formatCurrency(row.amount)}</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">Date {formatDate(row.date)}</p>
-                  <dl className="space-y-0.5 text-sm">
-                    {row.details
-                      .filter(([, value]) => value)
-                      .map(([label, value]) => (
-                        <div key={label} className="flex gap-2">
-                          <dt className="shrink-0 text-muted-foreground">{label}:</dt>
-                          <dd className="min-w-0 break-words">{value}</dd>
-                        </div>
-                      ))}
-                  </dl>
-                  {row.documentUrl ? (
-                    <a href={row.documentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary underline-offset-2 hover:underline">
-                      <FileImage className="h-4 w-4" />
-                      View voucher / proof
-                    </a>
-                  ) : null}
-                  <SubmittedBy name={row.submittedByName} role={row.submittedByRole} at={row.submittedAt} />
-                  {kind === 'deposits' ? <ApprovalStageNote record={row} /> : null}
-                  <EditHistory edits={row.edits} />
-                </div>
-                {isAdmin || canReview ? (
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    {isAdmin ? (
-                      <Button size="sm" variant="outline" className="gap-1.5" disabled={busyId === row.id} onClick={() => setEditing(row)}>
-                        <Pencil className="h-4 w-4" />
-                        Edit
-                      </Button>
-                    ) : null}
-                    {canReview ? (
-                      <>
-                        <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busyId === row.id} onClick={() => void review(row, 'reject')}>
-                          <X className="h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button size="sm" className="gap-1.5" disabled={busyId === row.id} onClick={() => void review(row, 'approve')}>
-                          <Check className="h-4 w-4" />
-                          {stage === 'authorizer' ? 'Authorize' : stage === 'chairman' ? 'Final approve' : 'Approve'}
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-            )
-          })}
+          {groupRows.map((row) => (
+            <SubmissionCard
+              key={row.id}
+              kind={kind}
+              row={row}
+              isAdmin={isAdmin}
+              busy={busyId === row.id}
+              onReview={(decision) => void review(kind, row, decision)}
+              onEdit={() => setEditing(row)}
+            />
+          ))}
         </div>
       ))}
 
@@ -291,7 +254,85 @@ export function SubmissionApprovals({ kind, isAdmin }: { kind: EditableSubmissio
   )
 }
 
-function EditSubmissionDialog({
+export function SubmissionCard({
+  kind,
+  row,
+  isAdmin,
+  busy,
+  onReview,
+  onEdit,
+  badge,
+}: {
+  kind: EditableSubmissionKind
+  row: SubmissionRow
+  isAdmin: boolean
+  busy: boolean
+  onReview: (decision: 'approve' | 'reject') => void
+  onEdit: () => void
+  badge?: React.ReactNode
+}) {
+  const { currentUser } = useERP()
+  const stage = kind === 'deposits' ? approvalStage(row) : null
+  const canReview = kind === 'deposits' ? canActAtStage(currentUser, stage) : isAdmin
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+            {badge}
+            <span>
+              {row.party} · <span className="tabular-nums">{formatCurrency(row.amount)}</span>
+            </span>
+          </p>
+          <p className="text-xs text-muted-foreground">Date {formatDate(row.date)}</p>
+          <dl className="space-y-0.5 text-sm">
+            {row.details
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <div key={label} className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">{label}:</dt>
+                  <dd className="min-w-0 break-words">{value}</dd>
+                </div>
+              ))}
+          </dl>
+          {row.documentUrl ? (
+            <a href={row.documentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary underline-offset-2 hover:underline">
+              <FileImage className="h-4 w-4" />
+              View voucher / proof
+            </a>
+          ) : null}
+          <SubmittedBy name={row.submittedByName} role={row.submittedByRole} at={row.submittedAt} />
+          {kind === 'deposits' ? <ApprovalStageNote record={row} /> : null}
+          <EditHistory edits={row.edits} />
+        </div>
+        {isAdmin || canReview ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {isAdmin ? (
+              <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={onEdit}>
+                <Pencil className="h-4 w-4" />
+                Edit
+              </Button>
+            ) : null}
+            {canReview ? (
+              <>
+                <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
+                  <X className="h-4 w-4" />
+                  Reject
+                </Button>
+                <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
+                  <Check className="h-4 w-4" />
+                  {stage === 'authorizer' ? 'Authorize' : stage === 'chairman' ? 'Final approve' : 'Approve'}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+export function EditSubmissionDialog({
   kind,
   row,
   onClose,
@@ -357,7 +398,7 @@ function EditSubmissionDialog({
           </label>
           <label className="space-y-1 text-sm">
             <span className="font-medium">Date</span>
-            <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            <DateInput value={date} onChange={(value) => setDate(value)} />
           </label>
           {kind === 'deposits' ? (
             <div className="space-y-1 text-sm sm:col-span-2">

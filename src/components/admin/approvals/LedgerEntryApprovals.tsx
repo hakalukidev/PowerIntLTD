@@ -11,28 +11,10 @@ import { approvalStage, canActAtStage, formatCurrency, formatDate, sortByCreated
 
 import { ApprovalStageNote, EmptyState, FeedbackBanner, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
 
-/**
- * Ledger entries a zone in charge made for their zone's clients. The zone's Authorizer sends each
- * one to the Chairman, whose approval writes it to the client's ledger.
- * With `customerId` it lists only that client's waiting entries, and nothing when there are none.
- */
-export function LedgerEntryApprovals({ customerId }: { customerId?: string }) {
-  const { data, currentUser, reviewLedgerEntryRequest } = useERP()
-  const [feedback, setFeedback] = useState<Feedback>(null)
+/** Send a ledger entry on to the Chairman, approve or reject it, reporting the result through `setFeedback`. */
+export function useLedgerEntryReview(setFeedback: (feedback: Feedback) => void) {
+  const { reviewLedgerEntryRequest } = useERP()
   const [busyId, setBusyId] = useState<string | null>(null)
-
-  const requests = useMemo(
-    () => sortByCreatedAtDesc(toArray(data?.ledgerEntryRequests)).filter((request) => !customerId || request.customerId === customerId),
-    [customerId, data?.ledgerEntryRequests]
-  )
-  const pending = requests.filter((request) => request.status === 'pending')
-  const today = todayInput()
-  const reviewedToday = customerId ? [] : requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
-
-  const roleOf = (userId: string) => {
-    const user = data?.users[userId]
-    return user && data ? userRoleNames(data.roles, user) : ''
-  }
 
   async function review(request: LedgerEntryRequestRecord, decision: 'approve' | 'reject') {
     const authorizing = approvalStage(request) === 'authorizer'
@@ -57,6 +39,89 @@ export function LedgerEntryApprovals({ customerId }: { customerId?: string }) {
     }
   }
 
+  return { busyId, review }
+}
+
+export function LedgerEntryCard({
+  request,
+  busy,
+  onReview,
+  badge,
+}: {
+  request: LedgerEntryRequestRecord
+  busy: boolean
+  onReview: (decision: 'approve' | 'reject') => void
+  badge?: React.ReactNode
+}) {
+  const { data, currentUser } = useERP()
+  const stage = approvalStage(request)
+  const canReview = canActAtStage(currentUser, stage)
+  const isDebit = request.debit > 0
+  const submitter = data?.users[request.submittedById]
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+            {badge}
+            <span>
+              {request.customerName} · <span className="tabular-nums">{formatCurrency(isDebit ? request.debit : request.credit)}</span>{' '}
+              <span className="text-xs font-normal text-muted-foreground">{isDebit ? 'Debit' : 'Credit'}</span>
+            </span>
+          </p>
+          <p className="text-xs text-muted-foreground">Date {formatDate(request.date)}</p>
+          <dl className="space-y-0.5 text-sm">
+            <div className="flex gap-2">
+              <dt className="shrink-0 text-muted-foreground">Particulars:</dt>
+              <dd className="min-w-0 break-words">{request.particulars}</dd>
+            </div>
+            {request.qty || request.unitPrice ? (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Qty × Unit price:</dt>
+                <dd className="tabular-nums">
+                  {request.qty} × {formatCurrency(request.unitPrice)}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+          <SubmittedBy name={request.submittedByName} role={submitter && data ? userRoleNames(data.roles, submitter) : ''} at={request.createdAt} />
+          <ApprovalStageNote record={request} />
+        </div>
+        {canReview ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
+              <X className="h-4 w-4" />
+              Reject
+            </Button>
+            <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
+              {stage === 'authorizer' ? <Send className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+              {stage === 'authorizer' ? 'Submit to Chairman' : 'Final approve'}
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Ledger entries a zone in charge made for their zone's clients. The zone's Authorizer sends each
+ * one to the Chairman, whose approval writes it to the client's ledger.
+ * With `customerId` it lists only that client's waiting entries, and nothing when there are none.
+ */
+export function LedgerEntryApprovals({ customerId }: { customerId?: string }) {
+  const { data } = useERP()
+  const [feedback, setFeedback] = useState<Feedback>(null)
+  const { busyId, review } = useLedgerEntryReview(setFeedback)
+
+  const requests = useMemo(
+    () => sortByCreatedAtDesc(toArray(data?.ledgerEntryRequests)).filter((request) => !customerId || request.customerId === customerId),
+    [customerId, data?.ledgerEntryRequests]
+  )
+  const pending = requests.filter((request) => request.status === 'pending')
+  const today = todayInput()
+  const reviewedToday = customerId ? [] : requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
+
   if (customerId && !pending.length && !feedback) return null
 
   return (
@@ -64,52 +129,9 @@ export function LedgerEntryApprovals({ customerId }: { customerId?: string }) {
       {customerId ? <h3 className="text-sm font-semibold">Ledger entries waiting for approval</h3> : null}
       <FeedbackBanner feedback={feedback} />
       {!customerId && !pending.length ? <EmptyState text="No ledger entries are waiting for approval." /> : null}
-      {pending.map((request) => {
-        const stage = approvalStage(request)
-        const canReview = canActAtStage(currentUser, stage)
-        const isDebit = request.debit > 0
-        return (
-          <Card key={request.id}>
-            <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0 space-y-1.5">
-                <p className="font-medium">
-                  {request.customerName} · <span className="tabular-nums">{formatCurrency(isDebit ? request.debit : request.credit)}</span>{' '}
-                  <span className="text-xs font-normal text-muted-foreground">{isDebit ? 'Debit' : 'Credit'}</span>
-                </p>
-                <p className="text-xs text-muted-foreground">Date {formatDate(request.date)}</p>
-                <dl className="space-y-0.5 text-sm">
-                  <div className="flex gap-2">
-                    <dt className="shrink-0 text-muted-foreground">Particulars:</dt>
-                    <dd className="min-w-0 break-words">{request.particulars}</dd>
-                  </div>
-                  {request.qty || request.unitPrice ? (
-                    <div className="flex gap-2">
-                      <dt className="shrink-0 text-muted-foreground">Qty × Unit price:</dt>
-                      <dd className="tabular-nums">
-                        {request.qty} × {formatCurrency(request.unitPrice)}
-                      </dd>
-                    </div>
-                  ) : null}
-                </dl>
-                <SubmittedBy name={request.submittedByName} role={roleOf(request.submittedById)} at={request.createdAt} />
-                <ApprovalStageNote record={request} />
-              </div>
-              {canReview ? (
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busyId === request.id} onClick={() => void review(request, 'reject')}>
-                    <X className="h-4 w-4" />
-                    Reject
-                  </Button>
-                  <Button size="sm" className="gap-1.5" disabled={busyId === request.id} onClick={() => void review(request, 'approve')}>
-                    {stage === 'authorizer' ? <Send className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-                    {stage === 'authorizer' ? 'Submit to Chairman' : 'Final approve'}
-                  </Button>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-        )
-      })}
+      {pending.map((request) => (
+        <LedgerEntryCard key={request.id} request={request} busy={busyId === request.id} onReview={(decision) => void review(request, decision)} />
+      ))}
 
       {reviewedToday.length ? (
         <Card>

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
+    "@floating-ui/react": "^0.26.28",
     "@headlessui/react": "^2.2.10",
     "@hookform/resolvers": "^5.4.0",
     "@radix-ui/react-avatar": "^1.2.1",

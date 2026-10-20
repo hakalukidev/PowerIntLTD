@@ -104,21 +104,10 @@ function describe(request: ChangeRequestRecord, data: ERPData): Array<[string, s
   return changed.length ? changed.map(([key, label]) => [label, `${show(stored?.[key])} → ${show(input[key])}`]) : [['Fields', 'No visible field changes (documents or photos only)']]
 }
 
-/** Changes to dealers, suppliers, credit sheet entries and expenses by users whose role needs approval. */
-export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
-  const { data, reviewChangeRequest } = useERP()
+/** Approve or reject a record change, reporting the result through `setFeedback`. */
+export function useChangeReview(setFeedback: (feedback: Feedback) => void) {
+  const { reviewChangeRequest } = useERP()
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<Feedback>(null)
-
-  const requests = useMemo(() => sortByCreatedAtDesc(toArray(data?.changeRequests)), [data?.changeRequests])
-  const pending = requests.filter((request) => request.status === 'pending')
-  const today = todayInput()
-  const reviewedToday = requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
-
-  const roleOf = (userId: string) => {
-    const user = data?.users[userId]
-    return user ? userRoleNames(data?.roles, user) : ''
-  }
 
   async function review(request: ChangeRequestRecord, decision: 'approve' | 'reject') {
     setBusyId(request.id)
@@ -138,6 +127,74 @@ export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
     }
   }
 
+  return { busyId, review }
+}
+
+export function ChangeRequestCard({
+  request,
+  isAdmin,
+  busy,
+  onReview,
+  badge,
+}: {
+  request: ChangeRequestRecord
+  isAdmin: boolean
+  busy: boolean
+  onReview: (decision: 'approve' | 'reject') => void
+  badge?: React.ReactNode
+}) {
+  const { data } = useERP()
+  if (!data) return null
+  const submitter = data.users[request.submittedById]
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <p className="flex flex-wrap items-center gap-2 font-medium">
+            {badge}
+            <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', ACTION_STYLES[request.action].className)}>
+              {ACTION_STYLES[request.action].label}
+            </span>
+            {KIND_LABELS[request.kind]} · {request.targetName}
+          </p>
+          <dl className="space-y-0.5 text-sm">
+            {describe(request, data).map(([label, value]) => (
+              <div key={label} className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">{label}:</dt>
+                <dd className="min-w-0 break-words">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <SubmittedBy name={request.submittedByName} role={submitter ? userRoleNames(data.roles, submitter) : ''} at={request.createdAt} />
+        </div>
+        {isAdmin ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
+              <X className="h-4 w-4" />
+              Reject
+            </Button>
+            <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
+              <Check className="h-4 w-4" />
+              Approve
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Changes to dealers, suppliers, credit sheet entries and expenses by users whose role needs approval. */
+export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
+  const { data } = useERP()
+  const [feedback, setFeedback] = useState<Feedback>(null)
+  const { busyId, review } = useChangeReview(setFeedback)
+
+  const requests = useMemo(() => sortByCreatedAtDesc(toArray(data?.changeRequests)), [data?.changeRequests])
+  const pending = requests.filter((request) => request.status === 'pending')
+  const today = todayInput()
+  const reviewedToday = requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
+
   if (!data) return null
 
   return (
@@ -145,39 +202,7 @@ export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
       <FeedbackBanner feedback={feedback} />
       {!pending.length ? <EmptyState text="No record changes are waiting for approval." /> : null}
       {pending.map((request) => (
-        <Card key={request.id}>
-          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0 space-y-1.5">
-              <p className="flex flex-wrap items-center gap-2 font-medium">
-                <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', ACTION_STYLES[request.action].className)}>
-                  {ACTION_STYLES[request.action].label}
-                </span>
-                {KIND_LABELS[request.kind]} · {request.targetName}
-              </p>
-              <dl className="space-y-0.5 text-sm">
-                {describe(request, data).map(([label, value]) => (
-                  <div key={label} className="flex gap-2">
-                    <dt className="shrink-0 text-muted-foreground">{label}:</dt>
-                    <dd className="min-w-0 break-words">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <SubmittedBy name={request.submittedByName} role={roleOf(request.submittedById)} at={request.createdAt} />
-            </div>
-            {isAdmin ? (
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busyId === request.id} onClick={() => void review(request, 'reject')}>
-                  <X className="h-4 w-4" />
-                  Reject
-                </Button>
-                <Button size="sm" className="gap-1.5" disabled={busyId === request.id} onClick={() => void review(request, 'approve')}>
-                  <Check className="h-4 w-4" />
-                  Approve
-                </Button>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+        <ChangeRequestCard key={request.id} request={request} isAdmin={isAdmin} busy={busyId === request.id} onReview={(decision) => void review(request, decision)} />
       ))}
 
       {reviewedToday.length ? (

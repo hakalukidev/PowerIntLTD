@@ -1,4 +1,4 @@
-import { escapeHtml } from '@/lib/erp/utils'
+import { escapeHtml, formatDateTime } from '@/lib/erp/utils'
 
 type BrandedDocumentOptions = {
   title: string
@@ -17,7 +17,7 @@ type BrandedDocumentOptions = {
  */
 export function brandedDocument({ title, heading, badge, body, autoPrint = true }: BrandedDocumentOptions) {
   const logoUrl = `${window.location.origin}/power-icon.png`
-  const generatedAt = new Intl.DateTimeFormat('en-BD', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+  const generatedAt = formatDateTime(new Date().toISOString())
 
   return `
     <!doctype html>
@@ -482,7 +482,7 @@ export async function downloadSheetPdf({ heading, badge, tables }: SheetPdfOptio
     y = lastTableEnd()
   })
 
-  const generatedAt = new Intl.DateTimeFormat('en-BD', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date())
+  const generatedAt = formatDateTime(new Date().toISOString())
   if (y + 8 > pageHeight - margin.bottom) {
     pdf.addPage()
     y = margin.top

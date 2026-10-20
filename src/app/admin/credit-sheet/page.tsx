@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
@@ -863,21 +864,19 @@ export default function CreditSheetPage() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">From</p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={commitmentPdf.from}
                     disabled={commitmentPdf.status === 'none'}
-                    onChange={(event) => setCommitmentPdf((current) => ({ ...current, from: event.target.value }))}
+                    onChange={(value) => setCommitmentPdf((current) => ({ ...current, from: value }))}
                     className="h-9 w-40"
                   />
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">To</p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={commitmentPdf.to}
                     disabled={commitmentPdf.status === 'none'}
-                    onChange={(event) => setCommitmentPdf((current) => ({ ...current, to: event.target.value }))}
+                    onChange={(value) => setCommitmentPdf((current) => ({ ...current, to: value }))}
                     className="h-9 w-40"
                   />
                 </div>
@@ -926,10 +925,9 @@ export default function CreditSheetPage() {
                   <p className="text-sm font-medium text-foreground">
                     Date<span className="ml-0.5 text-rose-500">*</span>
                   </p>
-                  <Input
-                    type="date"
+                  <DateInput
                     value={entryForm.date}
-                    onChange={(event) => setEntryForm((current) => ({ ...current, date: event.target.value }))}
+                    onChange={(value) => setEntryForm((current) => ({ ...current, date: value }))}
                     required
                   />
                 </div>
@@ -1118,11 +1116,11 @@ export default function CreditSheetPage() {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
-                <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <DateInput value={dateFrom} onChange={(value) => setDateFrom(value)} />
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">To date</p>
-                <Input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+                <DateInput value={dateTo} onChange={(value) => setDateTo(value)} />
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">Min purchase</p>
@@ -1172,7 +1170,7 @@ export default function CreditSheetPage() {
                           <TableHeader>
                             <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
                               <TableHead>SL</TableHead>
-                              <TableHead>Dealer</TableHead>
+                              <TableHead sticky className="[--sticky-tint:var(--color-slate-800)]">Dealer</TableHead>
                               <TableHead>Mobile</TableHead>
                               {showSubZoneColumn ? <TableHead>Sub-zone</TableHead> : null}
                               <TableHead className="text-right">Quantity</TableHead>
@@ -1186,7 +1184,7 @@ export default function CreditSheetPage() {
                             {group.rows.map((row, index) => (
                               <TableRow key={row.customer.id}>
                                 <TableCell className="text-muted-foreground">{index + 1}</TableCell>
-                                <TableCell className="font-medium">
+                                <TableCell sticky className="font-medium">
                                   {row.customer.name}
                                   {row.customer.commitments && Object.values(row.customer.commitments).some((item) => item.status === 'pending' && item.approvalStage !== 'rejected') ? (
                                     <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
@@ -1240,7 +1238,7 @@ export default function CreditSheetPage() {
                       <Table>
                         <TableHeader>
                           <TableRow className="bg-slate-800 hover:bg-slate-800 [&>th]:text-white">
-                            <TableHead>{groupLabel}</TableHead>
+                            <TableHead sticky className="[--sticky-tint:var(--color-slate-800)]">{groupLabel}</TableHead>
                             <TableHead className="text-right">Dealers</TableHead>
                             <TableHead className="text-right">Quantity</TableHead>
                             <TableHead className="text-right">Total purchase</TableHead>
@@ -1251,7 +1249,7 @@ export default function CreditSheetPage() {
                         <TableBody>
                           {creditSheetGroups.map((group) => (
                             <TableRow key={group.name}>
-                              <TableCell className="font-medium">{group.name}</TableCell>
+                              <TableCell sticky className="font-medium">{group.name}</TableCell>
                               <TableCell className="text-right">{group.totals.dealers}</TableCell>
                               <TableCell className="text-right">{group.totals.quantity.toLocaleString('en-BD')}</TableCell>
                               <TableCell className="text-right">{formatAmount(group.totals.purchase)}</TableCell>

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -285,7 +286,7 @@ export default function SubBusinessPage() {
                 <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
                   <CardTitle className="text-base">Balance sheet</CardTitle>
                   <div className="flex gap-2">
-                    <Input type="date" className="w-auto" value={asOf} onChange={(event) => setAsOf(event.target.value || todayInput())} />
+                    <DateInput className="w-auto" value={asOf} onChange={(value) => setAsOf(value || todayInput())} />
                     <Button type="button" variant="outline" className="gap-1.5" onClick={handlePrint}>
                       <Printer className="h-4 w-4" />
                       Print
@@ -335,7 +336,7 @@ export default function SubBusinessPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Input type="date" value={entryForm.date} onChange={(event) => setEntryForm((current) => ({ ...current, date: event.target.value }))} required />
+                    <DateInput value={entryForm.date} onChange={(value) => setEntryForm((current) => ({ ...current, date: value }))} required />
                     <div className={cn('grid gap-2', stockKinds.includes(entryForm.kind) && 'grid-cols-2')}>
                       <Input
                         type="number"

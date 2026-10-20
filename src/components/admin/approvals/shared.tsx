@@ -4,7 +4,7 @@ import { MessageCircle, MessageSquareText, PencilLine, ShieldCheck } from 'lucid
 
 import { Button } from '@/components/ui/button'
 import type { DepositStatus, SubmissionEdit } from '@/lib/erp/types'
-import { APPROVAL_STAGE_LABELS, approvalStage, formatDateTime, smsLink, whatsappLink } from '@/lib/erp/utils'
+import { APPROVAL_STAGE_LABELS, approvalStage, formatDateTime, formatIfDate, smsLink, whatsappLink } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 export const STATUS_STYLES: Record<DepositStatus, string> = {
@@ -73,7 +73,7 @@ export function EditHistory({ edits }: { edits?: SubmissionEdit[] }) {
           <ul className="ml-5 list-disc">
             {edit.changes.map((change, changeIndex) => (
               <li key={changeIndex}>
-                {change.field}: <span className="line-through opacity-70">{change.from || '—'}</span> → {change.to || '—'}
+                {change.field}: <span className="line-through opacity-70">{change.from ? formatIfDate(change.from) : '—'}</span> → {change.to ? formatIfDate(change.to) : '—'}
               </li>
             ))}
           </ul>

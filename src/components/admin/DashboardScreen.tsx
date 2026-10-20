@@ -49,20 +49,15 @@ import {
   buildPaymentStatusCounts,
   buildRevenueSeries,
   formatCurrency,
+  formatDate,
+  getOrderStatus,
   notificationToneClass,
+  ORDER_STATUS_COLORS,
   REVENUE_RANGE_OPTIONS,
   RevenueRange,
   toArray,
   userRoleIds,
 } from '@/lib/erp/utils'
-
-const ORDER_STATUS_COLORS: Record<string, string> = {
-  pending: 'hsl(var(--chart-1))',
-  ready: 'hsl(var(--chart-5))',
-  shipped: 'hsl(var(--chart-4))',
-  completed: 'hsl(var(--chart-2))',
-  hold: 'hsl(var(--chart-3))',
-}
 
 const PAYMENT_STATUS_COLORS: Record<string, string> = {
   paid: 'hsl(var(--chart-2))',
@@ -131,11 +126,14 @@ export function DashboardScreen() {
     color: PAYMENT_STATUS_COLORS[status] ?? 'hsl(var(--chart-1))',
   }))
 
-  const orderStatusData = Object.entries(snapshot.orderStatusCounts).map(([status, total]) => ({
-    status: status.charAt(0).toUpperCase() + status.slice(1),
-    total,
-    color: ORDER_STATUS_COLORS[status] ?? 'hsl(var(--chart-1))',
-  }))
+  const orderStatusData = Object.entries(snapshot.orderStatusCounts)
+    .map(([statusId, total]) => ({ config: getOrderStatus(data?.settings, statusId), total }))
+    .sort((left, right) => left.config.order - right.config.order)
+    .map(({ config, total }) => ({
+      status: config.label,
+      total,
+      color: (ORDER_STATUS_COLORS[config.color] ?? ORDER_STATUS_COLORS.slate).chart,
+    }))
 
   const kpis = [
     { key: 'todaySales', label: "Today's sales", icon: Wallet, value: formatCurrency(snapshot.metrics.todaySales, data?.settings.currency), tone: 'chart-1' },
@@ -262,7 +260,7 @@ export function DashboardScreen() {
               <div className="max-h-72 overflow-auto rounded-xl border border-border/70">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-muted"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Product</th><th className="p-3 text-left">Customer</th><th className="p-3 text-right">Qty</th><th className="p-3 text-right">Amount</th></tr></thead>
-                  <tbody>{productSales.map((row) => <tr key={row.key} className="border-t border-border/70"><td className="p-3">{new Date(row.date).toLocaleDateString('en-BD')}</td><td className="p-3 font-medium">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.billNumber}</span></td><td className="p-3">{row.customerName}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right">{formatCurrency(row.amount, data?.settings.currency)}</td></tr>)}</tbody>
+                  <tbody>{productSales.map((row) => <tr key={row.key} className="border-t border-border/70"><td className="p-3">{formatDate(row.date)}</td><td className="p-3 font-medium">{row.productName}<span className="block text-xs font-normal text-muted-foreground">{row.billNumber}</span></td><td className="p-3">{row.customerName}</td><td className="p-3 text-right">{row.quantity}</td><td className="p-3 text-right">{formatCurrency(row.amount, data?.settings.currency)}</td></tr>)}</tbody>
                 </table>
                 {!productSales.length ? <p className="p-6 text-center text-sm text-muted-foreground">No matching sales found.</p> : null}
               </div>

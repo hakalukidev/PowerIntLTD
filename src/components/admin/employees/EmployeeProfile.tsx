@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -685,7 +686,7 @@ export function EmployeeProfile({ employee, selfView = false }: { employee: Empl
           <form className="space-y-4" onSubmit={handleAdvance}>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Date" required>
-                <Input type="date" value={advanceForm.date} onChange={(event) => setAdvanceForm((current) => ({ ...current, date: event.target.value }))} required />
+                <DateInput value={advanceForm.date} onChange={(value) => setAdvanceForm((current) => ({ ...current, date: value }))} required />
               </FormField>
               <FormField label="Amount (BDT)" required>
                 <Input type="number" min="1" value={advanceForm.amount} onChange={(event) => setAdvanceForm((current) => ({ ...current, amount: event.target.value }))} required />

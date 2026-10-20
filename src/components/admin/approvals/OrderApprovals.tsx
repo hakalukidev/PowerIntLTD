@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
@@ -39,16 +40,10 @@ function orderMessage(request: OrderRequestRecord, companyName: string) {
   ].join('\n')
 }
 
-export function OrderApprovals({ isAdmin }: { isAdmin: boolean }) {
-  const { data, reviewOrderRequest } = useERP()
-  const [feedback, setFeedback] = useState<Feedback>(null)
+/** Approve or reject an order request, reporting the result through `setFeedback`. */
+export function useOrderReview(setFeedback: (feedback: Feedback) => void) {
+  const { reviewOrderRequest } = useERP()
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [editing, setEditing] = useState<OrderRequestRecord | null>(null)
-
-  const requests = useMemo(() => sortByCreatedAtDesc(toArray(data?.orderRequests)), [data?.orderRequests])
-  const pending = requests.filter((request) => request.status === 'pending')
-  const today = todayInput()
-  const reviewedToday = requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
 
   async function review(request: OrderRequestRecord, decision: 'approve' | 'reject') {
     setBusyId(request.id)
@@ -71,6 +66,20 @@ export function OrderApprovals({ isAdmin }: { isAdmin: boolean }) {
       setBusyId(null)
     }
   }
+
+  return { busyId, review }
+}
+
+export function OrderApprovals({ isAdmin }: { isAdmin: boolean }) {
+  const { data } = useERP()
+  const [feedback, setFeedback] = useState<Feedback>(null)
+  const { busyId, review } = useOrderReview(setFeedback)
+  const [editing, setEditing] = useState<OrderRequestRecord | null>(null)
+
+  const requests = useMemo(() => sortByCreatedAtDesc(toArray(data?.orderRequests)), [data?.orderRequests])
+  const pending = requests.filter((request) => request.status === 'pending')
+  const today = todayInput()
+  const reviewedToday = requests.filter((request) => request.status !== 'pending' && localDay(request.reviewedAt) === today)
 
   return (
     <div className="space-y-6">
@@ -125,18 +134,20 @@ export function OrderApprovals({ isAdmin }: { isAdmin: boolean }) {
   )
 }
 
-function OrderRequestCard({
+export function OrderRequestCard({
   request,
   isAdmin,
   busy,
   onReview,
   onEdit,
+  badge,
 }: {
   request: OrderRequestRecord
   isAdmin: boolean
   busy: boolean
   onReview: (decision: 'approve' | 'reject') => void
   onEdit: () => void
+  badge?: React.ReactNode
 }) {
   const { data, currentUser } = useERP()
   const { zones } = useZoneAccess()
@@ -171,6 +182,7 @@ function OrderRequestCard({
       <CardHeader className="flex flex-col gap-2 space-y-0 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+            {badge}
             {request.customerName}
             {request.overCreditLimit ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
@@ -277,7 +289,7 @@ function OrderRequestCard({
 
 type EditLine = { key: string; productId: string; quantity: string; unitPrice: string }
 
-function EditOrderDialog({ request, onClose, onSaved }: { request: OrderRequestRecord; onClose: () => void; onSaved: (text: string) => void }) {
+export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderRequestRecord; onClose: () => void; onSaved: (text: string) => void }) {
   const { data, editOrderRequest } = useERP()
   const [lines, setLines] = useState<EditLine[]>(() =>
     request.items.map((item) => ({ key: item.productId, productId: item.productId, quantity: String(item.quantity), unitPrice: String(item.unitPrice) }))
@@ -373,7 +385,7 @@ function EditOrderDialog({ request, onClose, onSaved }: { request: OrderRequestR
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium">Delivery date</span>
-              <Input type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} />
+              <DateInput value={deliveryDate} onChange={(value) => setDeliveryDate(value)} />
             </label>
             <label className="space-y-1 text-sm">
               <span className="font-medium">Courier</span>

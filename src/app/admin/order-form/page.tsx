@@ -1,9 +1,10 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { AlertTriangle, CreditCard, Plus, Settings2, Tags, Trash2 } from 'lucide-react'
+import { AlertTriangle, CreditCard, Plus, Printer, Settings2, Tags, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
+import { buildSalesDocumentHtml, DUE_REFERENCE_OPTIONS, printSalesDocument } from '@/components/admin/sales/salesDocument'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -15,9 +16,9 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dealerPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
-import type { CustomerRecord, ProductRecord } from '@/lib/erp/types'
+import type { CustomerRecord, OrderRecord, ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, partyCode, shortRecordId, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatCurrency, formatDealerBalance, partyCode, receivableOf, shortRecordId, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneId, customerZoneName, UNASSIGNED_ZONE_ID } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -38,6 +39,13 @@ function todayInput() {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
 }
 
+/** The order date plus 15 days, the default payment due date. */
+function defaultPaymentDueDate(orderDate: string) {
+  const date = new Date(`${orderDate || todayInput()}T00:00:00`)
+  date.setDate(date.getDate() + 15)
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
+
 function dealerIdNo(customer: CustomerRecord) {
   return partyCode(customer)
 }
@@ -52,7 +60,14 @@ export default function OrderFormPage() {
   const [orderDate, setOrderDate] = useState(todayInput)
   const [deliveryDate, setDeliveryDate] = useState(todayInput)
   const [courierName, setCourierName] = useState('')
+  // Payment section; unticked means nothing is paid now and the whole order goes to due.
+  const [paymentOn, setPaymentOn] = useState(false)
   const [paid, setPaid] = useState('0')
+  const [discount, setDiscount] = useState('0')
+  // Empty until the user picks a date, so the default keeps following the order date.
+  const [paymentDueDate, setPaymentDueDate] = useState('')
+  const [dueReference, setDueReference] = useState<OrderRecord['dueReference']>('owner')
+  const [billNumber, setBillNumber] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
   const [limitDraft, setLimitDraft] = useState<string | null>(null)
@@ -130,13 +145,20 @@ export default function OrderFormPage() {
     return { ...line, product, quantity, unitPrice, priceSource: priced?.source, lineTotal: unitPrice * quantity }
   })
   const total = pricedLines.reduce((sum, line) => sum + line.lineTotal, 0)
-  const paidAmount = Math.min(Math.max(Number(paid) || 0, 0), total)
-  const orderDue = total - paidAmount
+  const discountInput = paymentOn ? Math.max(Number(discount) || 0, 0) : 0
+  const paidInput = paymentOn ? Math.max(Number(paid) || 0, 0) : 0
+  const discountAmount = Math.min(discountInput, total)
+  const payable = total - discountAmount
+  const paidAmount = Math.min(paidInput, payable)
+  const orderDue = payable - paidAmount
+  const effectivePaymentDueDate = paymentDueDate || defaultPaymentDueDate(orderDate)
 
   const creditLimit = customer?.creditLimit ?? 0
+  // The dealer's balance (negative is an advance); the credit limit only counts what they owe.
   const currentDue = customer?.due ?? 0
-  const available = creditLimit > 0 ? creditLimit - currentDue : null
-  const isOverLimit = creditLimit > 0 && currentDue + orderDue > creditLimit
+  const owed = receivableOf(currentDue)
+  const available = creditLimit > 0 ? creditLimit - owed : null
+  const isOverLimit = creditLimit > 0 && owed + orderDue > creditLimit
   const submitBlocked = isOverLimit && blockOverLimit
 
   function updateLine(key: string, patch: Partial<OrderLine>) {
@@ -156,7 +178,12 @@ export default function OrderFormPage() {
     setOrderDate(todayInput())
     setDeliveryDate(todayInput())
     setCourierName('')
+    setPaymentOn(false)
     setPaid('0')
+    setDiscount('0')
+    setPaymentDueDate('')
+    setDueReference('owner')
+    setBillNumber('')
     setLimitDraft(null)
   }
 
@@ -171,6 +198,8 @@ export default function OrderFormPage() {
     if (items.some((line) => line.quantity <= 0)) return setFeedback({ tone: 'error', text: 'Every quantity must be at least 1.' })
     if (!deliveryDate) return setFeedback({ tone: 'error', text: 'Set the delivery date.' })
     if (!courierName) return setFeedback({ tone: 'error', text: 'Choose a courier.' })
+    if (discountInput > total) return setFeedback({ tone: 'error', text: 'The discount cannot be more than the total.' })
+    if (paidInput > payable) return setFeedback({ tone: 'error', text: 'Paid now cannot be more than the payable amount.' })
     if (submitBlocked) return setFeedback({ tone: 'error', text: 'This order is over the dealer’s credit limit. Over-limit orders are blocked.' })
 
     setIsSaving(true)
@@ -183,6 +212,14 @@ export default function OrderFormPage() {
         orderDate: new Date(orderDate).toISOString(),
         deliveryDate: new Date(deliveryDate).toISOString(),
         courierName,
+        ...(paymentOn
+          ? {
+              discount: discountAmount,
+              paymentDueDate: new Date(effectivePaymentDueDate).toISOString(),
+              dueReference,
+              billNumber: billNumber.trim(),
+            }
+          : {}),
       })
       setFeedback({
         tone: 'success',
@@ -196,6 +233,44 @@ export default function OrderFormPage() {
     } finally {
       setIsSaving(false)
     }
+  }
+
+  /** Prints a quotation from what is on the form; nothing is saved. */
+  function printQuotation() {
+    setFeedback(null)
+    const items = pricedLines.filter((line) => line.product)
+    if (!customer || !items.length || items.some((line) => line.quantity <= 0)) {
+      return setFeedback({ tone: 'error', text: 'Select a dealer and at least one product with a quantity before printing a quotation.' })
+    }
+    const stamp = Date.now()
+    const error = printSalesDocument(
+      buildSalesDocumentHtml(
+        'Quotation',
+        {
+          id: `QT-${stamp}`,
+          billNumber: `QT-${stamp.toString().slice(-8)}`,
+          customerId: customer.id,
+          customerName: customer.name,
+          salesPersonName: (employeeId && data?.employees[employeeId]?.name) || currentUser?.name || 'Sales desk',
+          subtotal: total,
+          discount: discountAmount,
+          total: payable,
+          paid: paidAmount,
+          due: orderDue,
+          deliveryDate: deliveryDate || orderDate,
+          createdAt: new Date(orderDate || todayInput()).toISOString(),
+          items: items.map((line) => ({
+            productId: line.productId,
+            productName: line.product!.name,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            purchasePrice: line.product!.purchasePrice,
+          })),
+        },
+        { customer, settings: data?.settings, zones }
+      )
+    )
+    if (error) setFeedback({ tone: 'error', text: error })
   }
 
   async function saveCreditLimit() {
@@ -352,13 +427,81 @@ export default function OrderFormPage() {
                   createNewLabel="Use"
                 />
               </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium">
-                  Paid now <span className="font-normal text-muted-foreground">(optional)</span>
-                </p>
-                <Input type="number" min={0} value={paid} onChange={(event) => setPaid(event.target.value)} />
-              </div>
             </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <label htmlFor="order-payment" className="flex cursor-pointer items-start gap-3">
+                <input
+                  id="order-payment"
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 shrink-0 rounded accent-primary"
+                  checked={paymentOn}
+                  onChange={(event) => setPaymentOn(event.target.checked)}
+                />
+                <span className="space-y-1.5">
+                  <CardTitle>Payment</CardTitle>
+                  <CardDescription>
+                    {paymentOn ? 'Record what is paid now, any discount, and who collects the due.' : 'Unticked: nothing is paid now and the full amount goes to due.'}
+                  </CardDescription>
+                </span>
+              </label>
+            </CardHeader>
+            {paymentOn ? (
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Paid now ({data?.settings.currency ?? 'BDT'})</p>
+                  <Input type="number" min={0} value={paid} onChange={(event) => setPaid(event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Discount ({data?.settings.currency ?? 'BDT'})</p>
+                  <Input type="number" min={0} value={discount} onChange={(event) => setDiscount(event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Payment due date</p>
+                  <DateInput value={effectivePaymentDueDate} min={orderDate} onChange={(value) => setPaymentDueDate(value)} />
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Who collects the due</p>
+                  <Select value={dueReference || 'owner'} onValueChange={(value) => setDueReference(value as OrderRecord['dueReference'])}>
+                    <SelectTrigger aria-label="Who collects the due">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DUE_REFERENCE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <p className="text-sm font-medium">
+                    Bill number <span className="font-normal text-muted-foreground">(optional — auto-generated if left blank)</span>
+                  </p>
+                  <Input value={billNumber} onChange={(event) => setBillNumber(event.target.value)} placeholder="Auto-generated if blank" />
+                </div>
+                <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
+                  {[
+                    { label: 'Total', value: total },
+                    { label: 'Payable', value: payable },
+                    { label: 'Due', value: orderDue },
+                  ].map((item) => (
+                    <div key={item.label} className="space-y-2">
+                      <p className="text-sm font-medium">{item.label}</p>
+                      <div
+                        data-testid={`payment-${item.label.toLowerCase()}`}
+                        className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular-nums"
+                      >
+                        {formatCurrency(item.value)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            ) : null}
           </Card>
 
           {feedback ? (
@@ -374,7 +517,11 @@ export default function OrderFormPage() {
             </p>
           ) : null}
 
-          <div className="flex justify-end">
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" size="lg" className="w-full gap-2 sm:w-auto" onClick={printQuotation}>
+              <Printer className="h-4 w-4" />
+              Print quotation
+            </Button>
             <Button type="submit" size="lg" disabled={!canEdit || isSaving || submitBlocked} className="w-full sm:w-auto">
               {isSaving ? 'Submitting...' : 'Submit for approval'}
             </Button>
@@ -405,7 +552,7 @@ export default function OrderFormPage() {
                     </div>
                     <div className="flex justify-between gap-2">
                       <dt className="text-muted-foreground">Current due</dt>
-                      <dd className="tabular-nums">{formatCurrency(currentDue)}</dd>
+                      <dd className="tabular-nums">{formatDealerBalance(currentDue)}</dd>
                     </div>
                     <div className="flex justify-between gap-2 border-t border-border pt-1.5 font-semibold">
                       <dt>Available credit</dt>
@@ -418,7 +565,7 @@ export default function OrderFormPage() {
                     <div className="flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                       <span>
-                        This order puts the dealer {formatCurrency(currentDue + orderDue - creditLimit)} over their limit.{' '}
+                        This order puts the dealer {formatCurrency(owed + orderDue - creditLimit)} over their limit.{' '}
                         {blockOverLimit ? 'It cannot be submitted.' : 'It will be submitted marked over-limit.'}
                       </span>
                     </div>
@@ -457,6 +604,18 @@ export default function OrderFormPage() {
                 <span className="text-muted-foreground">Total</span>
                 <span className="tabular-nums">{formatCurrency(total)}</span>
               </div>
+              {discountAmount > 0 ? (
+                <>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Discount</span>
+                    <span className="tabular-nums">{formatCurrency(discountAmount)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Payable</span>
+                    <span className="tabular-nums">{formatCurrency(payable)}</span>
+                  </div>
+                </>
+              ) : null}
               <div className="flex justify-between gap-2">
                 <span className="text-muted-foreground">Paid now</span>
                 <span className="tabular-nums">{formatCurrency(paidAmount)}</span>

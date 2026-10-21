@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepotInput, DepotRecord, ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, partyCode, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatCurrency, formatDealerBalance, partyCode, receivableOf, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -76,7 +76,7 @@ export default function DepotPage() {
         : [],
     [customers, data?.depots, depot]
   )
-  const totalDue = dealers.reduce((sum, dealer) => sum + dealer.due, 0)
+  const totalDue = dealers.reduce((sum, dealer) => sum + receivableOf(dealer.due), 0)
   const pricedCount = Object.keys(depot?.prices ?? {}).length
 
   async function run(action: () => Promise<void>, success: string) {
@@ -271,7 +271,7 @@ export default function DepotPage() {
                             <TableCell className="tabular-nums">{partyCode(dealer)}</TableCell>
                             <TableCell>{dealer.phone}</TableCell>
                             <TableCell>{customerZoneName(dealer, zones)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{formatCurrency(dealer.due, data?.settings.currency)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{formatDealerBalance(dealer.due, data?.settings.currency)}</TableCell>
                             {canEdit ? (
                               <TableCell className="text-right">
                                 <Button

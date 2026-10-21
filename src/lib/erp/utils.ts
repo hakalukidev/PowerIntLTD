@@ -45,6 +45,19 @@ export function formatTableAmount(value: number, currency?: string) {
   return !currency || currency === 'BDT' ? formatAmount(value) : formatCurrency(value, currency)
 }
 
+/**
+ * A dealer's balance for display: what they owe, or "Advance …" when they have paid ahead
+ * (a negative balance). `format` is the amount style of the screen it appears on.
+ */
+export function formatDealerBalance(balance: number, currency?: string, format: (value: number, currency?: string) => string = formatCurrency) {
+  return balance < 0 ? `Advance ${format(-balance, currency)}` : format(balance, currency)
+}
+
+/** What a dealer owes, leaving out an advance; for totals and the credit limit. */
+export function receivableOf(balance: number) {
+  return Math.max(balance, 0)
+}
+
 const pad2 = (value: number) => String(value).padStart(2, '0')
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
 

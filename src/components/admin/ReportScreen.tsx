@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatReportValue, reportExportValue, REPORT_SOURCES } from '@/lib/erp/reportSources'
-import { buildUserReport, exportPdf, exportXlsx, formatDate, getReadableOrderState, toArray } from '@/lib/erp/utils'
+import { buildUserReport, exportPdf, exportXlsx, formatDate, formatDealerBalance, getReadableOrderState, toArray } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -248,7 +248,7 @@ export function ReportScreen() {
           String(index + 1),
           customer.name,
           customer.phone,
-          String(customer.due),
+          formatDealerBalance(customer.due),
           customer.location || 'N/A',
         ]),
         ...products.map((product, index) => [

@@ -81,7 +81,7 @@ export async function POST(request: Request) {
 
     const company = await companyInfo(db)
     const { totals } = await loadPartyLedger(db, partyKind, partyId)
-    const balance = balanceText(totals.balance, company.currency)
+    const balance = balanceText(totals.balance, company.currency, partyKind)
     const today = formatDate(new Date().toISOString())
 
     const content = {

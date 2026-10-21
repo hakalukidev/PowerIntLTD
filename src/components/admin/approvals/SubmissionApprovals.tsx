@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositStatus, EditableSubmissionKind, ERPData, SubmissionEdit, SubmissionPatch } from '@/lib/erp/types'
-import { approvalStage, canActAtStage, formatCurrency, formatDate, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
+import { approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
 
 import { ApprovalStageNote, EditHistory, EmptyState, FeedbackBanner, NotifyButtons, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
 
@@ -64,7 +64,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
       group: '',
       details: [
         ['Method', deposit.method],
-        ['Current due', formatCurrency(data.customers[deposit.customerId]?.due ?? 0)],
+        ['Current due', formatDealerBalance(data.customers[deposit.customerId]?.due ?? 0)],
         ['Note', deposit.note],
       ],
       submittedByName: deposit.submittedByName,

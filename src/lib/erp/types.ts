@@ -150,6 +150,10 @@ export type CustomerRecord = {
   phone: string
   email: string
   location: string
+  /**
+   * The dealer's balance, always worked out from their ledger (computeCustomerBalance) and saved
+   * with every change to it. Negative is an advance.
+   */
   due: number
   leadSource?: 'facebook' | 'local-marketing'
   reminderCustomer?: boolean
@@ -340,7 +344,14 @@ export type OrderRecord = {
   subtotal?: number
   discount?: number
   paid: number
+  /** This order's due only. */
   due: number
+  /**
+   * The dealer's due just before this order and the due including it, frozen when the order is
+   * approved; later payments and orders never change them. Missing on orders from before this was added.
+   */
+  previousDue?: number
+  totalDueAfter?: number
   deliveryDate: string
   paymentDueDate: string
   dueReference: 'owner' | 'courier' | 'bank' | 'bkash' | 'nagad' | 'dbbl' | ''
@@ -568,6 +579,8 @@ export type CreditLedgerEntryRecord = {
   unitPrice: number
   debit: number
   credit: number
+  /** `opening`: the dealer's opening due, kept in step with the customer form. */
+  kind?: 'opening'
   createdAt: string
 }
 
@@ -622,12 +635,19 @@ export type OrderRequestRecord = {
   employeeId: string
   employeeName: string
   items: OrderItem[]
+  /** Sum of the lines; `total` is what the dealer pays after the discount. */
+  subtotal?: number
+  discount?: number
   total: number
   paid: number
   due: number
   orderDate: string
   deliveryDate: string
   courierName: string
+  /** Set from the Order Form's Payment section; carried onto the order on approval. */
+  paymentDueDate?: string
+  dueReference?: OrderRecord['dueReference']
+  billNumber?: string
   overCreditLimit: boolean
   status: DepositStatus
   submittedById: string
@@ -739,6 +759,8 @@ export type DepositRecord = {
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
+  /** The credit-sheet entry its approval created. */
+  entryId?: string
   edits?: SubmissionEdit[]
   createdAt: string
   updatedAt: string
@@ -1088,7 +1110,8 @@ export type CustomerInput = {
   phone: string
   email?: string
   location?: string
-  due?: number
+  /** What the dealer owed before their orders were recorded here; kept as the "Opening due" ledger line. */
+  openingDue?: number
   leadSource?: CustomerRecord['leadSource']
   reminderCustomer?: boolean
   nid?: string

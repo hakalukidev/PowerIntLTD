@@ -41,11 +41,13 @@ import {
   formatCurrency,
   formatDate,
   formatDateTime,
+  formatDealerBalance,
   formatMonthLabel,
   getProbationStatus,
   getRecentMonthKeys,
   getTargetAchievement,
   monthlyAttendance,
+  receivableOf,
   TARGET_ACHIEVEMENT_HOLD_THRESHOLD,
   toArray,
 } from '@/lib/erp/utils'
@@ -159,7 +161,7 @@ export function EmployeeProfile({ employee, selfView = false }: { employee: Empl
       [customer.name, customer.company, customer.phone, customer.thana, customer.district].join(' ').toLowerCase().includes(query)
     )
   }, [clientQuery, clients])
-  const clientDue = clients.reduce((sum, customer) => sum + (customer.due ?? 0), 0)
+  const clientDue = clients.reduce((sum, customer) => sum + receivableOf(customer.due ?? 0), 0)
 
   async function handleLetter() {
     setFeedback(null)
@@ -662,7 +664,7 @@ export function EmployeeProfile({ employee, selfView = false }: { employee: Empl
                       <TableCell className="min-w-32">{customer.phone || '—'}</TableCell>
                       <TableCell className="min-w-32">{[subZoneLabel(customer), customer.district].filter(Boolean).join(', ')}</TableCell>
                       <TableCell className="text-right">{customer.creditLimit ? formatCurrency(customer.creditLimit, currency) : '—'}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatCurrency(customer.due ?? 0, currency)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatDealerBalance(customer.due ?? 0, currency)}</TableCell>
                     </TableRow>
                   ))}
                   {filteredClients.length === 0 ? (

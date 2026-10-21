@@ -6,7 +6,7 @@ import { ArrowRight, Bell, FileSpreadsheet, Package } from 'lucide-react'
 import { usePortal } from '@/components/portal/PortalShell'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { balanceSide } from '@/lib/erp/ledger'
+import { balanceText } from '@/lib/firebase/portalMessages'
 import { PORTAL_MESSAGE_KIND_LABELS } from '@/lib/erp/portal'
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -24,7 +24,7 @@ export default function PortalHomePage() {
   const stats = [
     {
       label: 'Current balance',
-      value: `${money(Math.abs(ledger.totals.balance))} ${balanceSide(ledger.totals.balance)}`,
+      value: balanceText(ledger.totals.balance, company.currency, account.partyKind),
       hint: isDealer ? 'What your sheet shows today' : 'Balance on your supplier sheet',
       strong: true,
     },

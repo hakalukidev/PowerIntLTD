@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { balanceSide } from '@/lib/erp/ledger'
+import { balanceSide, customerBalanceSide } from '@/lib/erp/ledger'
 import { formatAmount, formatDate } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +28,7 @@ export default function PortalSheetPage() {
 
   const { company, party, ledger, replacements } = overview
   const money = (amount: number) => formatAmount(amount)
+  const side = overview.account.partyKind === 'customer' ? customerBalanceSide : balanceSide
   const fileName = `statement-${ledgerFileSlug(party.name)}`
 
   function documentHtml(autoPrint: boolean) {
@@ -157,7 +158,7 @@ export default function PortalSheetPage() {
                     <TableCell className="text-right">{row.unitPrice ? money(row.unitPrice) : ''}</TableCell>
                     <TableCell className="text-right">{row.debit ? money(row.debit) : ''}</TableCell>
                     <TableCell className="text-right">{row.credit ? money(row.credit) : ''}</TableCell>
-                    <TableCell>{balanceSide(row.balance)}</TableCell>
+                    <TableCell>{side(row.balance)}</TableCell>
                     <TableCell className="text-right font-medium">{money(Math.abs(row.balance))}</TableCell>
                   </TableRow>
                 ))}
@@ -177,7 +178,7 @@ export default function PortalSheetPage() {
                     <TableCell />
                     <TableCell className="text-right">{money(ledger.totals.debit)}</TableCell>
                     <TableCell className="text-right">{money(ledger.totals.credit)}</TableCell>
-                    <TableCell>{balanceSide(ledger.totals.balance)}</TableCell>
+                    <TableCell>{side(ledger.totals.balance)}</TableCell>
                     <TableCell className="text-right">{money(Math.abs(ledger.totals.balance))}</TableCell>
                   </TableRow>
                 </TableFooter>

@@ -32,9 +32,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
-import { buildCustomerLedger, ledgerTotalsOf, withRunningBalance } from '@/lib/erp/ledger'
+import { buildCustomerLedger, customerBalanceSide, ledgerTotalsOf, withRunningBalance } from '@/lib/erp/ledger'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { escapeHtml, formatAmount, formatDate, isZoneInCharge, partyCode, toArray } from '@/lib/erp/utils'
+import { escapeHtml, formatAmount, formatDate, formatDealerBalance, isZoneInCharge, partyCode, receivableOf, toArray } from '@/lib/erp/utils'
 import {
   customerZoneId,
   customerZoneName,
@@ -106,7 +106,8 @@ function totalsOf(rows: SheetRow[]): Totals {
     quantity: rows.reduce((sum, row) => sum + row.quantity, 0),
     purchase: rows.reduce((sum, row) => sum + row.purchaseTotal, 0),
     paid: rows.reduce((sum, row) => sum + row.paid, 0),
-    due: rows.reduce((sum, row) => sum + row.customer.due, 0),
+    // What dealers owe; an advance does not cancel out another dealer's due.
+    due: rows.reduce((sum, row) => sum + receivableOf(row.customer.due), 0),
   }
 }
 
@@ -381,7 +382,7 @@ export default function CreditSheetPage() {
             qty(row.quantity),
             money(row.purchaseTotal),
             money(row.paid),
-            money(row.customer.due),
+            formatDealerBalance(row.customer.due, undefined, money),
           ],
         })),
         {
@@ -446,7 +447,7 @@ export default function CreditSheetPage() {
                       <td class="numeric">${qty(row.quantity)}</td>
                       <td class="numeric">${money(row.purchaseTotal)}</td>
                       <td class="numeric">${money(row.paid)}</td>
-                      <td class="numeric">${money(row.customer.due)}</td>
+                      <td class="numeric">${formatDealerBalance(row.customer.due, undefined, money)}</td>
                     </tr>
                   `
                 )
@@ -789,7 +790,7 @@ export default function CreditSheetPage() {
                         <TableCell className="text-right">{row.unitPrice ? formatAmount(row.unitPrice) : ''}</TableCell>
                         <TableCell className="text-right">{row.debit ? formatAmount(row.debit) : ''}</TableCell>
                         <TableCell className="text-right">{row.credit ? formatAmount(row.credit) : ''}</TableCell>
-                        <TableCell>{row.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
+                        <TableCell>{customerBalanceSide(row.balance)}</TableCell>
                         <TableCell className="text-right font-medium">{formatAmount(Math.abs(row.balance))}</TableCell>
                         {canEdit ? (
                           <TableCell className="text-right">
@@ -825,7 +826,7 @@ export default function CreditSheetPage() {
                         <TableCell />
                         <TableCell className="text-right">{formatAmount(ledgerTotals.debit)}</TableCell>
                         <TableCell className="text-right">{formatAmount(ledgerTotals.credit)}</TableCell>
-                        <TableCell>{ledgerTotals.balance >= 0 ? 'Cr' : 'Dr'}</TableCell>
+                        <TableCell>{customerBalanceSide(ledgerTotals.balance)}</TableCell>
                         <TableCell className="text-right">{formatAmount(Math.abs(ledgerTotals.balance))}</TableCell>
                         {canEdit ? <TableCell /> : null}
                       </TableRow>
@@ -1198,7 +1199,7 @@ export default function CreditSheetPage() {
                                 <TableCell className="text-right">{formatAmount(row.purchaseTotal)}</TableCell>
                                 <TableCell className="text-right">{formatAmount(row.paid)}</TableCell>
                                 <TableCell className="text-right font-medium text-amber-700 dark:text-amber-400">
-                                  {formatAmount(row.customer.due)}
+                                  {formatDealerBalance(row.customer.due, undefined, formatAmount)}
                                 </TableCell>
                                 <TableCell className="text-right">
                                   <Button

@@ -57,6 +57,8 @@ test.describe('Order Form number fields', () => {
   test.beforeEach(async ({ page }) => {
     await loginAsAdmin(page)
     await navigate(page, '/admin/order-form')
+    // "Paid now" sits in the Payment section, shown once its box is ticked.
+    await page.getByLabel('Payment').check()
     await expect(paidNow(page)).toHaveValue('0')
   })
 

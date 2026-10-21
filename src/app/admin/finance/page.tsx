@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, formatTableAmount, getExpenseCategories, isApprovedExpense, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatTableAmount, getExpenseCategories, isApprovedExpense, receivableOf, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function dateInputValue(date = new Date()) {
@@ -492,7 +492,7 @@ export default function FinancePage() {
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Total customer ledger due</p>
-                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(customers.reduce((sum, customer) => sum + customer.due, 0), currency)}</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatCurrency(customers.reduce((sum, customer) => sum + receivableOf(customer.due), 0), currency)}</p>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
                   <p className="text-sm text-muted-foreground">Total supplier landed cost</p>

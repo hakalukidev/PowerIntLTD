@@ -107,7 +107,7 @@ export async function POST(request: Request) {
       phone: party.phone,
       kind: 'transaction',
       title: `${company.name}: account update`,
-      body: transactionAlertText({ companyName: company.name, partyName: party.name, date: alert.date, lines: alert.lines, balance: totals.balance, currency: company.currency }),
+      body: transactionAlertText({ companyName: company.name, partyName: party.name, date: alert.date, lines: alert.lines, balance: totals.balance, currency: company.currency, partyKind: alert.partyKind }),
       createdByName: caller.name,
     })
 

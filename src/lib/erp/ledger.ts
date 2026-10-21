@@ -54,6 +54,19 @@ export function buildCustomerLedger(customerId: string, orders: OrderRecord[], e
         documentUrl: index === 0 && order.delivery?.status === 'submitted' ? order.delivery.documentUrl : undefined,
       })
     })
+    if ((order.discount ?? 0) > 0) {
+      rows.push({
+        id: `${order.id}-discount`,
+        billNumber: order.billNumber ?? '',
+        date: order.createdAt,
+        particulars: `Discount (${order.billNumber})`,
+        qty: null,
+        unitPrice: null,
+        debit: order.discount ?? 0,
+        credit: 0,
+        removable: false,
+      })
+    }
     if (order.paid > 0) {
       rows.push({
         id: `${order.id}-payment`,
@@ -79,11 +92,43 @@ export function buildCustomerLedger(customerId: string, orders: OrderRecord[], e
       unitPrice: entry.unitPrice || null,
       debit: entry.debit,
       credit: entry.credit,
-      removable: true,
+      // The opening due follows the customer form, so it is changed there, not deleted here.
+      removable: entry.kind !== 'opening',
     })
   }
 
-  return rows.sort((left, right) => left.date.localeCompare(right.date))
+  // The opening due comes before everything else on the sheet, even a line dated the same day.
+  const openingId = openingDueEntryId(customerId)
+  return rows.sort((left, right) => Number(right.id === openingId) - Number(left.id === openingId) || left.date.localeCompare(right.date))
+}
+
+/** The ledger line holding a dealer's opening due; one per dealer, so its id is fixed. */
+export function openingDueEntryId(customerId: string) {
+  return `credit_entry_opening_${customerId}`
+}
+
+/**
+ * A dealer's due: the closing balance of their sheet (orders, discounts, payments, deposits,
+ * hand-written entries and the opening due). The only place a dealer's due is worked out;
+ * `customer.due` is this value, saved alongside every change to the sheet. Negative is an advance.
+ */
+export function computeCustomerBalance(customerId: string, orders: OrderRecord[], entries: CreditLedgerEntryRecord[]) {
+  return ledgerTotalsOf(withRunningBalance(buildCustomerLedger(customerId, orders, entries))).balance
+}
+
+/**
+ * The dealer's balance going into an order: every line dated on or before the order's day,
+ * leaving out the order itself.
+ */
+export function customerBalanceBefore(customerId: string, orderDate: string, orderId: string, orders: OrderRecord[], entries: CreditLedgerEntryRecord[]) {
+  const day = orderDate.slice(0, 10)
+  return buildCustomerLedger(
+    customerId,
+    orders.filter((order) => order.id !== orderId),
+    entries
+  )
+    .filter((row) => row.date.slice(0, 10) <= day)
+    .reduce((balance, row) => balance + row.credit - row.debit, 0)
 }
 
 /**
@@ -163,6 +208,11 @@ export function ledgerTotalsOf(rows: LedgerRowWithBalance[]): LedgerTotals {
 /** The sheet's Dr/Cr mark for a running balance. */
 export function balanceSide(balance: number) {
   return balance >= 0 ? 'Cr' : 'Dr'
+}
+
+/** A dealer sheet's mark for a running balance: Cr while they owe, Advance once they have paid ahead. */
+export function customerBalanceSide(balance: number) {
+  return balance >= 0 ? 'Cr' : 'Advance'
 }
 
 /** One replacement (or the return of a replaced product) on a party's replacement history. */

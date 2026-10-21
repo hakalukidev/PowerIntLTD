@@ -13,8 +13,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { approvalStage, canActAtStage, formatCurrency, formatDate, partyCode, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, partyCode, receivableOf, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
+import { DUE_REFERENCE_OPTIONS } from '@/components/admin/sales/salesDocument'
 
 import {
   ApprovalStageNote,
@@ -171,10 +172,11 @@ export function OrderRequestCard({
     }
   }, [data?.orders, data?.deposits, request.customerId])
 
+  // The dealer's balance (negative is an advance); the credit limit only counts what they owe.
   const currentDue = customer?.due ?? 0
   const creditLimit = customer?.creditLimit ?? 0
   const dueAfter = currentDue + request.due
-  const availableAfter = creditLimit > 0 ? creditLimit - dueAfter : null
+  const availableAfter = creditLimit > 0 ? creditLimit - (receivableOf(currentDue) + request.due) : null
   const units = request.items.reduce((sum, item) => sum + item.quantity, 0)
 
   return (
@@ -256,9 +258,23 @@ export function OrderRequestCard({
             <SummaryRow label="Courier" value={request.courierName || '—'} />
             <SummaryRow label="Employee" value={request.employeeName ? `${shortRecordId(request.employeeId)} — ${request.employeeName}` : '—'} />
             <SummaryRow label="Units" value={units} />
-            <SummaryRow label="Total" value={formatCurrency(request.total)} />
+            {request.discount ? (
+              <>
+                <SummaryRow label="Subtotal" value={formatCurrency(request.subtotal ?? request.total + request.discount)} />
+                <SummaryRow label="Discount" value={formatCurrency(request.discount)} />
+              </>
+            ) : null}
+            <SummaryRow label={request.discount ? 'Payable' : 'Total'} value={formatCurrency(request.total)} />
             <SummaryRow label="Paid now" value={formatCurrency(request.paid)} />
             <SummaryRow label="Added to due" value={formatCurrency(request.due)} />
+            {request.due > 0 && request.paymentDueDate ? <SummaryRow label="Payment due date" value={formatDate(request.paymentDueDate)} /> : null}
+            {request.due > 0 && request.dueReference ? (
+              <SummaryRow
+                label="Who collects the due"
+                value={DUE_REFERENCE_OPTIONS.find((option) => option.value === request.dueReference)?.label ?? request.dueReference}
+              />
+            ) : null}
+            {request.billNumber ? <SummaryRow label="Bill number" value={request.billNumber} /> : null}
           </dl>
           <EditHistory edits={request.edits} />
         </div>
@@ -272,8 +288,8 @@ export function OrderRequestCard({
             <SummaryRow label="Total paid on orders" value={formatCurrency(history.paid)} />
             <SummaryRow label="Last order" value={history.lastOrderAt ? formatDate(history.lastOrderAt) : '—'} />
             <SummaryRow label="Deposits pending" value={formatCurrency(history.pendingDeposits)} />
-            <SummaryRow label="Current due" value={formatCurrency(currentDue)} strong />
-            <SummaryRow label="Due after this order" value={formatCurrency(dueAfter)} />
+            <SummaryRow label="Current due" value={formatDealerBalance(currentDue)} strong />
+            <SummaryRow label="Due after this order" value={formatDealerBalance(dueAfter)} />
             <SummaryRow label="Credit limit" value={creditLimit > 0 ? formatCurrency(creditLimit) : 'No limit'} />
             <SummaryRow
               label="Available after"
@@ -392,7 +408,9 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
               <Input value={courierName} onChange={(event) => setCourierName(event.target.value)} />
             </label>
           </div>
-          <p className="text-right text-sm font-semibold tabular-nums">Total {formatCurrency(total)}</p>
+          <p className="text-right text-sm font-semibold tabular-nums">
+            {request.discount ? `Payable ${formatCurrency(Math.max(total - request.discount, 0))} (after ${formatCurrency(request.discount)} discount)` : `Total ${formatCurrency(total)}`}
+          </p>
           {error ? <p className="text-sm text-rose-600">{error}</p> : null}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>

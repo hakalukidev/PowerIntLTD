@@ -1,9 +1,11 @@
 import { brandedDocument } from '@/components/admin/credit-sheet/printSheet'
-import { balanceSide, type LedgerRowWithBalance, type LedgerTotals, type ReplacementHistoryRow } from '@/lib/erp/ledger'
+import { balanceSide, customerBalanceSide, type LedgerRowWithBalance, type LedgerTotals, type ReplacementHistoryRow } from '@/lib/erp/ledger'
 import type { CustomerRecord, SupplierRecord } from '@/lib/erp/types'
 import { escapeHtml, formatAmount, formatDate, partyCode } from '@/lib/erp/utils'
 
 export type LedgerDocumentParty = {
+  /** A dealer's sheet marks a negative balance as an advance; a supplier's keeps Dr/Cr. */
+  kind?: 'customer' | 'supplier'
   /** The client's or supplier's system code. */
   code?: string
   name: string
@@ -27,6 +29,7 @@ export function customerDocumentParty(
   serial?: number
 ): LedgerDocumentParty {
   return {
+    kind: 'customer',
     code: partyCode(customer),
     name: customer.name,
     ownerName: customer.company,
@@ -78,6 +81,7 @@ type LedgerDocumentOptions = {
  */
 export function buildLedgerDocument({ party, rows, extraHtml = '', replacementHistory, autoPrint }: LedgerDocumentOptions) {
   const money = (amount: number) => escapeHtml(formatAmount(amount))
+  const side = party.kind === 'customer' ? customerBalanceSide : balanceSide
   const orNA = (value: string | undefined) => escapeHtml(value || 'N/A')
 
   const rowsHtml = rows
@@ -91,7 +95,7 @@ export function buildLedgerDocument({ party, rows, extraHtml = '', replacementHi
             <td class="numeric">${row.unitPrice ? money(row.unitPrice) : ''}</td>
             <td class="numeric">${row.debit ? money(row.debit) : ''}</td>
             <td class="numeric">${row.credit ? money(row.credit) : ''}</td>
-            <td>${balanceSide(row.balance)}</td>
+            <td>${side(row.balance)}</td>
             <td class="numeric">${money(Math.abs(row.balance))}</td>
           </tr>
         `

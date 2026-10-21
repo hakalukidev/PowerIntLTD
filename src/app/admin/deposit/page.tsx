@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositRecord, DepositStatus } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { APPROVAL_STAGE_LABELS, approvalStage, canActAtStage, formatCurrency, formatDate, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
+import { APPROVAL_STAGE_LABELS, approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -229,7 +229,7 @@ export default function DepositPage() {
                       </div>
                       <div className="flex justify-between gap-2 border-t border-border pt-1.5 font-semibold">
                         <dt>Due amount</dt>
-                        <dd className={cn('tabular-nums', customer.due > 0 && 'text-rose-600')}>{formatCurrency(customer.due)}</dd>
+                        <dd className={cn('tabular-nums', customer.due > 0 && 'text-rose-600')}>{formatDealerBalance(customer.due)}</dd>
                       </div>
                     </dl>
                   </>

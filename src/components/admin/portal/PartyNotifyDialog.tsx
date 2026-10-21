@@ -11,11 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { uploadImageToCloudinary } from '@/lib/cloudinary'
-import { balanceSide } from '@/lib/erp/ledger'
+import { balanceText } from '@/lib/firebase/portalMessages'
 import { PORTAL_DELIVERY_LABELS } from '@/lib/erp/portal'
 import { useERP } from '@/lib/erp/provider'
 import type { PortalMessageRecord, PortalNoticeInput, PortalPartyKind } from '@/lib/erp/types'
-import { formatCurrency } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type NoticeKind = PortalNoticeInput['kind']
@@ -113,7 +112,7 @@ export function PartyNotifyDialog({
           <DialogTitle>Notify {statement?.name ?? (partyKind === 'customer' ? 'dealer' : 'supplier')}</DialogTitle>
           <DialogDescription>
             Goes to their portal inbox and their WhatsApp{statement?.phone ? ` (${statement.phone})` : ''}.
-            {statement ? ` Balance today: ${formatCurrency(Math.abs(statement.totals.balance), currency)} ${balanceSide(statement.totals.balance)}.` : ''}
+            {statement ? ` Balance today: ${balanceText(statement.totals.balance, currency ?? 'BDT', partyKind)}.` : ''}
           </DialogDescription>
         </DialogHeader>
 

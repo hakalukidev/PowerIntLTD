@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
+import { openingDueEntryId } from '@/lib/erp/ledger'
 import { useERP } from '@/lib/erp/provider'
 import type { CustomerCommitment, CustomerInput, CustomerRecord, DocumentPhoto } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -32,11 +33,13 @@ import {
   escapeHtml,
   formatCurrency,
   formatDate,
+  formatDealerBalance,
   formatTableAmount,
   getReadableOrderState,
   isCommitmentApproved,
   isZoneInCharge,
   partyCode,
+  receivableOf,
   toArray,
 } from '@/lib/erp/utils'
 
@@ -50,7 +53,8 @@ type CustomerFormState = {
   phone: string
   email: string
   location: string
-  due: string
+  /** The "Opening due" ledger line. */
+  openingDue: string
   nid: string
   tradeLicenseNo: string
   nomineeName: string
@@ -117,7 +121,7 @@ const emptyCustomerForm: CustomerFormState = {
   phone: '',
   email: '',
   location: '',
-  due: '0',
+  openingDue: '0',
   nid: '',
   tradeLicenseNo: '',
   nomineeName: '',
@@ -142,14 +146,14 @@ const emptyCustomerForm: CustomerFormState = {
   signaturePublicId: '',
 }
 
-function formFromCustomer(customer: CustomerRecord): CustomerFormState {
+function formFromCustomer(customer: CustomerRecord, openingDue = 0): CustomerFormState {
   return {
     name: customer.name,
     company: customer.company,
     phone: customer.phone,
     email: customer.email,
     location: customer.location,
-    due: String(customer.due),
+    openingDue: String(openingDue),
     nid: customer.nid,
     tradeLicenseNo: customer.tradeLicenseNo,
     nomineeName: customer.nomineeName,
@@ -208,6 +212,7 @@ export default function CustomersPage() {
   const zoneInCharge = useMemo(() => isZoneInCharge(currentUser, toArray(data?.zones)), [currentUser, data?.zones])
   const canAddCommitment = canEdit || zoneInCharge
   const canDelete = hasPermission('customers.delete')
+  const openingDueOf = (customerId: string) => data?.creditLedgerEntries[openingDueEntryId(customerId)]?.credit ?? 0
   const currency = data?.settings.currency
   // Zone managers and zone-limited roles only see the dealers of their zones.
   const { zones, zoneOptions, visibleZoneIds, customers } = useZoneAccess()
@@ -334,7 +339,7 @@ export default function CustomersPage() {
     return {
       totalCustomers: customers.length,
       purchaseTotal: customerRows.reduce((sum, row) => sum + row.purchaseTotal, 0),
-      dueTotal: customers.reduce((sum, customer) => sum + customer.due, 0),
+      dueTotal: customers.reduce((sum, customer) => sum + receivableOf(customer.due), 0),
     }
   }, [customerRows, customers])
 
@@ -350,7 +355,7 @@ export default function CustomersPage() {
 
   function openEditDialog(customer: CustomerRecord) {
     setEditingCustomer(customer)
-    const form = formFromCustomer(customer)
+    const form = formFromCustomer(customer, openingDueOf(customer.id))
     // Show the zone the dealer is actually in, even when it came from their sub-zone rather than being picked.
     const resolvedZoneId = customerZoneId(customer, zones)
     setCustomerForm(!form.zoneId && resolvedZoneId !== UNASSIGNED_ZONE_ID ? { ...form, zoneId: resolvedZoneId } : form)
@@ -433,7 +438,7 @@ export default function CustomersPage() {
         phone: finalForm.phone,
         email: finalForm.email,
         location: finalForm.location,
-        due: Number(finalForm.due),
+        openingDue: Number(finalForm.openingDue) || 0,
         nid: finalForm.nid,
         tradeLicenseNo: finalForm.tradeLicenseNo,
         nomineeName: finalForm.nomineeName,
@@ -811,7 +816,6 @@ export default function CustomersPage() {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     const purchaseTotal = customerOrders.reduce((sum, order) => sum + order.total, 0)
     const paidTotal = customerOrders.reduce((sum, order) => sum + order.paid, 0)
-    const orderDue = customerOrders.reduce((sum, order) => sum + order.due, 0)
     const photo = customer.dealerPhotoUrl || customer.passportPhotoUrl
     const address = [customer.location, customer.thana, customer.district]
       .filter(Boolean)
@@ -881,7 +885,7 @@ export default function CustomersPage() {
             ['Orders', customerOrders.length.toLocaleString('en-BD')],
             ['Purchase', formatCurrency(purchaseTotal, currency)],
             ['Paid', formatCurrency(paidTotal, currency)],
-            ['Due', formatCurrency(customer.due || orderDue, currency)],
+            ['Due', formatDealerBalance(customer.due, currency)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border border-border/70 p-3">
               <p className="text-xs text-muted-foreground">{label}</p>
@@ -1281,7 +1285,7 @@ export default function CustomersPage() {
 
   async function handleExportSavedCustomer(customer: CustomerRecord, format: 'pdf' | 'jpg') {
     setDetailsExportError(null)
-    const form = formFromCustomer(customer)
+    const form = formFromCustomer(customer, openingDueOf(customer.id))
     const uploads = documentUploadsFromCustomer(customer)
 
     if (format === 'pdf') {
@@ -1441,7 +1445,7 @@ export default function CustomersPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ customer, orderCount, purchaseTotal, dueTotal, lastPurchaseDate, hasOrders }) => (
+                  {filteredRows.map(({ customer, orderCount, purchaseTotal, lastPurchaseDate, hasOrders }) => (
                     <TableRow key={customer.id}>
                       <TableCell sticky className="md:min-w-56">
                         <div className="flex items-center gap-3">
@@ -1513,7 +1517,7 @@ export default function CustomersPage() {
                           {orderCount} orders, last {formatDate(lastPurchaseDate)}
                         </p>
                       </TableCell>
-                      <TableCell>{formatTableAmount(customer.due || dueTotal, currency)}</TableCell>
+                      <TableCell>{formatDealerBalance(customer.due, currency, formatTableAmount)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-2">
                           <Button
@@ -1809,21 +1813,22 @@ export default function CustomersPage() {
               </div>
             </div>
 
-            {editingCustomer ? (
-              <div className="space-y-4 rounded-2xl border border-border/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due balance</p>
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Due balance ({currency ?? 'BDT'})</p>
-                  <Input
-                    type="number"
-                    min="0"
-                    value={customerForm.due}
-                    onChange={(event) => setCustomerForm((current) => ({ ...current, due: event.target.value }))}
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-            ) : null}
+            <div className="space-y-4 rounded-2xl border border-border/70 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Opening due</p>
+              <label className="block space-y-2">
+                <span className="text-sm font-medium text-foreground">Opening due ({currency ?? 'BDT'})</span>
+                <Input
+                  type="number"
+                  min="0"
+                  value={customerForm.openingDue}
+                  onChange={(event) => setCustomerForm((current) => ({ ...current, openingDue: event.target.value }))}
+                  placeholder="0"
+                />
+                <span className="block text-xs text-muted-foreground">
+                  What the dealer owed before their orders were recorded here. It is the first line of their ledger; the due balance is worked out from the ledger.
+                </span>
+              </label>
+            </div>
 
             <div className="space-y-3 rounded-2xl border border-border/70 p-4">
               <div>

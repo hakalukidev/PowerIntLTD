@@ -36,6 +36,7 @@ import type {
   CourierInput,
   CourierRecord,
   CreditLedgerEntryInput,
+  CreditLedgerEntryRecord,
   CustomerCommitment,
   CustomerCommitmentInput,
   CustomerInput,
@@ -117,6 +118,7 @@ import {
   canActAtStage,
   nextEmployeeCode,
   nextPartyCode,
+  receivableOf,
   SUPPLIER_CODE_PREFIX,
   TA_CATEGORY,
   toArray,
@@ -134,6 +136,7 @@ import {
 } from 'firebase/auth'
 
 import { auth, database } from '@/lib/firebase/config'
+import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId } from './ledger'
 import { BUSINESS_ENTRY_LABELS } from './business'
 import { resolveRoles } from './roles'
 import { accessScopeFor, customerInScope, customerZoneId, scopeDataToUserZones } from './zones'
@@ -633,7 +636,6 @@ function normalizeCustomerInput(input: CustomerInput) {
     phone: input.phone.trim(),
     email: input.email?.trim() ?? '',
     location: input.location?.trim() ?? '',
-    due: Math.max(input.due ?? 0, 0),
     leadSource: input.leadSource ?? 'local-marketing',
     reminderCustomer: input.reminderCustomer ?? false,
     nid: input.nid?.trim() ?? '',
@@ -1256,6 +1258,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
+  /**
+   * The dealer's due from their ledger, with `changes` (records about to be written, or null for
+   * removed ones) applied. Saved as `customer.due` in the same update as the change.
+   */
+  function dueFromLedger(
+    customerId: string,
+    changes: { orders?: Record<string, OrderRecord | null>; entries?: Record<string, CreditLedgerEntryRecord | null> } = {}
+  ) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+    const orders = Object.values({ ...data.orders, ...changes.orders }).filter((order): order is OrderRecord => Boolean(order))
+    const entries = Object.values({ ...data.creditLedgerEntries, ...changes.entries }).filter((entry): entry is CreditLedgerEntryRecord => Boolean(entry))
+    return computeCustomerBalance(customerId, orders, entries)
+  }
+
   async function saveCustomer(input: CustomerInput, customerId?: string) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
@@ -1310,17 +1328,44 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const id = existingCustomer?.id ?? createId('customer')
     const now = new Date().toISOString()
+    const createdAt = existingCustomer?.createdAt ?? now
+
+    // The opening due is a line on the dealer's sheet; leaving the field out keeps the current one.
+    const openingId = openingDueEntryId(id)
+    const currentOpening = data.creditLedgerEntries[openingId]
+    const openingDue = Math.max(input.openingDue ?? currentOpening?.credit ?? 0, 0)
+    const openingEntry: CreditLedgerEntryRecord | null =
+      openingDue > 0
+        ? {
+            id: openingId,
+            customerId: id,
+            customerName: normalized.name,
+            date: createdAt,
+            particulars: 'Opening due',
+            qty: 0,
+            unitPrice: 0,
+            debit: 0,
+            credit: openingDue,
+            kind: 'opening',
+            createdAt: currentOpening?.createdAt ?? now,
+          }
+        : null
+
     const customer = {
       id,
       code: existingCustomer?.code || nextPartyCode(Object.values(data.customers), CUSTOMER_CODE_PREFIX),
       ...normalized,
+      due: dueFromLedger(id, { entries: { [openingId]: openingEntry } }),
       ...(existingCustomer?.commitments ? { commitments: existingCustomer.commitments } : {}),
       ...(existingCustomer?.prices ? { prices: existingCustomer.prices } : {}),
-      createdAt: existingCustomer?.createdAt ?? now,
+      createdAt,
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/customers'), { [id]: customer })
+    await update(ref(db, 'erp'), {
+      [`customers/${id}`]: customer,
+      ...(openingEntry || currentOpening ? { [`creditLedgerEntries/${openingId}`]: openingEntry } : {}),
+    })
     await writeActivity(
       existingCustomer ? 'customer_updated' : 'customer_created',
       'customers',
@@ -1353,6 +1398,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
       [`customers/${customerId}`]: null,
+      [`creditLedgerEntries/${openingDueEntryId(customerId)}`]: null,
     })
     await writeActivity('customer_deleted', 'customers', `Deleted customer ${customer.name}.`)
   }
@@ -1876,7 +1922,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const due = total - paid
 
     const creditLimit = customer.creditLimit ?? 0
-    const overCreditLimit = creditLimit > 0 && (customer.due ?? 0) + due > creditLimit
+    const overCreditLimit = creditLimit > 0 && receivableOf(dueFromLedger(customer.id)) + due > creditLimit
     if (overCreditLimit && data.settings.blockOverLimitOrders) {
       throw new Error(`This order takes ${customer.name} over their credit limit, and over-limit orders are blocked.`)
     }
@@ -1889,9 +1935,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const orderDate = input.orderDate?.trim() || now
     const defaultDueDate = new Date(orderDate)
     defaultDueDate.setDate(defaultDueDate.getDate() + 15)
+    // Printed on the invoice as Previous due / Total due; stored once, so it never moves afterwards.
+    const previousDue = customerBalanceBefore(customer.id, orderDate, orderId, toArray(data.orders), toArray(data.creditLedgerEntries))
 
-    const updates: Record<string, unknown> = {
-      [`orders/${orderId}`]: {
+    const order: OrderRecord = {
         id: orderId,
         billNumber: input.billNumber?.trim() || `INV-${Date.now().toString().slice(-8)}`,
         customerId: customer.id,
@@ -1905,6 +1952,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         discount,
         paid,
         due,
+        previousDue,
+        totalDueAfter: previousDue + due,
         deliveryDate: input.deliveryDate,
         paymentDueDate: input.paymentDueDate?.trim() || defaultDueDate.toISOString(),
         dueReference: due > 0 ? input.dueReference || 'owner' : '',
@@ -1915,8 +1964,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         overCreditLimit,
         createdAt: orderDate,
         items: orderItems,
-      },
-      [`customers/${customer.id}/due`]: (data.customers[customer.id]?.due ?? 0) + due,
+    }
+    const updates: Record<string, unknown> = {
+      [`orders/${orderId}`]: order,
+      [`customers/${customer.id}/due`]: dueFromLedger(customer.id, { orders: { [orderId]: order } }),
     }
 
     requestedByProduct.forEach((quantity, productId) => {
@@ -2880,19 +2931,21 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const entryId = createId('credit_entry')
     const now = new Date().toISOString()
 
-    await update(ref(db, 'erp/creditLedgerEntries'), {
-      [entryId]: {
-        id: entryId,
-        customerId: customer.id,
-        customerName: customer.name,
-        date: input.date?.trim() || now,
-        particulars: input.particulars.trim(),
-        qty: Math.max(input.qty ?? 0, 0),
-        unitPrice: Math.max(input.unitPrice ?? 0, 0),
-        debit: Math.max(input.debit ?? 0, 0),
-        credit: Math.max(input.credit ?? 0, 0),
-        createdAt: now,
-      },
+    const entry: CreditLedgerEntryRecord = {
+      id: entryId,
+      customerId: customer.id,
+      customerName: customer.name,
+      date: input.date?.trim() || now,
+      particulars: input.particulars.trim(),
+      qty: Math.max(input.qty ?? 0, 0),
+      unitPrice: Math.max(input.unitPrice ?? 0, 0),
+      debit: Math.max(input.debit ?? 0, 0),
+      credit: Math.max(input.credit ?? 0, 0),
+      createdAt: now,
+    }
+    await update(ref(db, 'erp'), {
+      [`creditLedgerEntries/${entryId}`]: entry,
+      [`customers/${customer.id}/due`]: dueFromLedger(customer.id, { entries: { [entryId]: entry } }),
     })
 
     notifyTransaction('ledger_entry', entryId)
@@ -2981,8 +3034,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [`ledgerEntryRequests/${requestId}/updatedAt`]: now,
     }
     if (entryId && customer) {
-      updates[`ledgerEntryRequests/${requestId}/entryId`] = entryId
-      updates[`creditLedgerEntries/${entryId}`] = {
+      const entry: CreditLedgerEntryRecord = {
         id: entryId,
         customerId: customer.id,
         customerName: customer.name,
@@ -2994,6 +3046,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         credit: request.credit,
         createdAt: now,
       }
+      updates[`ledgerEntryRequests/${requestId}/entryId`] = entryId
+      updates[`creditLedgerEntries/${entryId}`] = entry
+      updates[`customers/${customer.id}/due`] = dueFromLedger(customer.id, { entries: { [entryId]: entry } })
     }
 
     await update(ref(db, 'erp'), updates)
@@ -3097,11 +3152,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const customer = data.customers[deposit.customerId]
-    // The approved deposit lands on the dealer's sheet as a ledger entry.
+    // The approved deposit lands on the dealer's sheet as a ledger entry: money received is a debit,
+    // which lowers the balance, the same side as hand-entered deposits.
     const entryId = decision === 'approve' && customer ? createId('credit_entry') : ''
     if (entryId && customer) {
-      updates[`customers/${customer.id}/due`] = Math.max((customer.due ?? 0) - deposit.amount, 0)
-      updates[`creditLedgerEntries/${entryId}`] = {
+      updates[`deposits/${depositId}/entryId`] = entryId
+      const entry: CreditLedgerEntryRecord = {
         id: entryId,
         customerId: customer.id,
         customerName: customer.name,
@@ -3109,10 +3165,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         particulars: [`Deposit (${deposit.method})`, deposit.note].filter(Boolean).join(' — '),
         qty: 0,
         unitPrice: 0,
-        debit: 0,
-        credit: deposit.amount,
+        debit: deposit.amount,
+        credit: 0,
         createdAt: now,
       }
+      updates[`creditLedgerEntries/${entryId}`] = entry
+      updates[`customers/${customer.id}/due`] = dueFromLedger(customer.id, { entries: { [entryId]: entry } })
     }
 
     await update(ref(db, 'erp'), updates)
@@ -3788,7 +3846,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   /** Prices the lines of an order request and works out its due and credit-limit standing. */
-  function priceOrderRequest(customer: CustomerRecord, items: OrderRequestEdit['items'], paidInput: number) {
+  function priceOrderRequest(customer: CustomerRecord, items: OrderRequestEdit['items'], paidInput: number, discountInput = 0) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
@@ -3809,12 +3867,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         purchasePrice: product.purchasePrice,
       }
     })
-    const total = orderItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const subtotal = orderItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const discount = Math.min(Math.max(discountInput, 0), subtotal)
+    const total = subtotal - discount
     const paid = Math.min(Math.max(paidInput, 0), total)
     const due = total - paid
     const creditLimit = customer.creditLimit ?? 0
-    const overCreditLimit = creditLimit > 0 && (customer.due ?? 0) + due > creditLimit
-    return { items: orderItems, total, paid, due, overCreditLimit }
+    const overCreditLimit = creditLimit > 0 && receivableOf(dueFromLedger(customer.id)) + due > creditLimit
+    return { items: orderItems, subtotal, discount, total, paid, due, overCreditLimit }
   }
 
   async function submitOrderRequest(input: OrderInput) {
@@ -3831,7 +3891,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Employee not found.')
     }
 
-    const priced = priceOrderRequest(customer, input.items, input.paid)
+    const priced = priceOrderRequest(customer, input.items, input.paid, input.discount)
     if (priced.overCreditLimit && data.settings.blockOverLimitOrders) {
       throw new Error(`This order takes ${customer.name} over their credit limit, and over-limit orders are blocked.`)
     }
@@ -3850,6 +3910,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         orderDate: input.orderDate?.trim() || now,
         deliveryDate: input.deliveryDate,
         courierName: input.courierName?.trim() ?? '',
+        paymentDueDate: input.paymentDueDate?.trim() ?? '',
+        dueReference: input.dueReference ?? '',
+        billNumber: input.billNumber?.trim() ?? '',
         status: 'pending',
         zoneId: customerZoneId(customer, toArray(data.zones)),
         submittedById: currentUser.id,
@@ -3883,7 +3946,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer not found.')
     }
 
-    const priced = priceOrderRequest(customer, edit.items, edit.paid)
+    const priced = priceOrderRequest(customer, edit.items, edit.paid, request.discount)
     const changes: SubmissionEdit['changes'] = []
     const productIds = new Set([...request.items.map((item) => item.productId), ...priced.items.map((item) => item.productId)])
     productIds.forEach((productId) => {
@@ -3942,10 +4005,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
               customerId: request.customerId,
               employeeId: request.employeeId || undefined,
               items: request.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })),
+              discount: request.discount,
               paid: request.paid,
               orderDate: request.orderDate,
               deliveryDate: request.deliveryDate,
               courierName: request.courierName,
+              paymentDueDate: request.paymentDueDate,
+              dueReference: request.dueReference,
+              billNumber: request.billNumber,
             },
             { id: request.submittedById, name: request.submittedByName }
           )
@@ -4195,13 +4262,20 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Ledger entry not found.')
     }
 
+    if (entry.kind === 'opening') {
+      throw new Error('The opening due is changed from the dealer form.')
+    }
+
     if (needsApproval) {
       await requestChange('credit_entry', 'delete', entryId, entry.customerName)
       return
     }
 
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`creditLedgerEntries/${entryId}`]: null })
+    await update(ref(db, 'erp'), {
+      [`creditLedgerEntries/${entryId}`]: null,
+      [`customers/${entry.customerId}/due`]: dueFromLedger(entry.customerId, { entries: { [entryId]: null } }),
+    })
     await writeActivity('credit_entry_deleted', 'customers', `Removed a credit sheet entry for ${entry.customerName}.`)
   }
 

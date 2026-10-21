@@ -1,5 +1,5 @@
 import type { ERPData } from '@/lib/erp/types'
-import { formatCurrency, formatDate, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatDealerBalance, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
 
@@ -10,6 +10,8 @@ export type ReportColumn = {
   filterable?: boolean
   searchable?: boolean
   isPrimaryDate?: boolean
+  /** A dealer balance: a negative value shows as "Advance …". */
+  balance?: boolean
 }
 
 export type ReportRow = Record<string, string | number | boolean | null | undefined>
@@ -132,7 +134,7 @@ export const REPORT_SOURCES: ReportSource[] = [
       col('company', 'Company', 'string', { searchable: true }),
       col('phone', 'Phone', 'string', { searchable: true }),
       col('location', 'Location', 'string', { filterable: true }),
-      col('due', 'Due', 'currency'),
+      col('due', 'Due', 'currency', { balance: true }),
       col('createdAt', 'Created', 'date', { isPrimaryDate: true }),
     ],
   },
@@ -391,7 +393,7 @@ export function formatReportValue(column: ReportColumn, value: unknown, currency
 
   switch (column.type) {
     case 'currency':
-      return formatCurrency(Number(value), currency)
+      return column.balance ? formatDealerBalance(Number(value), currency) : formatCurrency(Number(value), currency)
     case 'date':
       return formatDate(String(value))
     case 'boolean':

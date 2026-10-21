@@ -165,7 +165,9 @@ test.describe('Credit sheet PDF', () => {
 
     const text = pdfText(file)
     expect(text).not.toMatch(BROWSER_HEADER_TEXT)
-    expect(text).toMatch(/dealer information form/i)
+    // The dealer form is the Bengali dealer agreement ("ডিলার নিয়োগ চুক্তিনামা").
+    const normalized = (value: string) => value.normalize('NFC').replace(/\s+/g, ' ')
+    expect(normalized(text)).toContain(normalized('ডিলার নিয়োগ চুক্তিনামা'))
     expect(text).toContain(dealer.name)
     pdfFirstPagePng(file, 'dealer-form-page1')
     note(testInfo, `Downloaded ${download.suggestedFilename()} directly (no print dialog), with no title, date or URL on it.`)

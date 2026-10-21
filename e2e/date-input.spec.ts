@@ -104,25 +104,32 @@ test.describe('Date input', () => {
   })
 
   test('TC-05.3 inside a dialog: calendar opens, Escape closes only the calendar, required is enforced', async ({ page }) => {
+    // "New sale" left Sales & Billing with prompt 10; the courier shipment dialog has a required
+    // date too. It is closed again without saving.
     await loginAsAdmin(page)
-    await navigate(page, '/admin/sales')
-    await page.getByRole('button', { name: 'New sale' }).click()
+    await navigate(page, '/admin/courier')
+    await page.getByRole('button', { name: 'Add shipment' }).click()
     const dialog = page.getByRole('dialog').first()
-    const delivery = dialog.locator('div.space-y-2', { hasText: 'Delivery date' }).locator('input[placeholder="DD/MM/YYYY"]')
+    await expect(dialog.getByRole('heading', { name: 'Add courier shipment' })).toBeVisible()
+    const sent = dialog.locator('div.space-y-2', { hasText: 'Sent date' }).locator('input[placeholder="DD/MM/YYYY"]')
 
-    await expect(delivery).toHaveValue('')
-    expect(await delivery.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true)
+    // It starts on today; emptied, the required field is missing.
+    await expect(sent).toHaveValue(ddmmyyyy(new Date()))
+    await sent.fill('')
+    await sent.blur()
+    await expect(sent).toHaveValue('')
+    expect(await sent.evaluate((input: HTMLInputElement) => input.validity.valueMissing)).toBe(true)
 
-    await delivery.click()
+    await sent.click()
     await expect(calendar(page)).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(calendar(page)).toBeHidden()
     await expect(dialog).toBeVisible()
 
-    await delivery.click()
+    await sent.click()
     await calendar(page).getByRole('button', { name: 'Today', exact: true }).click()
-    await expect(delivery).toHaveValue(ddmmyyyy(new Date()))
-    expect(await delivery.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(true)
+    await expect(sent).toHaveValue(ddmmyyyy(new Date()))
+    expect(await sent.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(true)
     await expect(dialog).toBeVisible()
 
     await page.keyboard.press('Escape')

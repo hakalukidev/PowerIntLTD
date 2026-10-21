@@ -1,6 +1,7 @@
 import type { Database } from 'firebase-admin/database'
 
 import type { LoginHistoryEntry } from '@/lib/erp/types'
+import { isEmulatorMode } from '@/lib/firebase/admin'
 import { AuthorizationError } from '@/lib/firebase/requireAdmin'
 
 export type { LoginHistoryEntry }
@@ -22,7 +23,11 @@ export async function verifyPassword(email: string, password: string) {
     throw new Error('Server is missing NEXT_PUBLIC_FIREBASE_API_KEY.')
   }
 
-  const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+  // The Auth emulator serves the same endpoint under its own host.
+  const base = isEmulatorMode()
+    ? `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com`
+    : 'https://identitytoolkit.googleapis.com'
+  const response = await fetch(`${base}/v1/accounts:signInWithPassword?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, returnSecureToken: false }),

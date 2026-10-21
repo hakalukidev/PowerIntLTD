@@ -12,6 +12,7 @@ pnpm-lock.yaml
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 /build
 /dist
@@ -211,3 +212,7 @@ codecov.yml
 .azure/
 functions/
 .env*
+!.env.test.example
+database-debug.log
+firebase-debug.log
+ui-debug.log

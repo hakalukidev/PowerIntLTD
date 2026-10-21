@@ -1,17 +1,23 @@
 import { readFileSync } from 'node:fs'
 
 import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app'
-import { getAuth, signInWithEmailAndPassword } from 'firebase/auth'
-import { get, getDatabase, ref, remove, set, update } from 'firebase/database'
+import { connectAuthEmulator, getAuth, signInWithEmailAndPassword } from 'firebase/auth'
+import { connectDatabaseEmulator, get, getDatabase, ref, remove, set, update } from 'firebase/database'
 
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from '../auth'
 
 /**
  * Direct database access for seeding and cleaning up test records, signed in as
- * the same admin the browser tests use. It talks to the real Firebase project in
+ * the same admin the browser tests use. Under `npm run test:e2e:local` it talks to the
+ * emulators from .env.test; otherwise (ALLOW_LIVE_E2E=1) to the real Firebase project in
  * .env, so every helper here is only used on records the test itself created.
  */
+const emulator = process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1'
+
 function readEnv() {
+  if (emulator) {
+    return process.env as Record<string, string>
+  }
   const env: Record<string, string> = {}
   for (const file of ['.env', '.env.local']) {
     let text = ''
@@ -45,8 +51,13 @@ export async function connectAsAdmin() {
     `e2e-${Date.now()}-${Math.random().toString(36).slice(2)}`
   )
   const auth = getAuth(app)
-  await signInWithEmailAndPassword(auth, ADMIN_EMAIL, ADMIN_PASSWORD)
   const db = getDatabase(app)
+  if (emulator) {
+    const [dbHost, dbPort] = env.NEXT_PUBLIC_FIREBASE_DATABASE_EMULATOR_HOST.split(':')
+    connectAuthEmulator(auth, `http://${env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true })
+    connectDatabaseEmulator(db, dbHost, Number(dbPort))
+  }
+  await signInWithEmailAndPassword(auth, ADMIN_EMAIL, ADMIN_PASSWORD)
 
   return {
     async read<T>(path: string) {

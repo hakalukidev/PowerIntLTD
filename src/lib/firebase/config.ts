@@ -1,6 +1,6 @@
 ﻿import { getApp, getApps, initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
-import { getDatabase } from 'firebase/database'
+import { connectAuthEmulator, getAuth } from 'firebase/auth'
+import { connectDatabaseEmulator, getDatabase } from 'firebase/database'
 import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
@@ -20,3 +20,11 @@ const app = isBrowser ? (getApps().length ? getApp() : initializeApp(firebaseCon
 export const auth = app ? getAuth(app) : null
 export const database = app ? getDatabase(app) : null
 export const storage = app ? getStorage(app) : null
+
+// Local E2E runs (.env.test) point the app at the Firebase Emulator Suite. Without the flag
+// nothing here runs, so normal builds always talk to the real project.
+if (auth && database && process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === '1') {
+  const [dbHost, dbPort] = (process.env.NEXT_PUBLIC_FIREBASE_DATABASE_EMULATOR_HOST ?? '127.0.0.1:9000').split(':')
+  connectAuthEmulator(auth, `http://${process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST ?? '127.0.0.1:9099'}`, { disableWarnings: true })
+  connectDatabaseEmulator(database, dbHost, Number(dbPort))
+}

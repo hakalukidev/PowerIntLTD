@@ -8,26 +8,27 @@ import { ChangeApprovals } from '@/components/admin/approvals/ChangeApprovals'
 import { DailyClosingReport, DeliveryReport, StockReport } from '@/components/admin/approvals/ApprovalReports'
 import { LedgerEntryApprovals } from '@/components/admin/approvals/LedgerEntryApprovals'
 import { OrderApprovals } from '@/components/admin/approvals/OrderApprovals'
+import { PurchaseApprovals } from '@/components/admin/approvals/PurchaseApprovals'
 import { SubmissionApprovals } from '@/components/admin/approvals/SubmissionApprovals'
 import { todayInput } from '@/components/admin/approvals/shared'
 import { DateInput } from '@/components/ui/date-input'
 import { useERP } from '@/lib/erp/provider'
-import { toArray, userRoleIds } from '@/lib/erp/utils'
+import { APPROVAL_PERMISSIONS, toArray, userRoleIds } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-type Tab = 'all' | 'orders' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'changes' | 'stock' | 'closing' | 'delivery'
+type Tab = 'all' | 'orders' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'purchases' | 'changes' | 'stock' | 'closing' | 'delivery'
 
 const REPORT_TABS: Tab[] = ['stock', 'closing', 'delivery']
 
 export default function ApprovalsPage() {
-  const { data, currentUser } = useERP()
+  const { data, currentUser, hasPermission } = useERP()
   const [tab, setTab] = useState<Tab>('all')
   const [day, setDay] = useState(todayInput)
 
   const roleIds = currentUser ? userRoleIds(currentUser) : []
   const isAdmin = roleIds.includes('admin')
-  // Authorizers and the Chairman act on deposits, order-form orders and zone in charges' ledger entries only.
-  const isApprover = roleIds.includes('authorizer') || roleIds.includes('chairman')
+  // Whoever holds an approval stage acts on every kind of submission at that stage.
+  const isApprover = hasPermission(APPROVAL_PERMISSIONS.authorizer) || hasPermission(APPROVAL_PERMISSIONS.chairman)
   const pendingCount = (items: Array<{ status?: string }>) => items.filter((item) => item.status === 'pending').length
 
   const approvalTabs: Array<{ id: Tab; label: string; count: number }> = [
@@ -36,6 +37,7 @@ export default function ApprovalsPage() {
     { id: 'ledger', label: 'Ledger entries', count: pendingCount(toArray(data?.ledgerEntryRequests)) },
     { id: 'payments', label: 'Payments', count: pendingCount(toArray(data?.supplierPayments)) },
     { id: 'expenses', label: 'Expenses', count: pendingCount(toArray(data?.expenses)) },
+    { id: 'purchases', label: 'Purchases', count: pendingCount(toArray(data?.purchaseRequests)) },
     { id: 'changes', label: 'Record changes', count: pendingCount(toArray(data?.changeRequests)) },
   ]
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
@@ -78,15 +80,11 @@ export default function ApprovalsPage() {
           ) : null}
         </div>
 
-        {!isAdmin && !REPORT_TABS.includes(tab) && !(isApprover && (tab === 'orders' || tab === 'deposits' || tab === 'ledger')) ? (
+        {!REPORT_TABS.includes(tab) ? (
           <p className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground print:hidden">
-            {tab === 'all'
-              ? isApprover
-                ? 'You can act on orders, deposits and ledger entries at your approval stage. Other items need an admin.'
-                : 'Only an admin can approve, reject or edit submissions. You can see what is waiting.'
-              : tab === 'orders' || tab === 'deposits' || tab === 'ledger'
-              ? 'Orders, deposits and ledger entries are accepted by the zone’s Authorizer, then approved by the Chairman. You can see what is waiting.'
-              : 'Only an admin can approve, reject or edit submissions. You can see what is waiting.'}
+            {isApprover
+              ? 'Each item is accepted by the Authorizer, then gets final approval from the Chairman. You can act at your stage, but not on your own submissions or on items you authorized.'
+              : 'Each item is accepted by the Authorizer, then gets final approval from the Chairman. You can see what is waiting.'}
           </p>
         ) : null}
 
@@ -96,7 +94,8 @@ export default function ApprovalsPage() {
         {tab === 'ledger' ? <LedgerEntryApprovals /> : null}
         {tab === 'payments' ? <SubmissionApprovals kind="supplierPayments" isAdmin={isAdmin} /> : null}
         {tab === 'expenses' ? <SubmissionApprovals kind="expenses" isAdmin={isAdmin} /> : null}
-        {tab === 'changes' ? <ChangeApprovals isAdmin={isAdmin} /> : null}
+        {tab === 'purchases' ? <PurchaseApprovals /> : null}
+        {tab === 'changes' ? <ChangeApprovals /> : null}
         {tab === 'stock' ? <StockReport day={day} /> : null}
         {tab === 'closing' ? <DailyClosingReport day={day} /> : null}
         {tab === 'delivery' ? <DeliveryReport day={day} /> : null}

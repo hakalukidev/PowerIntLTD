@@ -578,7 +578,7 @@ export function SupplierFormDialog({
 
       onSaved(
         changesNeedApproval
-          ? `${editingSupplier ? 'Supplier changes' : 'New supplier'} sent to an admin for approval.`
+          ? `${editingSupplier ? 'Supplier changes' : 'New supplier'} sent for approval (Authorizer, then Chairman).`
           : editingSupplier
             ? 'Supplier details updated.'
             : 'New supplier added.'

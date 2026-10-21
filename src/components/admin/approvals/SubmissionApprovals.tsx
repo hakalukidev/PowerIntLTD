@@ -12,9 +12,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositStatus, EditableSubmissionKind, ERPData, SubmissionEdit, SubmissionPatch } from '@/lib/erp/types'
-import { approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
+import { approvalStage, formatCurrency, formatDate, formatDealerBalance, getExpenseCategories, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
 
-import { ApprovalStageNote, EditHistory, EmptyState, FeedbackBanner, NotifyButtons, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
+import {
+  ApprovalStageNote,
+  approveLabel,
+  EditHistory,
+  EmptyState,
+  FeedbackBanner,
+  NotifyButtons,
+  StatusPill,
+  SubmittedBy,
+  localDay,
+  todayInput,
+  useApprovalAccess,
+  type Feedback,
+} from './shared'
 
 export type SubmissionRow = {
   id: string
@@ -24,6 +37,7 @@ export type SubmissionRow = {
   status: DepositStatus
   group: string
   details: Array<[string, string]>
+  submittedById: string
   submittedByName: string
   submittedByRole: string
   submittedAt: string
@@ -33,8 +47,9 @@ export type SubmissionRow = {
   documentUrl?: string
   /** Fields the edit dialog starts from. */
   editable: SubmissionPatch
-  /** Deposits go to the zone's Authorizer, then the Chairman. */
+  /** Each goes to the Authorizer, then the Chairman. */
   authorizedAt?: string
+  authorizedById?: string
   authorizedByName?: string
   /** Actual TA amounts come from the trips, so the amount is not editable. */
   amountLocked?: boolean
@@ -67,6 +82,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
         ['Current due', formatDealerBalance(data.customers[deposit.customerId]?.due ?? 0)],
         ['Note', deposit.note],
       ],
+      submittedById: deposit.submittedById,
       submittedByName: deposit.submittedByName,
       submittedByRole: roleOf(deposit.submittedById),
       submittedAt: deposit.createdAt,
@@ -75,6 +91,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
       edits: deposit.edits,
       editable: { amount: deposit.amount, date: deposit.date, method: deposit.method, note: deposit.note },
       authorizedAt: deposit.authorizedAt,
+      authorizedById: deposit.authorizedById,
       authorizedByName: deposit.authorizedByName,
       notify: {
         phone: data.customers[deposit.customerId]?.phone ?? '',
@@ -106,6 +123,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
               ['Purpose', payment.purpose],
               ['Note', payment.note],
             ],
+      submittedById: payment.submittedById,
       submittedByName: payment.submittedByName,
       submittedByRole: roleOf(payment.submittedById),
       submittedAt: payment.createdAt,
@@ -114,6 +132,9 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
       edits: payment.edits,
       documentUrl: payment.proofUrl,
       editable: { amount: payment.amount, date: payment.date, purpose: payment.purpose, note: payment.note },
+      authorizedAt: payment.authorizedAt,
+      authorizedById: payment.authorizedById,
+      authorizedByName: payment.authorizedByName,
       notify: {
         phone: data.suppliers[payment.supplierId]?.phone ?? '',
         message: `Dear ${payment.supplierName}, ${company} has sent you ${payment.amount.toLocaleString()} BDT (${payment.method === 'bank' ? 'bank' : 'cash'}) on ${formatDate(payment.date)} for ${payment.purpose}.`,
@@ -136,6 +157,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
         : []),
       ['Note', expense.note],
     ],
+    submittedById: expense.createdBy,
     submittedByName: expense.createdByName,
     submittedByRole: roleOf(expense.createdBy),
     submittedAt: expense.createdAt,
@@ -144,6 +166,9 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
     edits: expense.edits,
     documentUrl: expense.documentUrl,
     editable: { amount: expense.amount, date: expense.date, category: expense.category, note: expense.note },
+    authorizedAt: expense.authorizedAt,
+    authorizedById: expense.authorizedById,
+    authorizedByName: expense.authorizedByName,
     amountLocked: expense.taType === 'actual',
   }))
 }
@@ -157,13 +182,13 @@ export function useSubmissionReview(setFeedback: (feedback: Feedback) => void) {
     setBusyId(row.id)
     setFeedback(null)
     try {
-      const authorizing = kind === 'deposits' && approvalStage(row) === 'authorizer'
+      const authorizing = approvalStage(row) === 'authorizer'
       const reviewFn = kind === 'deposits' ? reviewDeposit : kind === 'supplierPayments' ? reviewSupplierPayment : reviewExpense
       await reviewFn(row.id, decision)
       setFeedback({
         tone: 'success',
         text: authorizing && decision === 'approve'
-          ? `Deposit of ${formatCurrency(row.amount)} (${row.party}) authorized and sent to the Chairman for final approval.`
+          ? `${KIND_COPY[kind].noun[0].toUpperCase()}${KIND_COPY[kind].noun.slice(1)} of ${formatCurrency(row.amount)} (${row.party}) authorized and sent to the Chairman for final approval.`
           : `${KIND_COPY[kind].noun[0].toUpperCase()}${KIND_COPY[kind].noun.slice(1)} of ${formatCurrency(row.amount)} (${row.party}) ${decision === 'approve' ? 'approved' : 'rejected'} and added to the daily audit.`,
       })
     } catch (error) {
@@ -271,9 +296,7 @@ export function SubmissionCard({
   onEdit: () => void
   badge?: React.ReactNode
 }) {
-  const { currentUser } = useERP()
-  const stage = kind === 'deposits' ? approvalStage(row) : null
-  const canReview = kind === 'deposits' ? canActAtStage(currentUser, stage) : isAdmin
+  const { stage, canReview } = useApprovalAccess(row)
   return (
     <Card>
       <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
@@ -302,7 +325,7 @@ export function SubmissionCard({
             </a>
           ) : null}
           <SubmittedBy name={row.submittedByName} role={row.submittedByRole} at={row.submittedAt} />
-          {kind === 'deposits' ? <ApprovalStageNote record={row} /> : null}
+          <ApprovalStageNote record={row} />
           <EditHistory edits={row.edits} />
         </div>
         {isAdmin || canReview ? (
@@ -321,7 +344,7 @@ export function SubmissionCard({
                 </Button>
                 <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
                   <Check className="h-4 w-4" />
-                  {stage === 'authorizer' ? 'Authorize' : stage === 'chairman' ? 'Final approve' : 'Approve'}
+                  {approveLabel(stage)}
                 </Button>
               </>
             ) : null}

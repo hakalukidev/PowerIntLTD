@@ -531,11 +531,11 @@ export default function CreditSheetPage() {
       await recordCreditLedgerEntry(input)
       setEntryDialogOpen(false)
       setEntryForm(emptyLedgerEntryForm())
-      if (zoneInCharge) {
-        setLedgerFeedback("The entry was sent to your zone's Authorizer, then goes to the Chairman. It shows on the sheet once approved.")
-      } else if (changesNeedApproval) {
-        setLedgerFeedback('The entry was sent to an admin for approval. It shows on the sheet once approved.')
-      }
+      setLedgerFeedback(
+        zoneInCharge
+          ? "The entry was sent to your zone's Authorizer, then goes to the Chairman. It shows on the sheet once approved."
+          : 'The entry was sent to the Authorizer, then goes to the Chairman. It shows on the sheet once approved.'
+      )
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to save ledger entry.')
     } finally {
@@ -547,7 +547,7 @@ export default function CreditSheetPage() {
     setLedgerFeedback(null)
     try {
       await deleteCreditLedgerEntry(entryId)
-      if (changesNeedApproval) setLedgerFeedback('Removing the entry was sent to an admin for approval.')
+      if (changesNeedApproval) setLedgerFeedback('Removing the entry was sent for approval. It stays on the sheet until the Chairman approves it.')
     } catch (reason) {
       setLedgerFeedback(reason instanceof Error ? reason.message : 'Unable to delete ledger entry.')
     }

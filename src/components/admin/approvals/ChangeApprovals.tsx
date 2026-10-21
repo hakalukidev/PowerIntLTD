@@ -16,10 +16,21 @@ import type {
   ExpenseInput,
   SupplierInput,
 } from '@/lib/erp/types'
-import { formatCurrency, formatDate, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
+import { approvalStage, formatCurrency, formatDate, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-import { EmptyState, FeedbackBanner, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
+import {
+  ApprovalStageNote,
+  approveLabel,
+  EmptyState,
+  FeedbackBanner,
+  StatusPill,
+  SubmittedBy,
+  localDay,
+  todayInput,
+  useApprovalAccess,
+  type Feedback,
+} from './shared'
 
 const KIND_LABELS: Record<ChangeRequestKind, string> = {
   customer: 'Dealer',
@@ -110,6 +121,7 @@ export function useChangeReview(setFeedback: (feedback: Feedback) => void) {
   const [busyId, setBusyId] = useState<string | null>(null)
 
   async function review(request: ChangeRequestRecord, decision: 'approve' | 'reject') {
+    const authorizing = approvalStage(request) === 'authorizer'
     setBusyId(request.id)
     setFeedback(null)
     try {
@@ -117,7 +129,7 @@ export function useChangeReview(setFeedback: (feedback: Feedback) => void) {
       setFeedback({
         tone: 'success',
         text: `${ACTION_STYLES[request.action].label} ${KIND_LABELS[request.kind].toLowerCase()} — ${request.targetName}: ${
-          decision === 'approve' ? 'approved and applied' : 'rejected'
+          decision === 'reject' ? 'rejected' : authorizing ? 'authorized and sent to the Chairman for final approval' : 'approved and applied'
         }.`,
       })
     } catch (error) {
@@ -132,18 +144,17 @@ export function useChangeReview(setFeedback: (feedback: Feedback) => void) {
 
 export function ChangeRequestCard({
   request,
-  isAdmin,
   busy,
   onReview,
   badge,
 }: {
   request: ChangeRequestRecord
-  isAdmin: boolean
   busy: boolean
   onReview: (decision: 'approve' | 'reject') => void
   badge?: React.ReactNode
 }) {
   const { data } = useERP()
+  const { stage, canReview } = useApprovalAccess(request)
   if (!data) return null
   const submitter = data.users[request.submittedById]
   return (
@@ -166,8 +177,9 @@ export function ChangeRequestCard({
             ))}
           </dl>
           <SubmittedBy name={request.submittedByName} role={submitter ? userRoleNames(data.roles, submitter) : ''} at={request.createdAt} />
+          <ApprovalStageNote record={request} />
         </div>
-        {isAdmin ? (
+        {canReview ? (
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button size="sm" variant="outline" className="gap-1.5 text-rose-600" disabled={busy} onClick={() => onReview('reject')}>
               <X className="h-4 w-4" />
@@ -175,7 +187,7 @@ export function ChangeRequestCard({
             </Button>
             <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
               <Check className="h-4 w-4" />
-              Approve
+              {approveLabel(stage)}
             </Button>
           </div>
         ) : null}
@@ -184,8 +196,8 @@ export function ChangeRequestCard({
   )
 }
 
-/** Changes to dealers, suppliers, credit sheet entries and expenses by users whose role needs approval. */
-export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
+/** Every add, edit and delete of a dealer, supplier, credit sheet entry or expense, waiting for its two approvals. */
+export function ChangeApprovals() {
   const { data } = useERP()
   const [feedback, setFeedback] = useState<Feedback>(null)
   const { busyId, review } = useChangeReview(setFeedback)
@@ -202,7 +214,7 @@ export function ChangeApprovals({ isAdmin }: { isAdmin: boolean }) {
       <FeedbackBanner feedback={feedback} />
       {!pending.length ? <EmptyState text="No record changes are waiting for approval." /> : null}
       {pending.map((request) => (
-        <ChangeRequestCard key={request.id} request={request} isAdmin={isAdmin} busy={busyId === request.id} onReview={(decision) => void review(request, decision)} />
+        <ChangeRequestCard key={request.id} request={request} busy={busyId === request.id} onReview={(decision) => void review(request, decision)} />
       ))}
 
       {reviewedToday.length ? (

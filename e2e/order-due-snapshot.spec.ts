@@ -1,8 +1,8 @@
-import { expect, type Page, test } from '@playwright/test'
+import { type Browser, expect, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
 import { navigate, note, screenshot } from './support/evidence'
-import { partyApproveButton } from './support/approvals'
+import { approveThroughBothStages, authorizerDealerFields, hasApproverLogins } from './support/approvals'
 import { connectAsAdmin, testDealer, type AdminDb } from './support/firebase'
 
 /**
@@ -36,15 +36,9 @@ async function pick(page: Page, trigger: string, search: string, optionText: str
   await page.locator('button:not([role="combobox"])').filter({ hasText: optionText }).first().click()
 }
 
-/** Clicks Authorize / Final approve on the dealer's own approval card until `done` holds; `state` is what each click changes. */
-async function approveAll(page: Page, state: () => Promise<unknown>, done: () => Promise<boolean>) {
-  await navigate(page, '/admin/approvals')
-  for (let step = 0; step < 4 && !(await done()); step += 1) {
-    const before = JSON.stringify(await state())
-    await (await partyApproveButton(page, dealer.name)).click()
-    // Final approval creates the order, then writes activity and notifications, before the request changes.
-    await expect.poll(async () => JSON.stringify(await state()) !== before, { timeout: 20_000 }).toBe(true)
-  }
+/** The Authorizer, then the Chairman, approve the dealer's waiting submission (the admin submitted it), until `done` holds. */
+async function approveAll(browser: Browser, page: Page, done: () => Promise<boolean>) {
+  await approveThroughBothStages(browser, dealer.name, page)
   await expect.poll(done, { timeout: 20_000 }).toBe(true)
 }
 
@@ -63,7 +57,8 @@ test.beforeAll(async () => {
   const now = new Date().toISOString()
   // A phone number that cannot belong to anyone; the alert route is stubbed as well.
   // The dealer owes 1,000 going in: an opening due line on their sheet, and the due worked out from it.
-  await db.set(`erp/customers/${dealer.id}`, { ...testDealer(dealer.id, dealer.name, '000-E2E-TEST', ''), due: 1000, creditLimit: 0 })
+  // In the seeded Authorizer's depot, so they can authorize the dealer's order and deposit.
+  await db.set(`erp/customers/${dealer.id}`, { ...testDealer(dealer.id, dealer.name, '000-E2E-TEST', ''), ...(await authorizerDealerFields(db)), due: 1000, creditLimit: 0 })
   await db.set(`erp/creditLedgerEntries/credit_entry_opening_${dealer.id}`, {
     id: `credit_entry_opening_${dealer.id}`, customerId: dealer.id, customerName: dealer.name, date: '2026-01-01T00:00:00.000Z',
     particulars: 'Opening due', qty: 0, unitPrice: 0, debit: 0, credit: 1000, kind: 'opening', createdAt: now,
@@ -117,7 +112,8 @@ test.beforeEach(async ({ page }) => {
   await loginAsAdmin(page)
 })
 
-test('TC-12.1 invoice shows Previous due 1,000 and Total due 3,450, unchanged by a later payment', async ({ page }, testInfo) => {
+test('TC-12.1 invoice shows Previous due 1,000 and Total due 3,450, unchanged by a later payment', async ({ browser, page }, testInfo) => {
+  test.skip(!hasApproverLogins(), 'Approvals need the Authorizer and Chairman logins seeded on the emulators.')
   test.setTimeout(180_000)
 
   // A 2,450 order on credit for a dealer who already owes 1,000.
@@ -129,7 +125,7 @@ test('TC-12.1 invoice shows Previous due 1,000 and Total due 3,450, unchanged by
   await page.getByRole('button', { name: 'Submit for approval' }).click()
   await expect(page.getByText(`Order for ${dealer.name} sent for approval.`)).toBeVisible({ timeout: 15_000 })
 
-  await approveAll(page, requestsForDealer, async () => (await requestsForDealer()).some((request) => request.status === 'approved' && request.orderId))
+  await approveAll(browser, page, async () => (await requestsForDealer()).some((request) => request.status === 'approved' && request.orderId))
   const [request] = await requestsForDealer()
   const order = (await db.read<StoredOrder>(`erp/orders/${request.orderId}`))!
   expect(order).toMatchObject({ due: 2450, previousDue: 1000, totalDueAfter: 3450 })
@@ -154,7 +150,7 @@ test('TC-12.1 invoice shows Previous due 1,000 and Total due 3,450, unchanged by
     status: 'pending', zoneId: '', submittedById: 'e2e', submittedByName: 'E2E Tester', createdAt: now, updatedAt: now,
   })
   const depositState = () => db.read<{ status: string; authorizedAt?: string }>(`erp/deposits/${depositId}`)
-  await approveAll(page, depositState, async () => (await depositState())?.status === 'approved')
+  await approveAll(browser, page, async () => (await depositState())?.status === 'approved')
   expect((await db.read<{ due: number }>(`erp/customers/${dealer.id}`))?.due).toBe(2450)
   expect(await db.read<StoredOrder>(`erp/orders/${order.id}`)).toMatchObject({ due: 2450, previousDue: 1000, totalDueAfter: 3450 })
   // The deposit lands on the credit sheet as a debit (money received), like hand-entered deposits.

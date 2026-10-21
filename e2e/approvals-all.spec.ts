@@ -1,14 +1,15 @@
 import { expect, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
+import { hasApproverLogins, keepAdminSignedIn, openApprovalsAs, reviewOnCard } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin, type AdminDb } from './support/firebase'
 
 /**
  * Task 03: the Approvals page opens on an "All" tab listing every pending item with a type badge.
  *
- * Seeds two pending expenses, approves one and rejects the other from the All tab, and checks the
- * stored result. The expenses, and the activity and daily audit entries the review writes, are
+ * Seeds two pending expenses, authorizes one and rejects the other from the All tab, has the
+ * Chairman give the authorized one its final approval, and checks the stored result. The expenses, and the activity and daily audit entries the review writes, are
  * removed again afterwards.
  */
 
@@ -20,7 +21,7 @@ const expenses = [
   { id: `e2e_expense_${stamp}_b`, expenseBy: `E2E All Tab Spender B ${stamp}`, amount: 222 },
 ]
 
-const APPROVAL_TABS = ['Orders', 'Deposits', 'Ledger entries', 'Payments', 'Expenses', 'Record changes']
+const APPROVAL_TABS = ['Orders', 'Deposits', 'Ledger entries', 'Payments', 'Expenses', 'Purchases', 'Record changes']
 
 function tabButton(page: Page, label: string) {
   return page.getByRole('button', { name: new RegExp(`^${label}\\s*\\d*$`) })
@@ -36,9 +37,9 @@ function titleOf(page: Page, expenseBy: string) {
   return page.getByText(new RegExp(`^${expenseBy} ·`))
 }
 
-/** The card for one seeded expense: the innermost block holding its title and its review buttons. */
+/** The card for one seeded expense: the innermost block holding its title and the admin's Edit button. */
 function cardFor(page: Page, expenseBy: string) {
-  return page.locator('div').filter({ has: titleOf(page, expenseBy) }).filter({ has: page.getByRole('button', { name: 'Approve' }) }).last()
+  return page.locator('div').filter({ has: titleOf(page, expenseBy) }).filter({ has: page.getByRole('button', { name: 'Edit' }) }).last()
 }
 
 test.beforeAll(async () => {
@@ -75,12 +76,13 @@ test.afterAll(async () => {
   await db.close()
 })
 
-test('TC-03.1 All tab is the default, counts every pending item and reviews like the specific tab', async ({ page }, testInfo) => {
+test('TC-03.1 All tab is the default, counts every pending item and reviews like the specific tab', async ({ browser, page }, testInfo) => {
+  test.setTimeout(120_000)
   await loginAsAdmin(page)
   await navigate(page, '/admin/approvals')
 
   // All is first and selected by default; report tabs stay separate.
-  const tabs = page.locator('button').filter({ hasText: /^(All|Orders|Deposits|Ledger entries|Payments|Expenses|Record changes|Stock & warehouse|Daily closing|Delivery)/ })
+  const tabs = page.locator('button').filter({ hasText: /^(All|Orders|Deposits|Ledger entries|Payments|Expenses|Purchases|Record changes|Stock & warehouse|Daily closing|Delivery)/ })
   await expect(tabs.first()).toHaveText(/^All/)
   await expect(cardFor(page, expenses[0].expenseBy)).toBeVisible({ timeout: 20_000 })
   await expect(cardFor(page, expenses[1].expenseBy)).toBeVisible()
@@ -90,7 +92,7 @@ test('TC-03.1 All tab is the default, counts every pending item and reviews like
   const order = await page.getByText(new RegExp(`^E2E All Tab Spender [AB] ${stamp} ·`)).allInnerTexts()
   expect(order[0]).toContain('Spender A')
 
-  // The All badge is the sum of the six approval tab badges.
+  // The All badge is the sum of the seven approval tab badges.
   const counts = await Promise.all(APPROVAL_TABS.map((label) => tabCount(page, label)))
   const all = await tabCount(page, 'All')
   note(testInfo, `All = ${all}; ${APPROVAL_TABS.map((label, index) => `${label} ${counts[index]}`).join(', ')}`)
@@ -98,13 +100,23 @@ test('TC-03.1 All tab is the default, counts every pending item and reviews like
   expect(all).toBeGreaterThanOrEqual(2)
   await screenshot(page, 'approvals-all-tab', testInfo)
 
-  // Approve one and reject the other from All.
-  await cardFor(page, expenses[0].expenseBy).getByRole('button', { name: 'Approve' }).click()
-  await expect(page.getByText(`Expense of`).filter({ hasText: expenses[0].expenseBy })).toContainText('approved and added to the daily audit')
+  // Authorize one and reject the other from All. The authorized one waits for the Chairman, and the
+  // admin who authorized it cannot also give the final approval.
+  await cardFor(page, expenses[0].expenseBy).getByRole('button', { name: 'Authorize' }).click()
+  await expect(page.getByText(`Expense of`).filter({ hasText: expenses[0].expenseBy })).toContainText('authorized and sent to the Chairman')
   await cardFor(page, expenses[1].expenseBy).getByRole('button', { name: 'Reject' }).click()
   await expect(page.getByText(`Expense of`).filter({ hasText: expenses[1].expenseBy })).toContainText('rejected and added to the daily audit')
-  await expect(titleOf(page, expenses[0].expenseBy)).toHaveCount(0)
   await expect(titleOf(page, expenses[1].expenseBy)).toHaveCount(0)
+  await expect(cardFor(page, expenses[0].expenseBy)).toContainText('You authorized this')
+  await expect(cardFor(page, expenses[0].expenseBy).getByRole('button', { name: 'Final approve' })).toHaveCount(0)
+  await expect.poll(() => tabCount(page, 'All')).toBe(all - 1)
+
+  test.skip(!hasApproverLogins(), 'The Chairman test login is only seeded on the emulators.')
+  const chairman = await openApprovalsAs(browser, 'chairman')
+  await reviewOnCard(chairman.page, expenses[0].expenseBy, 'Final approve')
+  await chairman.close()
+  await keepAdminSignedIn(page)
+  await expect(titleOf(page, expenses[0].expenseBy)).toHaveCount(0)
   await expect.poll(() => tabCount(page, 'All')).toBe(all - 2)
 
   // Same stored result as reviewing from the Expenses tab: status, reviewer and a daily audit entry.
@@ -112,6 +124,7 @@ test('TC-03.1 All tab is the default, counts every pending item and reviews like
   expect(approved?.status).toBe('approved')
   expect(rejected?.status).toBe('rejected')
   expect(approved?.reviewedByName).toBeTruthy()
+  expect((approved as { authorizedByName?: string } | null)?.authorizedByName).toBeTruthy()
   const audit = Object.values((await db.read<Record<string, { refId?: string; decision?: string }>>('erp/auditLog')) ?? {})
   expect(audit.find((entry) => entry.refId === expenses[0].id)?.decision).toBe('approved')
   expect(audit.find((entry) => entry.refId === expenses[1].id)?.decision).toBe('rejected')

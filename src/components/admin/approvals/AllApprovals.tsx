@@ -3,13 +3,14 @@
 import { useMemo, useState } from 'react'
 
 import { useERP } from '@/lib/erp/provider'
-import type { ChangeRequestRecord, EditableSubmissionKind, LedgerEntryRequestRecord, OrderRequestRecord } from '@/lib/erp/types'
+import type { ChangeRequestRecord, EditableSubmissionKind, LedgerEntryRequestRecord, OrderRequestRecord, PurchaseRequestRecord } from '@/lib/erp/types'
 import { toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 import { ChangeRequestCard, useChangeReview } from './ChangeApprovals'
 import { LedgerEntryCard, useLedgerEntryReview } from './LedgerEntryApprovals'
 import { EditOrderDialog, OrderRequestCard, useOrderReview } from './OrderApprovals'
+import { PurchaseRequestCard, usePurchaseReview } from './PurchaseApprovals'
 import { EditSubmissionDialog, SubmissionCard, buildSubmissionRows, useSubmissionReview, type SubmissionRow } from './SubmissionApprovals'
 import { EmptyState, FeedbackBanner, type Feedback } from './shared'
 
@@ -18,6 +19,7 @@ type Item =
   | { type: EditableSubmissionKind; id: string; at: string; row: SubmissionRow }
   | { type: 'ledger'; id: string; at: string; request: LedgerEntryRequestRecord }
   | { type: 'change'; id: string; at: string; request: ChangeRequestRecord }
+  | { type: 'purchase'; id: string; at: string; request: PurchaseRequestRecord }
 
 const TYPE_BADGES: Record<Item['type'], { label: string; className: string }> = {
   order: { label: 'Order', className: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300' },
@@ -26,6 +28,7 @@ const TYPE_BADGES: Record<Item['type'], { label: string; className: string }> = 
   supplierPayments: { label: 'Payment', className: 'bg-violet-500/15 text-violet-700 dark:text-violet-300' },
   expenses: { label: 'Expense', className: 'bg-orange-500/15 text-orange-700 dark:text-orange-300' },
   change: { label: 'Record change', className: 'bg-slate-500/15 text-slate-700 dark:text-slate-300' },
+  purchase: { label: 'Purchase', className: 'bg-teal-500/15 text-teal-700 dark:text-teal-300' },
 }
 
 function TypeBadge({ type }: { type: Item['type'] }) {
@@ -36,7 +39,7 @@ function TypeBadge({ type }: { type: Item['type'] }) {
   )
 }
 
-/** Every pending order, deposit, ledger entry, payment, expense and record change in one list, newest first. */
+/** Every pending order, deposit, ledger entry, payment, expense, purchase and record change in one list, newest first. */
 export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
   const { data } = useERP()
   const [feedback, setFeedback] = useState<Feedback>(null)
@@ -44,6 +47,7 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
   const submissions = useSubmissionReview(setFeedback)
   const ledger = useLedgerEntryReview(setFeedback)
   const changes = useChangeReview(setFeedback)
+  const purchases = usePurchaseReview(setFeedback)
   const [editingOrder, setEditingOrder] = useState<OrderRequestRecord | null>(null)
   const [editingSubmission, setEditingSubmission] = useState<{ kind: EditableSubmissionKind; row: SubmissionRow } | null>(null)
 
@@ -58,6 +62,7 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
       ...submissionItems,
       ...pending(toArray(data.ledgerEntryRequests)).map((request): Item => ({ type: 'ledger', id: request.id, at: request.createdAt, request })),
       ...pending(toArray(data.changeRequests)).map((request): Item => ({ type: 'change', id: request.id, at: request.createdAt, request })),
+      ...pending(toArray(data.purchaseRequests)).map((request): Item => ({ type: 'purchase', id: request.id, at: request.createdAt, request })),
     ].sort((left, right) => (right.at ?? '').localeCompare(left.at ?? ''))
   }, [data])
 
@@ -91,12 +96,22 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
             />
           )
         }
+        if (item.type === 'purchase') {
+          return (
+            <PurchaseRequestCard
+              key={`purchase-${item.id}`}
+              request={item.request}
+              badge={badge}
+              busy={purchases.busyId === item.id}
+              onReview={(decision) => void purchases.review(item.request, decision)}
+            />
+          )
+        }
         if (item.type === 'change') {
           return (
             <ChangeRequestCard
               key={`change-${item.id}`}
               request={item.request}
-              isAdmin={isAdmin}
               badge={badge}
               busy={changes.busyId === item.id}
               onReview={(decision) => void changes.review(item.request, decision)}

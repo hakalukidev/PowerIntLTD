@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { onValue, ref, set, update } from 'firebase/database'
+import { increment, onValue, ref, runTransaction, set, update } from 'firebase/database'
 
 import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
@@ -86,12 +86,14 @@ import type {
   DepotInput,
   DepotRecord,
   PortalTransactionKind,
+  PurchaseRequestRecord,
   EmployeeAdvanceInput,
   EmployeeAdvanceRecord,
   CommissionAuthorizationInput,
   CommissionAuthorizationRecord,
 } from '@/lib/erp/types'
 import {
+  approvalBlockReason,
   approvalStage,
   canAuthorizeCommission,
   computeMonthlyPay,
@@ -106,7 +108,6 @@ import {
   DEFAULT_MONTHLY_UNIT_TARGET,
   DEFAULT_PROBATION_MONTHS,
   EMPLOYEE_EXPENSE_CATEGORIES,
-  changesNeedApproval as changesNeedApprovalFor,
   getOrderStatus,
   getOrderStatuses,
   getPermissions,
@@ -116,6 +117,9 @@ import {
   hasPermission as hasPermissionCheck,
   isZoneInCharge,
   canActAtStage,
+  rolesForStage,
+  type ApprovalParticipants,
+  type ApprovalStage,
   nextEmployeeCode,
   nextPartyCode,
   receivableOf,
@@ -223,7 +227,7 @@ type ERPContextValue = {
   saveWarehouse: (input: WarehouseInput, warehouseId?: string) => Promise<string>
   deleteWarehouse: (warehouseId: string) => Promise<void>
   recordPurchase: (input: PurchaseInput) => Promise<void>
-  createOrder: (input: OrderInput) => Promise<string | undefined>
+  reviewPurchaseRequest: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
   setCustomerCreditLimit: (customerId: string, creditLimit: number) => Promise<void>
   saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
@@ -548,6 +552,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     supplierPayments: source.supplierPayments ?? {},
     orderRequests: source.orderRequests ?? {},
     changeRequests: source.changeRequests ?? {},
+    purchaseRequests: source.purchaseRequests ?? {},
     auditLog: source.auditLog ?? {},
     attendance: source.attendance ?? {},
     couriers: source.couriers ?? {},
@@ -715,6 +720,31 @@ function normalizeSupplierInput(input: SupplierInput, existing?: SupplierRecord 
   }
 }
 
+/** The database sections whose records wait for the Authorizer and then the final approval. */
+type ApprovalSection = 'deposits' | 'orderRequests' | 'ledgerEntryRequests' | 'supplierPayments' | 'expenses' | 'changeRequests' | 'purchaseRequests'
+
+const APPROVAL_SECTION_LABELS: Record<ApprovalSection, { action: string; module: string; title: string }> = {
+  deposits: { action: 'deposit', module: 'customers', title: 'Deposit' },
+  orderRequests: { action: 'order_request', module: 'sales', title: 'Order' },
+  ledgerEntryRequests: { action: 'ledger_entry', module: 'customers', title: 'Ledger entry' },
+  supplierPayments: { action: 'supplier_payment', module: 'suppliers', title: 'Supplier payment' },
+  expenses: { action: 'expense', module: 'finance', title: 'Expense' },
+  changeRequests: { action: 'change', module: 'approvals', title: 'Change' },
+  purchaseRequests: { action: 'purchase', module: 'inventory', title: 'Purchase' },
+}
+
+/**
+ * `approved` applies a change straight away; only an approved change request does that, and it
+ * passes the request's own approval as `alsoWrite`, saved in the same update as the change.
+ */
+type ApplyOptions = { approved?: boolean; alsoWrite?: Record<string, unknown> }
+
+/** How long a final approval in progress holds a submission before someone else may try again. */
+const REVIEW_LOCK_MS = 2 * 60 * 1000
+
+/** Expense records carry no `updatedAt`. */
+const SECTIONS_WITHOUT_UPDATED_AT: ApprovalSection[] = ['expenses']
+
 export function ERPProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<ERPData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -849,7 +879,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return Array.from(permissions)
   }, [currentUser, data])
   const canTakeAttendance = currentPermissions.includes('attendance.edit')
-  const needsApproval = useMemo(() => changesNeedApprovalFor(data?.roles, currentUser), [currentUser, data?.roles])
   const zoneViewOnly = useMemo(() => isZoneInCharge(currentUser, toArray(data?.zones)), [currentUser, data?.zones])
 
   /** Stops a zone in charge from changing client data, whichever screen the change comes from. */
@@ -1101,7 +1130,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     title: string,
     body: string,
     level: 'info' | 'warning' | 'critical',
-    roles?: string[]
+    roles?: string[],
+    userIds?: string[]
   ) {
     const db = getDatabaseOrThrow()
     const notificationId = createId('notification')
@@ -1114,6 +1144,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         read: false,
         createdAt: new Date().toISOString(),
         roles: roles || null,
+        userIds: userIds?.length ? userIds : null,
       },
     })
   }
@@ -1274,7 +1305,26 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return computeCustomerBalance(customerId, orders, entries)
   }
 
-  async function saveCustomer(input: CustomerInput, customerId?: string) {
+  /** Added to every update that changes a dealer's ledger; see `syncCustomerDue`. */
+  function ledgerChanged(customerId: string) {
+    return { [`customers/${customerId}/ledgerRev`]: increment(1) }
+  }
+
+  /**
+   * Has the server recompute the dealer's due from a fresh read of their ledger, after a write
+   * that bumped their `ledgerRev`. The browser never saves a due itself, so two approvals for the
+   * same dealer at once cannot save a stale one. A failure leaves the write in place.
+   */
+  async function syncCustomerDue(customerId: string) {
+    try {
+      await authorizedFetch('/api/erp/recompute-due', { method: 'POST', body: { customerId } })
+    } catch (reason) {
+      console.warn(`The due of dealer ${customerId} was not recomputed:`, reason)
+    }
+  }
+
+  /** Adding or editing a dealer waits for both approvals; `approved` applies it (from an approved change request). */
+  async function saveCustomer(input: CustomerInput, customerId?: string, options: ApplyOptions = {}) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
@@ -1320,7 +1370,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer phone number is required.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('customer', existingCustomer ? 'update' : 'create', existingCustomer?.id ?? '', normalized.name, input)
       return ''
     }
@@ -1355,17 +1405,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       id,
       code: existingCustomer?.code || nextPartyCode(Object.values(data.customers), CUSTOMER_CODE_PREFIX),
       ...normalized,
-      due: dueFromLedger(id, { entries: { [openingId]: openingEntry } }),
-      ...(existingCustomer?.commitments ? { commitments: existingCustomer.commitments } : {}),
-      ...(existingCustomer?.prices ? { prices: existingCustomer.prices } : {}),
+      // A new dealer's sheet only holds the opening due; an existing dealer's due is left to the server.
+      ...(existingCustomer ? {} : { due: openingEntry?.credit ?? 0 }),
       createdAt,
       updatedAt: now,
     }
 
+    // Field by field, so the due, commitments and prices saved meanwhile are kept.
+    const openingChanged = (openingEntry?.credit ?? 0) !== (currentOpening?.credit ?? 0)
     await update(ref(db, 'erp'), {
-      [`customers/${id}`]: customer,
+      ...options.alsoWrite,
+      ...Object.fromEntries(Object.entries(customer).map(([field, value]) => [`customers/${id}/${field}`, value])),
       ...(openingEntry || currentOpening ? { [`creditLedgerEntries/${openingId}`]: openingEntry } : {}),
+      ...(existingCustomer && openingChanged ? ledgerChanged(id) : {}),
     })
+    if (existingCustomer && openingChanged) {
+      await syncCustomerDue(id)
+    }
     await writeActivity(
       existingCustomer ? 'customer_updated' : 'customer_created',
       'customers',
@@ -1375,7 +1431,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  async function deleteCustomer(customerId: string) {
+  async function deleteCustomer(customerId: string, options: ApplyOptions = {}) {
     if (!data) {
       return
     }
@@ -1390,13 +1446,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customers with purchase history cannot be deleted.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('customer', 'delete', customerId, customer.name)
       return
     }
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
+      ...options.alsoWrite,
       [`customers/${customerId}`]: null,
       [`creditLedgerEntries/${openingDueEntryId(customerId)}`]: null,
     })
@@ -1460,7 +1517,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Commitment waiting for authorization',
         `${currentUser?.name ?? 'A zone in charge'} made a commitment to ${customer.name}: ${note}. Submit it to the Chairman or reject it from the client's details.`,
         'warning',
-        ['authorizer', 'admin']
+        stageRoles('authorizer')
       )
     }
   }
@@ -1480,7 +1537,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (stage !== 'authorizer' && stage !== 'chairman') {
       throw new Error('This commitment has already been reviewed.')
     }
-    if (!canActAtStage(currentUser, stage)) {
+    if (!canActAtStage(data, currentUser, stage)) {
       throw new Error(stage === 'authorizer' ? 'Only the Authorizer can review this commitment.' : 'Only the Chairman can approve this commitment.')
     }
     // The Authorizer only reviews the clients of the zones they are assigned.
@@ -1508,7 +1565,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         'Commitment waiting for approval',
         `${reviewer} submitted a commitment to ${customer.name} for your approval: ${existing.note}`,
         'warning',
-        ['chairman', 'admin']
+        stageRoles('chairman')
       )
     }
   }
@@ -1730,7 +1787,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('depot_prices_updated', 'inventory', `Updated product prices for ${depot.name} depot.`)
   }
 
-  async function saveSupplier(input: SupplierInput, supplierId?: string) {
+  /** Adding or editing a supplier waits for both approvals; `approved` applies it (from an approved change request). */
+  async function saveSupplier(input: SupplierInput, supplierId?: string, options: ApplyOptions = {}) {
     if (!data) {
       throw new Error('ERP data not loaded yet.')
     }
@@ -1746,7 +1804,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Supplier phone number is required.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('supplier', existingSupplier ? 'update' : 'create', existingSupplier?.id ?? '', normalized.name, input)
       return ''
     }
@@ -1762,7 +1820,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
     }
 
-    await update(ref(db, 'erp/suppliers'), { [id]: supplier })
+    await update(ref(db, 'erp'), { ...options.alsoWrite, [`suppliers/${id}`]: supplier })
     await writeActivity(
       existingSupplier ? 'supplier_updated' : 'supplier_created',
       'suppliers',
@@ -1774,7 +1832,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return id
   }
 
-  async function deleteSupplier(supplierId: string) {
+  async function deleteSupplier(supplierId: string, options: ApplyOptions = {}) {
     if (!data) {
       return
     }
@@ -1790,13 +1848,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Suppliers with product or purchase history cannot be deleted.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('supplier', 'delete', supplierId, supplier.name)
       return
     }
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
+      ...options.alsoWrite,
       [`suppliers/${supplierId}`]: null,
     })
     await writeActivity('supplier_deleted', 'suppliers', `Deleted supplier ${supplier.name}.`)
@@ -1824,56 +1883,133 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('warehouse_deleted', 'warehouse', `Deleted ${warehouse.name} warehouse.`)
   }
 
+  /** A Receive purchase (stock in) waits for the Authorizer and the Chairman; stock and the supplier's balance change on final approval. */
   async function recordPurchase(input: PurchaseInput) {
-    if (!data) {
+    if (!data || !currentUser) {
       return
     }
 
-    const db = getDatabaseOrThrow()
     const product = data.products[input.productId]
     const supplier = data.suppliers[input.supplierId]
     if (!product || !supplier) {
       throw new Error('Product or supplier not found.')
     }
+    if (!(input.quantity > 0)) {
+      throw new Error('Quantity must be greater than zero.')
+    }
+    if (input.unitCost < 0) {
+      throw new Error('Unit cost cannot be negative.')
+    }
 
-    const purchaseId = createId('purchase')
-    const nextStock = product.stockQty + input.quantity
+    const id = createId('purchase_request')
     const now = new Date().toISOString()
+    const request: PurchaseRequestRecord = {
+      id,
+      productId: product.id,
+      productName: product.name,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      quantity: input.quantity,
+      unitCost: input.unitCost,
+      currency: input.currency,
+      total: input.quantity * input.unitCost,
+      date: input.date?.trim() || now,
+      status: 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/purchaseRequests'), { [id]: request })
 
-    await update(ref(db, 'erp'), {
-      [`purchases/${purchaseId}`]: {
-        id: purchaseId,
-        productId: product.id,
-        productName: product.name,
-        supplierId: supplier.id,
-        supplierName: supplier.name,
-        quantity: input.quantity,
-        unitCost: input.unitCost,
-        currency: input.currency,
-        total: input.quantity * input.unitCost,
-        status: 'received',
-        stockBefore: product.stockQty,
-        stockAfter: nextStock,
-        createdAt: now,
-      },
-      [`products/${product.id}/stockQty`]: nextStock,
-      [`products/${product.id}/purchasePrice`]: input.unitCost,
-      [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
-      [`products/${product.id}/updatedAt`]: now,
-    })
-
-    notifyTransaction('purchase', purchaseId)
-    await writeActivity('purchase_received', 'inventory', `Restocked ${product.name} by ${input.quantity} units.`)
+    await writeActivity('purchase_submitted', 'inventory', `Submitted a purchase of ${input.quantity} ${product.name} from ${supplier.name} for approval.`)
     await writeNotification(
-      'Purchase recorded',
-      `Restocked ${product.name} by ${input.quantity} units from ${supplier.name} by ${currentUser?.name ?? 'Admin'}.`,
+      'Purchase awaiting the Authorizer',
+      `${currentUser.name} entered ${input.quantity} units of ${product.name} received from ${supplier.name}.`,
       'info',
-      ['admin', 'store_manager', 'accountant']
+      [...stageRoles('authorizer'), 'store_manager']
     )
   }
 
-  /** `seller` books the order under someone else, e.g. the staff member whose order request an admin approved. */
-  async function createOrder(input: OrderInput, seller?: { id: string; name: string }) {
+  async function reviewPurchaseRequest(requestId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+
+    const request = data.purchaseRequests[requestId]
+    if (!request) {
+      throw new Error('Purchase not found.')
+    }
+    const product = data.products[request.productId]
+    if (decision === 'approve' && request.authorizedAt && (!product || !data.suppliers[request.supplierId])) {
+      throw new Error('The product or supplier no longer exists. Reject the purchase instead.')
+    }
+
+    let purchaseId = ''
+    const outcome = await reviewAtStage({
+      section: 'purchaseRequests',
+      id: requestId,
+      record: request,
+      noun: 'purchase',
+      what: `the purchase of ${request.quantity} ${request.productName} from ${request.supplierName}`,
+      decision,
+      // The stock comes in, and the purchase lands on the supplier's sheet on its received date.
+      post: async (approval) => {
+        purchaseId = createId('purchase')
+        const nextStock = product.stockQty + request.quantity
+        await update(ref(getDatabaseOrThrow(), 'erp'), {
+          ...approval,
+          [`purchases/${purchaseId}`]: {
+            id: purchaseId,
+            productId: request.productId,
+            productName: request.productName,
+            supplierId: request.supplierId,
+            supplierName: request.supplierName,
+            quantity: request.quantity,
+            unitCost: request.unitCost,
+            currency: request.currency,
+            total: request.total,
+            status: 'received',
+            stockBefore: product.stockQty,
+            stockAfter: nextStock,
+            requestId,
+            createdAt: request.date,
+          },
+          [`purchaseRequests/${requestId}/purchaseId`]: purchaseId,
+          // Counted on the server, so stock moved meanwhile is not overwritten.
+          [`products/${product.id}/stockQty`]: increment(request.quantity),
+          [`products/${product.id}/purchasePrice`]: request.unitCost,
+          [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
+          [`products/${product.id}/updatedAt`]: new Date().toISOString(),
+        })
+      },
+    })
+    if (outcome === 'authorized') return
+
+    if (purchaseId) notifyTransaction('purchase', purchaseId)
+    await writeAuditEntry({
+      kind: 'purchase',
+      refId: purchaseId || requestId,
+      decision: outcome,
+      party: request.supplierName,
+      summary: [`${request.productName} × ${request.quantity}`, request.authorizedByName && `Authorized by ${request.authorizedByName}`].filter(Boolean).join(' · '),
+      amount: request.total,
+      submittedByName: request.submittedByName,
+      submittedByRole: roleNameOf(request.submittedById),
+      submittedAt: request.createdAt,
+    })
+  }
+
+  /**
+   * Posts an order: stock, the dealer's sheet and due. Only the final approval of an order request
+   * calls this; `seller` books it under the staff member who submitted the request.
+   */
+  async function createOrder(
+    input: OrderInput,
+    seller?: { id: string; name: string },
+    /** More writes for the same update, given the new order's id (the request's approval). */
+    alsoWrite?: (orderId: string) => Record<string, unknown>
+  ) {
     if (!data || !currentUser) {
       return
     }
@@ -1966,19 +2102,22 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         items: orderItems,
     }
     const updates: Record<string, unknown> = {
+      ...alsoWrite?.(orderId),
       [`orders/${orderId}`]: order,
-      [`customers/${customer.id}/due`]: dueFromLedger(customer.id, { orders: { [orderId]: order } }),
+      ...ledgerChanged(customer.id),
     }
 
     requestedByProduct.forEach((quantity, productId) => {
       const product = data.products[productId]
       const nextStock = product.stockQty - quantity
-      updates[`products/${product.id}/stockQty`] = nextStock
+      // Counted on the server, so two orders approved at once both come off the stock.
+      updates[`products/${product.id}/stockQty`] = increment(-quantity)
       updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
       updates[`products/${product.id}/updatedAt`] = now
     })
 
     await update(ref(db, 'erp'), updates)
+    await syncCustomerDue(customer.id)
     notifyTransaction('order', orderId)
 
     await writeActivity('order_created', 'sales', `Created order for ${customer.name} with ${orderItems.length} product line(s).`)
@@ -2225,9 +2364,25 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const label = getOrderStatus(data.settings, status).label
+    const previousLabel = getOrderStatus(data.settings, order.status).label
     const billNumber = order.billNumber || orderId
+    if (order.status === status) {
+      return
+    }
     await update(ref(db, `erp/orders/${orderId}`), { status })
-    await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} to ${label}.`)
+    await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} from ${previousLabel} to ${label}.`)
+    // Status changes need no approval, but each one is on the Daily Audit for the Chairman to see.
+    await writeAuditEntry({
+      kind: 'order_status',
+      refId: orderId,
+      decision: 'changed',
+      party: order.customerName,
+      summary: `${billNumber}: ${previousLabel} → ${label}`,
+      amount: order.total,
+      submittedByName: currentUser?.name ?? '',
+      submittedByRole: currentUser ? roleNameOf(currentUser.id) : '',
+      submittedAt: new Date().toISOString(),
+    })
     await writeNotification(
       'Order status updated',
       `Order ${billNumber} status was updated to "${label}" by ${currentUser?.name ?? 'Admin'}.`,
@@ -2553,7 +2708,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await update(ref(db), updates)
   }
 
-  async function saveExpense(input: ExpenseInput, expenseId?: string) {
+  /** Adding or editing an expense on the finance page waits for both approvals; `approved` applies it. */
+  async function saveExpense(input: ExpenseInput, expenseId?: string, options: ApplyOptions & { submitter?: { id: string; name: string } } = {}) {
     if (!data || !currentUser) {
       return
     }
@@ -2568,7 +2724,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const existingExpense = expenseId ? data.expenses[expenseId] : null
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('expense', existingExpense ? 'update' : 'create', existingExpense?.id ?? '', category, input)
       return
     }
@@ -2582,12 +2738,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       amount: input.amount,
       note: input.note?.trim() ?? '',
       date: input.date?.trim() || now,
-      createdBy: existingExpense?.createdBy ?? currentUser.id,
-      createdByName: existingExpense?.createdByName ?? currentUser.name,
+      createdBy: existingExpense?.createdBy ?? options.submitter?.id ?? currentUser.id,
+      createdByName: existingExpense?.createdByName ?? options.submitter?.name ?? currentUser.name,
       createdAt: existingExpense?.createdAt ?? now,
     }
 
-    await update(ref(db, 'erp/expenses'), { [id]: expense })
+    await update(ref(db, 'erp'), { ...options.alsoWrite, [`expenses/${id}`]: expense })
     await writeActivity(
       existingExpense ? 'expense_updated' : 'expense_created',
       'finance',
@@ -2693,10 +2849,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const label = taType ? `${category} (${taType})` : category
     await writeActivity('expense_submitted', 'finance', `Submitted a ${amount.toLocaleString()} ${label} expense for approval.`)
     await writeNotification(
-      'Expense awaiting approval',
+      'Expense awaiting the Authorizer',
       `${currentUser.name} submitted a ${amount.toLocaleString()} ${label} expense (by ${expenseBy}).`,
       'info',
-      ['admin', 'accountant']
+      [...stageRoles('authorizer'), 'accountant']
     )
   }
 
@@ -2704,37 +2860,28 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!data || !currentUser) {
       return
     }
-    if (!userRoleIds(currentUser).includes('admin')) {
-      throw new Error('Only an admin can approve expenses.')
-    }
 
     const expense = data.expenses[expenseId]
     if (!expense) {
       throw new Error('Expense not found.')
     }
-    if (expense.status !== 'pending') {
-      throw new Error('This expense has already been reviewed.')
-    }
 
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    await update(ref(db, `erp/expenses/${expenseId}`), {
-      status: decision === 'approve' ? 'approved' : 'rejected',
-      reviewedById: currentUser.id,
-      reviewedByName: currentUser.name,
-      reviewedAt: now,
+    const outcome = await reviewAtStage({
+      section: 'expenses',
+      id: expenseId,
+      record: expense,
+      noun: 'expense',
+      what: `the ${expense.amount.toLocaleString()} ${expense.category} expense`,
+      decision,
     })
-    await writeActivity(
-      decision === 'approve' ? 'expense_approved' : 'expense_rejected',
-      'finance',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${expense.amount.toLocaleString()} ${expense.category} expense.`
-    )
+    if (outcome === 'authorized') return
+
     await writeAuditEntry({
       kind: 'expense',
       refId: expenseId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: expense.expenseBy || expense.createdByName,
-      summary: [expense.category, expense.note].filter(Boolean).join(' · '),
+      summary: [expense.category, expense.note, expense.authorizedByName && `Authorized by ${expense.authorizedByName}`].filter(Boolean).join(' · '),
       amount: expense.amount,
       submittedByName: expense.createdByName,
       submittedByRole: roleNameOf(expense.createdBy),
@@ -2775,7 +2922,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('attendance_marked', 'employees', `Took attendance for ${Object.keys(updates).length} employee(s) on ${day}.`)
   }
 
-  async function deleteExpense(expenseId: string) {
+  async function deleteExpense(expenseId: string, options: ApplyOptions = {}) {
     if (!data) {
       return
     }
@@ -2785,13 +2932,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Expense not found.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('expense', 'delete', expenseId, expense.category)
       return
     }
 
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), { [`expenses/${expenseId}`]: null })
+    await update(ref(db, 'erp'), { ...options.alsoWrite, [`expenses/${expenseId}`]: null })
     await writeActivity('expense_deleted', 'finance', `Deleted ${expense.category} expense entry.`)
   }
 
@@ -2906,7 +3053,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
-  async function recordCreditLedgerEntry(input: CreditLedgerEntryInput) {
+  /**
+   * A new credit sheet line waits for the Authorizer and the Chairman as a ledger entry request.
+   * `approved` writes it straight away; only an approved change request does that.
+   */
+  async function recordCreditLedgerEntry(input: CreditLedgerEntryInput, options: ApplyOptions = {}) {
     if (!data) {
       return
     }
@@ -2916,14 +3067,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Customer not found.')
     }
 
-    // A zone in charge's entry waits for their zone's Authorizer, then the Chairman.
-    if (zoneViewOnly) {
+    if (!options.approved) {
       await submitLedgerEntryRequest(customer, input)
-      return
-    }
-
-    if (needsApproval) {
-      await requestChange('credit_entry', 'create', '', customer.name, input)
       return
     }
 
@@ -2944,9 +3089,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       createdAt: now,
     }
     await update(ref(db, 'erp'), {
+      ...options.alsoWrite,
       [`creditLedgerEntries/${entryId}`]: entry,
-      [`customers/${customer.id}/due`]: dueFromLedger(customer.id, { entries: { [entryId]: entry } }),
+      ...ledgerChanged(customer.id),
     })
+    await syncCustomerDue(customer.id)
 
     notifyTransaction('ledger_entry', entryId)
     await writeActivity('credit_entry_recorded', 'customers', `Recorded a credit sheet entry for ${customer.name}.`)
@@ -2997,7 +3144,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Ledger entry awaiting the Authorizer',
       `${currentUser.name} added a ledger entry for ${customer.name}: ${particulars} (${debit > 0 ? 'debit' : 'credit'} ${amount}).`,
       'info',
-      ['authorizer', 'admin']
+      stageRoles('authorizer')
     )
   }
 
@@ -3011,57 +3158,51 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!request) {
       throw new Error('Ledger entry not found.')
     }
-    const stage = requireApprovalStage(request, 'ledger entry')
-    const amount = Math.max(request.debit, request.credit)
-    if (stage === 'authorizer' && decision === 'approve') {
-      await recordAuthorization('ledgerEntryRequests', requestId, `the ${amount.toLocaleString()} ledger entry for ${request.customerName}`)
-      return
-    }
-
     const customer = data.customers[request.customerId]
-    if (decision === 'approve' && !customer) {
+    if (decision === 'approve' && request.authorizedAt && !customer) {
       throw new Error('This client no longer exists. Reject the entry instead.')
     }
 
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    const entryId = decision === 'approve' ? createId('credit_entry') : ''
-    const updates: Record<string, unknown> = {
-      [`ledgerEntryRequests/${requestId}/status`]: decision === 'approve' ? 'approved' : 'rejected',
-      [`ledgerEntryRequests/${requestId}/reviewedById`]: currentUser.id,
-      [`ledgerEntryRequests/${requestId}/reviewedByName`]: currentUser.name,
-      [`ledgerEntryRequests/${requestId}/reviewedAt`]: now,
-      [`ledgerEntryRequests/${requestId}/updatedAt`]: now,
-    }
-    if (entryId && customer) {
-      const entry: CreditLedgerEntryRecord = {
-        id: entryId,
-        customerId: customer.id,
-        customerName: customer.name,
-        date: request.date,
-        particulars: request.particulars,
-        qty: request.qty,
-        unitPrice: request.unitPrice,
-        debit: request.debit,
-        credit: request.credit,
-        createdAt: now,
-      }
-      updates[`ledgerEntryRequests/${requestId}/entryId`] = entryId
-      updates[`creditLedgerEntries/${entryId}`] = entry
-      updates[`customers/${customer.id}/due`] = dueFromLedger(customer.id, { entries: { [entryId]: entry } })
-    }
+    const amount = Math.max(request.debit, request.credit)
+    let entryId = ''
+    const outcome = await reviewAtStage({
+      section: 'ledgerEntryRequests',
+      id: requestId,
+      record: request,
+      noun: 'ledger entry',
+      what: `the ${amount.toLocaleString()} ledger entry for ${request.customerName}`,
+      decision,
+      customerId: request.customerId,
+      post: async (approval) => {
+        entryId = createId('credit_entry')
+        const entry: CreditLedgerEntryRecord = {
+          id: entryId,
+          customerId: customer.id,
+          customerName: customer.name,
+          date: request.date,
+          particulars: request.particulars,
+          qty: request.qty,
+          unitPrice: request.unitPrice,
+          debit: request.debit,
+          credit: request.credit,
+          createdAt: new Date().toISOString(),
+        }
+        await update(ref(getDatabaseOrThrow(), 'erp'), {
+          ...approval,
+          [`ledgerEntryRequests/${requestId}/entryId`]: entryId,
+          [`creditLedgerEntries/${entryId}`]: entry,
+          ...ledgerChanged(customer.id),
+        })
+        await syncCustomerDue(customer.id)
+      },
+    })
+    if (outcome === 'authorized') return
 
-    await update(ref(db, 'erp'), updates)
     if (entryId) notifyTransaction('ledger_entry', entryId)
-    await writeActivity(
-      decision === 'approve' ? 'ledger_entry_approved' : 'ledger_entry_rejected',
-      'customers',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${amount.toLocaleString()} ledger entry for ${request.customerName}.`
-    )
     await writeAuditEntry({
       kind: 'change',
       refId: requestId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: request.customerName,
       summary: [`Ledger entry: ${request.particulars}`, request.authorizedByName && `Authorized by ${request.authorizedByName}`].filter(Boolean).join(' · '),
       amount,
@@ -3069,14 +3210,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       submittedByRole: roleNameOf(request.submittedById),
       submittedAt: request.createdAt,
     })
-    if (decision === 'reject') {
-      await writeNotification(
-        'Ledger entry rejected',
-        `${currentUser.name} rejected the ledger entry for ${request.customerName}: ${request.particulars}.`,
-        'warning',
-        ['admin']
-      )
-    }
   }
 
   async function submitDeposit(input: DepositInput) {
@@ -3122,7 +3255,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'Deposit awaiting the Authorizer',
       `${currentUser.name} submitted a ${input.amount.toLocaleString()} deposit (${input.method.trim()}) for ${customer.name}.`,
       'info',
-      ['authorizer', 'admin', 'accountant']
+      [...stageRoles('authorizer'), 'accountant']
     )
   }
 
@@ -3135,55 +3268,53 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!deposit) {
       throw new Error('Deposit not found.')
     }
-    const stage = requireApprovalStage(deposit, 'deposit')
-    if (stage === 'authorizer' && decision === 'approve') {
-      await recordAuthorization('deposits', depositId, `the ${deposit.amount.toLocaleString()} deposit for ${deposit.customerName}`)
-      return
-    }
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    const updates: Record<string, unknown> = {
-      [`deposits/${depositId}/status`]: decision === 'approve' ? 'approved' : 'rejected',
-      [`deposits/${depositId}/reviewedById`]: currentUser.id,
-      [`deposits/${depositId}/reviewedByName`]: currentUser.name,
-      [`deposits/${depositId}/reviewedAt`]: now,
-      [`deposits/${depositId}/updatedAt`]: now,
-    }
 
     const customer = data.customers[deposit.customerId]
-    // The approved deposit lands on the dealer's sheet as a ledger entry: money received is a debit,
-    // which lowers the balance, the same side as hand-entered deposits.
-    const entryId = decision === 'approve' && customer ? createId('credit_entry') : ''
-    if (entryId && customer) {
-      updates[`deposits/${depositId}/entryId`] = entryId
-      const entry: CreditLedgerEntryRecord = {
-        id: entryId,
-        customerId: customer.id,
-        customerName: customer.name,
-        date: deposit.date,
-        particulars: [`Deposit (${deposit.method})`, deposit.note].filter(Boolean).join(' — '),
-        qty: 0,
-        unitPrice: 0,
-        debit: deposit.amount,
-        credit: 0,
-        createdAt: now,
-      }
-      updates[`creditLedgerEntries/${entryId}`] = entry
-      updates[`customers/${customer.id}/due`] = dueFromLedger(customer.id, { entries: { [entryId]: entry } })
-    }
+    let entryId = ''
+    const outcome = await reviewAtStage({
+      section: 'deposits',
+      id: depositId,
+      record: deposit,
+      noun: 'deposit',
+      what: `the ${deposit.amount.toLocaleString()} deposit for ${deposit.customerName}`,
+      decision,
+      customerId: deposit.customerId,
+      // The approved deposit lands on the dealer's sheet on its own date as a ledger entry: money
+      // received is a debit, which lowers the balance, the same side as hand-entered deposits.
+      post: async (approval) => {
+        if (!customer) {
+          await update(ref(getDatabaseOrThrow(), 'erp'), approval)
+          return
+        }
+        entryId = createId('credit_entry')
+        const entry: CreditLedgerEntryRecord = {
+          id: entryId,
+          customerId: customer.id,
+          customerName: customer.name,
+          date: deposit.date,
+          particulars: [`Deposit (${deposit.method})`, deposit.note].filter(Boolean).join(' — '),
+          qty: 0,
+          unitPrice: 0,
+          debit: deposit.amount,
+          credit: 0,
+          createdAt: new Date().toISOString(),
+        }
+        await update(ref(getDatabaseOrThrow(), 'erp'), {
+          ...approval,
+          [`deposits/${depositId}/entryId`]: entryId,
+          [`creditLedgerEntries/${entryId}`]: entry,
+          ...ledgerChanged(customer.id),
+        })
+        await syncCustomerDue(customer.id)
+      },
+    })
+    if (outcome === 'authorized') return
 
-    await update(ref(db, 'erp'), updates)
     if (entryId) notifyTransaction('ledger_entry', entryId)
-    await writeActivity(
-      decision === 'approve' ? 'deposit_approved' : 'deposit_rejected',
-      'customers',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${deposit.amount.toLocaleString()} deposit for ${deposit.customerName}.`
-    )
     await writeAuditEntry({
       kind: 'deposit',
       refId: depositId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: deposit.customerName,
       summary: [deposit.method, deposit.note, deposit.authorizedByName && `Authorized by ${deposit.authorizedByName}`].filter(Boolean).join(' · '),
       amount: deposit.amount,
@@ -3591,50 +3722,47 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await writeActivity('supplier_payment_submitted', 'suppliers', `Submitted a ${input.amount.toLocaleString()} payment to ${supplier.name}.`)
     await writeNotification(
-      'Supplier payment awaiting approval',
+      'Supplier payment awaiting the Authorizer',
       `${currentUser.name} submitted a ${input.amount.toLocaleString()} ${isBank ? 'bank' : 'cash'} payment to ${supplier.name}.`,
       'info',
-      ['admin', 'accountant']
+      [...stageRoles('authorizer'), 'accountant']
     )
   }
 
+  /** The Authorizer accepts it, then the final approval puts it on the supplier's sheet on its own date. */
   async function reviewSupplierPayment(paymentId: string, decision: 'approve' | 'reject') {
     if (!data || !currentUser) {
       return
-    }
-    if (!userRoleIds(currentUser).includes('admin')) {
-      throw new Error('Only an admin can approve supplier payments.')
     }
 
     const payment = data.supplierPayments[paymentId]
     if (!payment) {
       throw new Error('Payment not found.')
     }
-    if (payment.status !== 'pending') {
-      throw new Error('This payment has already been reviewed.')
-    }
 
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    await update(ref(db, `erp/supplierPayments/${paymentId}`), {
-      status: decision === 'approve' ? 'approved' : 'rejected',
-      reviewedById: currentUser.id,
-      reviewedByName: currentUser.name,
-      reviewedAt: now,
-      updatedAt: now,
+    const outcome = await reviewAtStage({
+      section: 'supplierPayments',
+      id: paymentId,
+      record: payment,
+      noun: 'payment',
+      what: `the ${payment.amount.toLocaleString()} payment to ${payment.supplierName}`,
+      decision,
     })
-    if (decision === 'approve') notifyTransaction('supplier_payment', paymentId)
-    await writeActivity(
-      decision === 'approve' ? 'supplier_payment_approved' : 'supplier_payment_rejected',
-      'suppliers',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${payment.amount.toLocaleString()} payment to ${payment.supplierName}.`
-    )
+    if (outcome === 'authorized') return
+
+    if (outcome === 'approved') notifyTransaction('supplier_payment', paymentId)
     await writeAuditEntry({
       kind: 'supplier_payment',
       refId: paymentId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: payment.supplierName,
-      summary: [payment.method === 'bank' ? `Bank${payment.sendingType ? ` (${payment.sendingType})` : ''}` : 'Cash', payment.purpose].filter(Boolean).join(' · '),
+      summary: [
+        payment.method === 'bank' ? `Bank${payment.sendingType ? ` (${payment.sendingType})` : ''}` : 'Cash',
+        payment.purpose,
+        payment.authorizedByName && `Authorized by ${payment.authorizedByName}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       amount: payment.amount,
       submittedByName: payment.submittedByName,
       submittedByRole: roleNameOf(payment.submittedById),
@@ -3676,7 +3804,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
   }
 
-  /** Files a change that waits for an admin, for users whose role needs approval. */
+  /** Files a create, edit or delete that waits for the Authorizer and then the final approval. */
   async function requestChange(
     kind: ChangeRequestKind,
     action: ChangeRequestAction,
@@ -3709,13 +3837,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const what = `${CHANGE_ACTION_LABELS[action]} ${CHANGE_KIND_LABELS[kind]}`
     await update(ref(db, 'erp/changeRequests'), { [id]: request })
     await writeActivity('change_requested', 'approvals', `Asked to ${what} ${targetName}.`)
-    await writeNotification('Change awaiting approval', `${currentUser.name} asked to ${what} ${targetName}.`, 'info', ['admin'])
+    await writeNotification('Change awaiting the Authorizer', `${currentUser.name} asked to ${what} ${targetName}.`, 'info', stageRoles('authorizer'))
   }
 
-  /** Approving applies the requested change as the admin; rejecting leaves everything as it was. */
+  /** The final approval applies the requested change as it was asked; rejecting leaves everything as it was. */
   async function reviewChangeRequest(requestId: string, decision: 'approve' | 'reject') {
-    const reviewer = requireAdminUser('approve changes')
-    if (!data) {
+    if (!data || !currentUser) {
       return
     }
 
@@ -3723,74 +3850,84 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!request) {
       throw new Error('Change request not found.')
     }
-    if (request.status !== 'pending') {
-      throw new Error('This change has already been reviewed.')
-    }
 
     const what = `${CHANGE_ACTION_LABELS[request.action]} ${CHANGE_KIND_LABELS[request.kind]}`
     const input = request.input
-    let amount = 0
-    if (decision === 'approve') {
-      const targets: Record<ChangeRequestKind, Record<string, unknown>> = {
-        customer: data.customers,
-        supplier: data.suppliers,
-        credit_entry: data.creditLedgerEntries,
-        expense: data.expenses,
-      }
-      if (request.action !== 'create' && !targets[request.kind][request.targetId]) {
-        throw new Error(`This ${CHANGE_KIND_LABELS[request.kind]} no longer exists. Reject the change instead.`)
-      }
-
-      // These apply the change directly, because an admin's changes never wait for approval.
-      if (request.kind === 'customer') {
-        if (request.action === 'delete') await deleteCustomer(request.targetId)
-        else await saveCustomer(input as CustomerInput, request.targetId || undefined)
-      } else if (request.kind === 'supplier') {
-        if (request.action === 'delete') await deleteSupplier(request.targetId)
-        else await saveSupplier(input as SupplierInput, request.targetId || undefined)
-      } else if (request.kind === 'credit_entry') {
-        if (request.action === 'delete') {
-          const entry = data.creditLedgerEntries[request.targetId]
-          amount = Math.max(entry.debit, entry.credit)
-          await deleteCreditLedgerEntry(request.targetId)
-        } else {
-          const entry = input as CreditLedgerEntryInput
-          amount = Math.max(entry.debit ?? 0, entry.credit ?? 0)
-          await recordCreditLedgerEntry(entry)
-        }
-      } else if (request.action === 'delete') {
-        amount = data.expenses[request.targetId].amount
-        await deleteExpense(request.targetId)
-      } else {
-        amount = (input as ExpenseInput).amount
-        await saveExpense(input as ExpenseInput, request.targetId || undefined)
-      }
+    const targets: Record<ChangeRequestKind, Record<string, unknown>> = {
+      customer: data.customers,
+      supplier: data.suppliers,
+      credit_entry: data.creditLedgerEntries,
+      expense: data.expenses,
+    }
+    if (decision === 'approve' && request.authorizedAt && request.action !== 'create' && !targets[request.kind][request.targetId]) {
+      throw new Error(`This ${CHANGE_KIND_LABELS[request.kind]} no longer exists. Reject the change instead.`)
     }
 
-    const now = new Date().toISOString()
-    await update(ref(getDatabaseOrThrow(), `erp/changeRequests/${requestId}`), {
-      status: decision === 'approve' ? 'approved' : 'rejected',
-      reviewedById: reviewer.id,
-      reviewedByName: reviewer.name,
-      reviewedAt: now,
-      updatedAt: now,
+    // A dealer's change goes to an Authorizer of the dealer's zone.
+    const customerId =
+      request.kind === 'customer'
+        ? request.targetId || undefined
+        : request.kind === 'credit_entry'
+          ? request.action === 'delete'
+            ? data.creditLedgerEntries[request.targetId]?.customerId
+            : (input as CreditLedgerEntryInput | undefined)?.customerId
+          : undefined
+
+    let amount = 0
+    if (request.kind === 'credit_entry') {
+      const entry = request.action === 'delete' ? data.creditLedgerEntries[request.targetId] : (input as CreditLedgerEntryInput | undefined)
+      amount = Math.max(entry?.debit ?? 0, entry?.credit ?? 0)
+    } else if (request.kind === 'expense') {
+      amount = request.action === 'delete' ? data.expenses[request.targetId]?.amount ?? 0 : (input as ExpenseInput | undefined)?.amount ?? 0
+    }
+
+    const outcome = await reviewAtStage({
+      section: 'changeRequests',
+      id: requestId,
+      record: request,
+      noun: 'change',
+      what: `${request.submittedByName}'s request to ${what} ${request.targetName}`,
+      decision,
+      customerId,
+      post: async (approval) => {
+        const approved = { approved: true, alsoWrite: approval }
+        if (request.kind === 'customer') {
+          if (request.action === 'delete') await deleteCustomer(request.targetId, approved)
+          else await saveCustomer(input as CustomerInput, request.targetId || undefined, approved)
+        } else if (request.kind === 'supplier') {
+          if (request.action === 'delete') await deleteSupplier(request.targetId, approved)
+          else await saveSupplier(input as SupplierInput, request.targetId || undefined, approved)
+        } else if (request.kind === 'credit_entry') {
+          if (request.action === 'delete') await deleteCreditLedgerEntry(request.targetId, approved)
+          else await recordCreditLedgerEntry(input as CreditLedgerEntryInput, approved)
+        } else if (request.action === 'delete') {
+          await deleteExpense(request.targetId, approved)
+        } else {
+          await saveExpense(input as ExpenseInput, request.targetId || undefined, {
+            ...approved,
+            submitter: { id: request.submittedById, name: request.submittedByName },
+          })
+        }
+      },
     })
-    await writeActivity(
-      decision === 'approve' ? 'change_approved' : 'change_rejected',
-      'approvals',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} ${request.submittedByName}'s request to ${what} ${request.targetName}.`
-    )
+    if (outcome === 'authorized') return
+
     await writeAuditEntry({
       kind: 'change',
       refId: requestId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: request.targetName,
-      summary: `${what[0].toUpperCase()}${what.slice(1)}`,
+      summary: [`${what[0].toUpperCase()}${what.slice(1)}`, request.authorizedByName && `Authorized by ${request.authorizedByName}`].filter(Boolean).join(' · '),
       amount,
       submittedByName: request.submittedByName,
       submittedByRole: roleNameOf(request.submittedById),
       submittedAt: request.createdAt,
     })
+  }
+
+  /** An edit after the Authorizer accepted a submission sends it back to them, so the final approval never sees unchecked changes. */
+  function authorizationReset(record: { authorizedAt?: string }) {
+    return record.authorizedAt ? { authorizedById: null, authorizedByName: null, authorizedAt: null } : {}
   }
 
   function requireAdminUser(action: string) {
@@ -3801,10 +3938,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   }
 
   /**
-   * The stage a deposit or order-form order is at, once the signed-in user is allowed to act on
-   * it there: the Authorizer of the dealer's zone first, then the Chairman (an admin can do either).
+   * The stage a submission is at, once the signed-in user is allowed to act on it there: someone
+   * with the authorize permission first (for a dealer's item, an Authorizer of the dealer's zone),
+   * then someone with the final-approval permission. Nobody reviews their own submission, and the
+   * final approval has to come from someone other than the Authorizer.
    */
-  function requireApprovalStage(record: { status: string; authorizedAt?: string; customerId: string }, noun: string) {
+  function requireApprovalStage(record: { status?: string; authorizedAt?: string } & ApprovalParticipants, noun: string, customerId?: string) {
     if (!data || !currentUser) {
       throw new Error('ERP data not loaded yet.')
     }
@@ -3812,13 +3951,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!stage) {
       throw new Error(`This ${noun} has already been reviewed.`)
     }
-    if (!canActAtStage(currentUser, stage)) {
-      throw new Error(stage === 'authorizer' ? `This ${noun} is waiting for the Authorizer.` : `This ${noun} is waiting for the Chairman's final approval.`)
+    const blocked = approvalBlockReason(data, currentUser, stage, record)
+    if (blocked) {
+      throw new Error(blocked)
     }
-    if (stage === 'authorizer' && !userRoleIds(currentUser).includes('admin')) {
+    if (stage === 'authorizer' && customerId && !userRoleIds(currentUser).includes('admin')) {
       const zones = toArray(data.zones)
       const scope = accessScopeFor(currentUser, zones, effectiveRole(data.roles, currentUser), toArray(data.users), toArray(data.depots))
-      const customer = data.customers[record.customerId]
+      const customer = data.customers[customerId]
       if (scope && (!customer || !customerInScope(customer, zones, scope))) {
         throw new Error(`This ${noun} is from a zone you do not authorize.`)
       }
@@ -3826,23 +3966,101 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return stage
   }
 
-  /** The Authorizer accepts a deposit or order; it then waits for the Chairman. */
-  async function recordAuthorization(section: 'deposits' | 'orderRequests' | 'ledgerEntryRequests', id: string, what: string) {
-    if (!currentUser) return
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    await update(ref(db, `erp/${section}/${id}`), {
-      authorizedById: currentUser.id,
-      authorizedByName: currentUser.name,
-      authorizedAt: now,
-      updatedAt: now,
+  /** Role ids that act at the stage, for notifications. */
+  function stageRoles(stage: ApprovalStage) {
+    return rolesForStage(data?.roles, stage)
+  }
+
+  /**
+   * Moves a submission past the stage it was read at, in a transaction: if someone else acted on
+   * it in the meantime nothing is written, so two reviewers at once can never both pass it (and
+   * post it twice).
+   */
+  async function claimStage(section: ApprovalSection, id: string, stage: ApprovalStage, changes: Record<string, unknown>) {
+    const result = await runTransaction(ref(getDatabaseOrThrow(), `erp/${section}/${id}`), (current: { status?: string; authorizedAt?: string; reviewLock?: { at: string } } | null) => {
+      if (!current) return current
+      if (approvalStage(current) !== stage) return undefined
+      // A final approval in progress elsewhere holds the record until it posts (or the lock goes stale).
+      if (current.reviewLock && Date.now() - Date.parse(current.reviewLock.at) < REVIEW_LOCK_MS) return undefined
+      return { ...current, ...changes }
     })
-    await writeActivity(
-      section === 'deposits' ? 'deposit_authorized' : section === 'ledgerEntryRequests' ? 'ledger_entry_authorized' : 'order_request_authorized',
-      section === 'orderRequests' ? 'sales' : 'customers',
-      `Authorized ${what}; sent to the Chairman for final approval.`
-    )
-    await writeNotification('Awaiting Chairman approval', `${currentUser.name} authorized ${what}.`, 'info', ['chairman', 'admin'])
+    if (!result.committed || !result.snapshot.exists()) {
+      throw new Error('Someone else has just reviewed this. Check where it stands now.')
+    }
+  }
+
+  /**
+   * One review of a submission. Approving at the Authorizer stage sends it to the final approver;
+   * the final approval runs `post`, which writes it to the sheets, balances and stock together with
+   * its approved status. Rejecting at either stage changes nothing else and tells the submitter.
+   */
+  async function reviewAtStage<T extends { status?: string; authorizedAt?: string } & ApprovalParticipants>(options: {
+    section: ApprovalSection
+    id: string
+    record: T
+    noun: string
+    /** "the 5,000 deposit for Dealer", for activity and notifications. */
+    what: string
+    decision: 'approve' | 'reject'
+    customerId?: string
+    /**
+     * Writes the approved submission to the sheets, balances and stock. It must save `approval`
+     * (the submission's approved status) in the same update, so both land together or not at all.
+     */
+    post?: (approval: Record<string, unknown>) => Promise<void>
+  }): Promise<'authorized' | 'approved' | 'rejected'> {
+    const { section, id, record, noun, what, decision, customerId, post } = options
+    if (!currentUser) {
+      throw new Error('You need to log in first.')
+    }
+    const stage = requireApprovalStage(record, noun, customerId)
+    const now = new Date().toISOString()
+    const stamp = SECTIONS_WITHOUT_UPDATED_AT.includes(section) ? {} : { updatedAt: now }
+    const label = APPROVAL_SECTION_LABELS[section]
+    const submitterId = record.submittedById || record.createdBy || ''
+
+    if (stage === 'authorizer' && decision === 'approve') {
+      await claimStage(section, id, stage, { authorizedById: currentUser.id, authorizedByName: currentUser.name, authorizedAt: now, ...stamp })
+      await writeActivity(`${label.action}_authorized`, label.module, `Authorized ${what}; sent for final approval.`)
+      await writeNotification('Awaiting final approval', `${currentUser.name} authorized ${what}.`, 'info', stageRoles('chairman'))
+      return 'authorized'
+    }
+
+    const reviewed = { reviewedById: currentUser.id, reviewedByName: currentUser.name, reviewedAt: now, ...stamp }
+    if (decision === 'reject') {
+      await claimStage(section, id, stage, { status: 'rejected', ...reviewed })
+      await writeActivity(`${label.action}_rejected`, label.module, `Rejected ${what}.`)
+      await writeNotification(
+        `${label.title} rejected`,
+        `${currentUser.name} rejected ${what}${stage === 'authorizer' ? '' : ' at final approval'}.`,
+        'warning',
+        undefined,
+        submitterId ? [submitterId] : undefined
+      )
+      return 'rejected'
+    }
+
+    // Lock it while posting, then write the approval in the same update as the posting, so it is
+    // never approved without being posted (or posted twice).
+    await claimStage(section, id, stage, { reviewLock: { by: currentUser.id, at: now } })
+    const approval: Record<string, unknown> = {
+      [`${section}/${id}/status`]: 'approved',
+      [`${section}/${id}/reviewLock`]: null,
+      ...Object.fromEntries(Object.entries(reviewed).map(([field, value]) => [`${section}/${id}/${field}`, value])),
+    }
+    try {
+      if (post) await post(approval)
+      else await update(ref(getDatabaseOrThrow(), 'erp'), approval)
+    } catch (reason) {
+      // Nothing was posted, so it is free for the final approval again.
+      await update(ref(getDatabaseOrThrow(), `erp/${section}/${id}`), { reviewLock: null })
+      throw reason
+    }
+    await writeActivity(`${label.action}_approved`, label.module, `Approved ${what}.`)
+    if (submitterId) {
+      await writeNotification(`${label.title} approved`, `${currentUser.name} gave final approval to ${what}.`, 'info', undefined, [submitterId])
+    }
+    return 'approved'
   }
 
   /** Prices the lines of an order request and works out its due and credit-limit standing. */
@@ -3928,7 +4146,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       priced.overCreditLimit ? 'Over-limit order awaiting the Authorizer' : 'Order awaiting the Authorizer',
       `${currentUser.name} submitted a ${priced.total.toLocaleString()} order for ${customer.name}${priced.overCreditLimit ? ' over their credit limit' : ''}.`,
       priced.overCreditLimit ? 'warning' : 'info',
-      ['authorizer', 'admin']
+      stageRoles('authorizer')
     )
   }
 
@@ -3980,6 +4198,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deliveryDate: edit.deliveryDate,
       courierName: edit.courierName.trim(),
       edits: [...(request.edits ?? []), { byId: editor.id, byName: editor.name, byRole: roleNameOf(editor.id), at: now, changes }],
+      ...authorizationReset(request),
       updatedAt: now,
     })
     await writeActivity('order_request_edited', 'sales', `Edited the order for ${request.customerName}: ${changes.map((change) => change.field).join(', ')}.`)
@@ -3990,48 +4209,44 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!request || !currentUser) {
       throw new Error('Order not found.')
     }
-    const stage = requireApprovalStage(request, 'order')
-    if (stage === 'authorizer' && decision === 'approve') {
-      await recordAuthorization('orderRequests', requestId, `the ${request.total.toLocaleString()} order for ${request.customerName}`)
-      return
-    }
-    const reviewer = currentUser
 
     // The order itself (stock, due, customer history, credit sheet) only exists once approved.
-    const orderId =
-      decision === 'approve'
-        ? await createOrder(
-            {
-              customerId: request.customerId,
-              employeeId: request.employeeId || undefined,
-              items: request.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })),
-              discount: request.discount,
-              paid: request.paid,
-              orderDate: request.orderDate,
-              deliveryDate: request.deliveryDate,
-              courierName: request.courierName,
-              paymentDueDate: request.paymentDueDate,
-              dueReference: request.dueReference,
-              billNumber: request.billNumber,
-            },
-            { id: request.submittedById, name: request.submittedByName }
-          )
-        : undefined
-
-    const db = getDatabaseOrThrow()
-    const now = new Date().toISOString()
-    await update(ref(db, `erp/orderRequests/${requestId}`), {
-      status: decision === 'approve' ? 'approved' : 'rejected',
-      reviewedById: reviewer.id,
-      reviewedByName: reviewer.name,
-      reviewedAt: now,
-      orderId: orderId ?? '',
-      updatedAt: now,
+    let orderId: string | undefined
+    const outcome = await reviewAtStage({
+      section: 'orderRequests',
+      id: requestId,
+      record: request,
+      noun: 'order',
+      what: `the ${request.total.toLocaleString()} order for ${request.customerName}`,
+      decision,
+      customerId: request.customerId,
+      post: async (approval) => {
+        const orderPosted = (id: string) => ({ ...approval, [`orderRequests/${requestId}/orderId`]: id })
+        orderId = await createOrder(
+          {
+            customerId: request.customerId,
+            employeeId: request.employeeId || undefined,
+            items: request.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })),
+            discount: request.discount,
+            paid: request.paid,
+            orderDate: request.orderDate,
+            deliveryDate: request.deliveryDate,
+            courierName: request.courierName,
+            paymentDueDate: request.paymentDueDate,
+            dueReference: request.dueReference,
+            billNumber: request.billNumber,
+          },
+          { id: request.submittedById, name: request.submittedByName },
+          orderPosted
+        )
+      },
     })
+    if (outcome === 'authorized') return
+
     await writeAuditEntry({
       kind: 'order',
       refId: orderId || requestId,
-      decision: decision === 'approve' ? 'approved' : 'rejected',
+      decision: outcome,
       party: request.customerName,
       summary: `${request.items.map((item) => `${item.productName} × ${item.quantity}`).join(', ')}${request.courierName ? ` · ${request.courierName}` : ''}${request.authorizedByName ? ` · Authorized by ${request.authorizedByName}` : ''}`,
       amount: request.total,
@@ -4040,11 +4255,6 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       submittedAt: request.createdAt,
       edits: request.edits,
     })
-    await writeActivity(
-      decision === 'approve' ? 'order_request_approved' : 'order_request_rejected',
-      'sales',
-      `${decision === 'approve' ? 'Approved' : 'Rejected'} the ${request.total.toLocaleString()} order for ${request.customerName}.`
-    )
   }
 
   /** The approved order behind a delivery; orders that never went through approval cannot be delivered here. */
@@ -4208,7 +4418,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
   /** Admin edits of a pending deposit, supplier payment or expense; every changed field is kept in its edit history. */
   async function editSubmission(kind: EditableSubmissionKind, id: string, patch: SubmissionPatch) {
     const editor = requireAdminUser('edit submissions')
-    const record = data?.[kind][id] as (SubmissionPatch & { status?: string; edits?: SubmissionEdit[]; taType?: string }) | undefined
+    const record = data?.[kind][id] as (SubmissionPatch & { status?: string; edits?: SubmissionEdit[]; taType?: string; authorizedAt?: string }) | undefined
     if (!record) {
       throw new Error('Submission not found.')
     }
@@ -4247,12 +4457,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await update(ref(db, `erp/${kind}/${id}`), {
       ...values,
       edits: [...(record.edits ?? []), { byId: editor.id, byName: editor.name, byRole: roleNameOf(editor.id), at: now, changes }],
+      ...authorizationReset(record),
       ...(kind === 'expenses' ? {} : { updatedAt: now }),
     })
     await writeActivity('submission_edited', 'finance', `Edited a pending ${SUBMISSION_KIND_LABELS[kind]}: ${changes.map((change) => change.field).join(', ')}.`)
   }
 
-  async function deleteCreditLedgerEntry(entryId: string) {
+  /** Removing a credit sheet line waits for both approvals; the line stays on the sheet until then. */
+  async function deleteCreditLedgerEntry(entryId: string, options: ApplyOptions = {}) {
     if (!data) {
       return
     }
@@ -4266,16 +4478,18 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('The opening due is changed from the dealer form.')
     }
 
-    if (needsApproval) {
+    if (!options.approved) {
       await requestChange('credit_entry', 'delete', entryId, entry.customerName)
       return
     }
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), {
+      ...options.alsoWrite,
       [`creditLedgerEntries/${entryId}`]: null,
-      [`customers/${entry.customerId}/due`]: dueFromLedger(entry.customerId, { entries: { [entryId]: null } }),
+      ...ledgerChanged(entry.customerId),
     })
+    await syncCustomerDue(entry.customerId)
     await writeActivity('credit_entry_deleted', 'customers', `Removed a credit sheet entry for ${entry.customerName}.`)
   }
 
@@ -5557,7 +5771,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteRole,
       reviewRoleRequest,
       hasPermission: (permission) => currentPermissions.includes(permission),
-      changesNeedApproval: needsApproval,
+      // Every create, edit and delete waits for the Authorizer and the Chairman.
+      changesNeedApproval: true,
       reviewChangeRequest,
       saveProduct,
       deleteProduct,
@@ -5577,7 +5792,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       saveWarehouse,
       deleteWarehouse,
       recordPurchase,
-      createOrder: viewOnlyForZone(createOrder),
+      reviewPurchaseRequest,
       updateOrderStatus: viewOnlyForZone(updateOrderStatus),
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),
@@ -5654,7 +5869,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       reviewBusinessEntry,
       deleteBusinessEntry,
     }),
-    [canTakeAttendance, currentPermissions, currentUser, data, error, isPortalUser, loading, needsApproval, users, visibleData, zoneViewOnly]
+    [canTakeAttendance, currentPermissions, currentUser, data, error, isPortalUser, loading, users, visibleData, zoneViewOnly]
   )
 
   return <ERPContext.Provider value={value}>{children}</ERPContext.Provider>

@@ -477,7 +477,7 @@ export default function CustomersPage() {
       setEditingCustomer(null)
       setFeedback(
         changesNeedApproval
-          ? `${editingCustomer ? 'Dealer changes' : 'New dealer'} sent to an admin for approval.`
+          ? `${editingCustomer ? 'Dealer changes' : 'New dealer'} sent for approval (Authorizer, then Chairman).`
           : editingCustomer
             ? 'Dealer details updated.'
             : 'New dealer added.'
@@ -495,7 +495,7 @@ export default function CustomersPage() {
     try {
       await deleteCustomer(customer.id)
       setFeedback(
-        changesNeedApproval ? `Deleting ${customer.name} was sent to an admin for approval.` : `${customer.name} removed from dealer list.`
+        changesNeedApproval ? `Deleting ${customer.name} was sent for approval (Authorizer, then Chairman).` : `${customer.name} removed from dealer list.`
       )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete dealer.')

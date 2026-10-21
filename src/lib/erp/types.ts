@@ -3,7 +3,7 @@ export type PermissionDefinition = {
   label: string
   description: string
   category: string
-  action: 'view' | 'edit' | 'delete'
+  action: 'view' | 'edit' | 'delete' | 'approve'
 }
 
 export type RoleRecord = {
@@ -20,8 +20,8 @@ export type RoleRecord = {
    */
   dataScope?: RoleDataScope
   /**
-   * On: the role's changes to dealers, suppliers, credit sheet entries and expenses wait as
-   * change requests until an admin approves them (the Accountant works this way).
+   * No longer used: every change now waits for the Authorizer and the Chairman, whatever the role.
+   * Kept so stored roles still load.
    */
   requiresApproval?: boolean
 }
@@ -155,6 +155,11 @@ export type CustomerRecord = {
    * with every change to it. Negative is an advance.
    */
   due: number
+  /**
+   * Goes up by one with every write that changes the dealer's ledger. The server recomputes `due`
+   * and only saves it if this has not moved since it read the ledger, so a stale due never wins.
+   */
+  ledgerRev?: number
   leadSource?: 'facebook' | 'local-marketing'
   reminderCustomer?: boolean
   nid: string
@@ -423,7 +428,38 @@ export type PurchaseRecord = {
   /** Product stock just before and after this purchase was received; missing on older purchases. */
   stockBefore?: number
   stockAfter?: number
+  /** The approved purchase request it came from; missing on older purchases. */
+  requestId?: string
+  /** The received date entered on the form (for older purchases, when it was saved). */
   createdAt: string
+}
+
+/** A stock-in from the Receive purchase form. Stock and the supplier's balance only change once it gets final approval. */
+export type PurchaseRequestRecord = {
+  id: string
+  productId: string
+  productName: string
+  supplierId: string
+  supplierName: string
+  quantity: number
+  unitCost: number
+  currency: string
+  total: number
+  /** The received date entered on the form; the purchase is posted on this date. */
+  date: string
+  status: DepositStatus
+  submittedById: string
+  submittedByName: string
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  reviewedById?: string
+  reviewedByName?: string
+  reviewedAt?: string
+  /** The purchase created on approval. */
+  purchaseId?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type TaskStatus = 'pending' | 'in-progress' | 'done'
@@ -451,6 +487,8 @@ export type NotificationRecord = {
   read: boolean
   createdAt: string
   roles?: string[]
+  /** Users it is meant for, such as the submitter of a rejected item; shown alongside `roles`. */
+  userIds?: string[]
 }
 
 export type ActivityRecord = {
@@ -539,6 +577,10 @@ export type ExpenseRecord = {
   employeeId?: string
   daMonth?: string
   status?: DepositStatus
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
@@ -688,14 +730,25 @@ export type SubmissionPatch = {
   category?: string
 }
 
-export type AuditKind = 'order' | 'deposit' | 'supplier_payment' | 'expense' | 'delivery' | 'change' | 'employee' | 'advance' | 'business'
+export type AuditKind =
+  | 'order'
+  | 'deposit'
+  | 'supplier_payment'
+  | 'expense'
+  | 'purchase'
+  | 'delivery'
+  | 'change'
+  | 'order_status'
+  | 'employee'
+  | 'advance'
+  | 'business'
 
 export type ChangeRequestKind = 'customer' | 'supplier' | 'credit_entry' | 'expense'
 export type ChangeRequestAction = 'create' | 'update' | 'delete'
 
 /**
- * A change by a user whose role needs approval (such as the Accountant). Nothing changes until an
- * admin approves it; approving applies the change as it was requested.
+ * A change to a dealer, supplier, credit sheet entry or expense. Nothing changes until the
+ * Authorizer accepts it and the Chairman gives final approval; that applies the change as requested.
  */
 export type ChangeRequestRecord = {
   id: string
@@ -710,6 +763,10 @@ export type ChangeRequestRecord = {
   status: DepositStatus
   submittedById: string
   submittedByName: string
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
@@ -724,7 +781,8 @@ export type AuditEntryRecord = {
   day: string
   kind: AuditKind
   refId: string
-  decision: 'approved' | 'rejected'
+  /** `changed` is an order status change, which is recorded but needs no approval. */
+  decision: 'approved' | 'rejected' | 'changed'
   party: string
   summary: string
   amount: number
@@ -931,6 +989,10 @@ export type SupplierPaymentRecord = {
   status: DepositStatus
   submittedById: string
   submittedByName: string
+  /** Set once the Authorizer accepts it; the Chairman gives the final approval after that. */
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
   reviewedById?: string
   reviewedByName?: string
   reviewedAt?: string
@@ -1043,6 +1105,7 @@ export type ERPData = {
   bankAccounts: Record<string, BankAccountRecord>
   supplierPayments: Record<string, SupplierPaymentRecord>
   orderRequests: Record<string, OrderRequestRecord>
+  purchaseRequests: Record<string, PurchaseRequestRecord>
   changeRequests: Record<string, ChangeRequestRecord>
   auditLog: Record<string, AuditEntryRecord>
   /** Attendance by day (`YYYY-MM-DD`), then by employee id. */
@@ -1191,6 +1254,8 @@ export type PurchaseInput = {
   unitCost: number
   supplierId: string
   currency: string
+  /** The received date; defaults to now. */
+  date?: string
 }
 
 export type OrderInput = {

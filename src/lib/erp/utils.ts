@@ -246,12 +246,6 @@ export function effectiveRole(roles: Record<string, RoleRecord> | undefined, use
   }
 }
 
-/** Whether the user's changes to dealers, suppliers, credit sheet entries and expenses wait for an admin. */
-export function changesNeedApproval(roles: Record<string, RoleRecord> | undefined, user: UserRecord | null) {
-  if (!user || userRoleIds(user).includes('admin')) return false
-  return Boolean(effectiveRole(roles, user)?.requiresApproval)
-}
-
 /**
  * Whether the user is in charge of a zone: they hold the Zonal Manager role or an admin made
  * them a zone's manager. They may see their zone's client data but not change any of it.
@@ -266,9 +260,14 @@ export function isCommitmentApproved(commitment: Pick<CustomerCommitment, 'appro
   return !commitment.approvalStage || commitment.approvalStage === 'approved'
 }
 
-/** A zone in charge only keeps the `.view` grants of their roles; everyone else keeps them all. */
+/**
+ * A zone in charge only keeps the `.view` grants of their roles, plus any approval stage their role
+ * gives them (an Authorizer may also run a zone); everyone else keeps them all.
+ */
 export function zoneInChargePermissions(permissions: string[], user: UserRecord | null, zones: Pick<ZoneRecord, 'managerIds'>[]) {
-  return isZoneInCharge(user, zones) ? permissions.filter((permission) => permission.endsWith('.view')) : permissions
+  return isZoneInCharge(user, zones)
+    ? permissions.filter((permission) => permission.endsWith('.view') || permission.startsWith('approvals.'))
+    : permissions
 }
 
 export function getPermissions(data: ERPData | null, user: UserRecord | null) {
@@ -283,18 +282,24 @@ export function hasPermission(data: ERPData | null, user: UserRecord | null, per
   return getPermissions(data, user).includes(permission)
 }
 
-export function buildDashboardSnapshot(data: ERPData | null, roleIds?: string[]) {
+/**
+ * Whether a notification is for the user: admins see every one, one without roles or users is for
+ * everyone, otherwise it is for the listed roles and users.
+ */
+export function notificationVisibleTo(notification: Pick<NotificationRecord, 'roles' | 'userIds'>, user: Pick<UserRecord, 'id' | 'roleId' | 'extraRoleIds'>) {
+  const roleIds = userRoleIds(user)
+  if (roleIds.includes('admin')) return true
+  if (!notification.roles?.length && !notification.userIds?.length) return true
+  return Boolean(notification.roles?.some((role) => roleIds.includes(role)) || notification.userIds?.includes(user.id))
+}
+
+export function buildDashboardSnapshot(data: ERPData | null, user?: UserRecord | null) {
   const orders = sortByCreatedAtDesc(toArray(data?.orders))
   const purchases = sortByCreatedAtDesc(toArray(data?.purchases))
   const products = toArray(data?.products)
   const tasks = toArray(data?.tasks)
   const rawNotifications = sortByCreatedAtDesc(toArray(data?.notifications))
-  const notifications = rawNotifications.filter((item) => {
-    if (!roleIds) return true
-    if (roleIds.includes('admin')) return true
-    if (!item.roles || item.roles.length === 0) return true
-    return item.roles.some((role) => roleIds.includes(role))
-  })
+  const notifications = rawNotifications.filter((item) => !user || notificationVisibleTo(item, user))
   const activities = sortByCreatedAtDesc(toArray(data?.activities))
 
   const todayOrders = orders.filter((order) => isSameCalendarDay(order.createdAt))
@@ -931,19 +936,63 @@ export function canAuthorizeCommission(user: Pick<UserRecord, 'roleId' | 'extraR
 export type ApprovalStage = 'authorizer' | 'chairman'
 
 /**
- * Deposits and order-form orders go to the zone's Authorizer first and, once accepted, to the
- * Chairman for final approval. `null` once the record is approved or rejected.
+ * Every submission goes to the Authorizer first and, once accepted, to the Chairman for final
+ * approval. `null` once the record is approved or rejected.
  */
 export function approvalStage(record: { status?: string; authorizedAt?: string }): ApprovalStage | null {
   if (record.status !== 'pending') return null
   return record.authorizedAt ? 'chairman' : 'authorizer'
 }
 
-/** Whether the user may act at that approval stage. An admin can act at either stage. */
-export function canActAtStage(user: Pick<UserRecord, 'roleId' | 'extraRoleIds'> | null | undefined, stage: ApprovalStage | null) {
-  if (!user || !stage) return false
-  const roles = userRoleIds(user)
-  return roles.includes('admin') || roles.includes(stage)
+/** The role permission each stage needs. Admin holds both, as a backup. */
+export const APPROVAL_PERMISSIONS: Record<ApprovalStage, string> = {
+  authorizer: 'approvals.authorize',
+  chairman: 'approvals.final',
+}
+
+/** Who submitted and who authorized a record awaiting approval. Expenses keep the submitter in `createdBy`. */
+export type ApprovalParticipants = { submittedById?: string; createdBy?: string; authorizedById?: string }
+
+/**
+ * Why the user may not act on the record at this stage, or `null` when they may. Acting needs the
+ * stage's permission, and nobody reviews their own submission or gives final approval to what
+ * they authorized themselves; with no one else eligible the item waits.
+ */
+export function approvalBlockReason(
+  data: ERPData | null,
+  user: UserRecord | null | undefined,
+  stage: ApprovalStage | null,
+  record?: ApprovalParticipants
+): string | null {
+  if (!stage) return 'This has already been reviewed.'
+  if (!user || !getPermissions(data, user).includes(APPROVAL_PERMISSIONS[stage])) {
+    return stage === 'authorizer' ? 'Waiting for the Authorizer.' : "Waiting for the Chairman's final approval."
+  }
+  const submitterId = record?.submittedById || record?.createdBy
+  if (submitterId && submitterId === user.id) {
+    return 'You submitted this, so another approver has to review it.'
+  }
+  if (stage === 'chairman' && record?.authorizedById && record.authorizedById === user.id) {
+    return 'You authorized this, so another approver has to give the final approval.'
+  }
+  return null
+}
+
+/** Whether the user may act on the record at that approval stage (see `approvalBlockReason`). */
+export function canActAtStage(
+  data: ERPData | null,
+  user: UserRecord | null | undefined,
+  stage: ApprovalStage | null,
+  record?: ApprovalParticipants
+) {
+  return !approvalBlockReason(data, user, stage, record)
+}
+
+/** Role ids whose holders may act at the stage, for addressing notifications. */
+export function rolesForStage(roles: Record<string, RoleRecord> | undefined, stage: ApprovalStage) {
+  return Object.values(roles ?? {})
+    .filter((role) => role.permissions?.includes(APPROVAL_PERMISSIONS[stage]))
+    .map((role) => role.id)
 }
 
 export const APPROVAL_STAGE_LABELS: Record<ApprovalStage, string> = {

@@ -1,5 +1,6 @@
 import type { ERPData, PermissionDefinition } from '@/lib/erp/types'
 import {
+  APPROVAL_PERMISSIONS,
   computeCommission,
   currentMonthKey,
   DEFAULT_COMMISSION_PER_UNIT,
@@ -83,8 +84,29 @@ function buildPermissionCatalog(): Record<string, PermissionDefinition> {
       catalog[permission.id] = permission
     }
   }
+  for (const permission of APPROVAL_PERMISSION_DEFINITIONS) {
+    catalog[permission.id] = permission
+  }
   return catalog
 }
+
+/** The two approval stages every create, edit and delete passes: the Authorizer's check, then the final approval. */
+const APPROVAL_PERMISSION_DEFINITIONS: PermissionDefinition[] = [
+  {
+    id: APPROVAL_PERMISSIONS.authorizer,
+    label: 'Authorize submissions (stage 1)',
+    description: 'Accept or reject orders, deposits, ledger entries, payments, expenses, purchases and record changes before final approval.',
+    category: 'Approvals',
+    action: 'approve',
+  },
+  {
+    id: APPROVAL_PERMISSIONS.chairman,
+    label: 'Final approval (stage 2)',
+    description: 'Give the final approval that posts an authorized submission to the sheets, balances and stock, or reject it.',
+    category: 'Approvals',
+    action: 'approve',
+  },
+]
 
 const PERMISSION_CATALOG = buildPermissionCatalog()
 
@@ -185,7 +207,7 @@ export function createDefaultERPData(): ERPData {
         id: 'accountant',
         name: 'Accountant',
         description:
-          'Enters deposits, payments and expenses, and can edit and delete every dealer (suppliers optional). Every change waits for an admin to approve it.',
+          'Enters deposits, payments and expenses, and can edit and delete every dealer (suppliers optional). Every change waits for the Authorizer and the Chairman.',
         permissions: [
           ...permissionIds('dashboard'),
           ...permissionIds('reports'),
@@ -206,7 +228,7 @@ export function createDefaultERPData(): ERPData {
         id: 'authorizer',
         name: 'Authorizer',
         description:
-          "First check of cash deposits, order-form orders, ledger entries and extra client commitments from their zone; accepted ones go to the Chairman. Assign the zone on the user.",
+          "First check of every submission (orders, deposits, ledger entries, payments, expenses, purchases, record changes and extra client commitments); dealer items only from their zone. Accepted ones go to the Chairman. Assign the zone on the user.",
         permissions: [
           'dashboard.view',
           'sales.view',
@@ -214,6 +236,7 @@ export function createDefaultERPData(): ERPData {
           'credit_sheet.view',
           'finance.view',
           'reports.view',
+          APPROVAL_PERMISSIONS.authorizer,
         ],
         zoneIds: [],
         dataScope: 'assigned',
@@ -221,7 +244,7 @@ export function createDefaultERPData(): ERPData {
       chairman: {
         id: 'chairman',
         name: 'Chairman',
-        description: 'Final approval of cash deposits, order-form orders, ledger entries and extra client commitments after the Authorizer accepts them.',
+        description: 'Final approval of every submission after the Authorizer accepts it; only then does it reach the sheets, balances and stock.',
         permissions: [
           'dashboard.view',
           'sales.view',
@@ -229,6 +252,7 @@ export function createDefaultERPData(): ERPData {
           'credit_sheet.view',
           'finance.view',
           'reports.view',
+          APPROVAL_PERMISSIONS.chairman,
         ],
         dataScope: 'all',
       },
@@ -1193,6 +1217,7 @@ export function createDefaultERPData(): ERPData {
     supplierPayments: {},
     orderRequests: {},
     changeRequests: {},
+    purchaseRequests: {},
     employeeAdvances: {},
     commissionAuthorizations: {},
     advanceRequests: {},

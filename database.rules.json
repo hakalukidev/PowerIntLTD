@@ -14,6 +14,16 @@
         ".write": "auth != null && root.child('erp/users').child(auth.uid).child('roleId').val() === 'admin'"
       },
 
+      "orders": {
+        ".indexOn": ["customerId"],
+        ".write": "auth != null && root.child('erp/users').child(auth.uid).child('status').val() === 'active'"
+      },
+
+      "creditLedgerEntries": {
+        ".indexOn": ["customerId"],
+        ".write": "auth != null && root.child('erp/users').child(auth.uid).child('status').val() === 'active'"
+      },
+
       "$section": {
         ".write": "auth != null && $section !== 'users' && $section !== 'roles' && root.child('erp/users').child(auth.uid).child('status').val() === 'active'"
       }

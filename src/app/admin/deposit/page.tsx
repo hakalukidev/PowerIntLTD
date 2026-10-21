@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { DepositRecord, DepositStatus } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { APPROVAL_STAGE_LABELS, approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
+import { APPROVAL_PERMISSIONS, APPROVAL_STAGE_LABELS, approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -47,7 +47,7 @@ export default function DepositPage() {
 
   const roleIds = currentUser ? userRoleIds(currentUser) : []
   const isAdmin = roleIds.includes('admin')
-  const isApprover = isAdmin || roleIds.includes('authorizer') || roleIds.includes('chairman')
+  const isApprover = hasPermission(APPROVAL_PERMISSIONS.authorizer) || hasPermission(APPROVAL_PERMISSIONS.chairman)
   const canEdit = hasPermission('credit_sheet.edit')
   const methods = data?.settings.depositMethods ?? []
 
@@ -344,7 +344,7 @@ export default function DepositPage() {
                       </TableCell>
                       {isApprover ? (
                         <TableCell className="text-right">
-                          {canActAtStage(currentUser, stage) ? (
+                          {canActAtStage(data, currentUser, stage, deposit) ? (
                             <div className="flex justify-end gap-1.5">
                               <Button
                                 size="sm"

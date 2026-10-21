@@ -1,6 +1,7 @@
 import { expect, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
+import { approveThroughBothStages, hasApproverLogins } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin, type AdminDb } from './support/firebase'
 
@@ -9,7 +10,8 @@ import { connectAsAdmin, type AdminDb } from './support/firebase'
  * Client feedback 6: typing a product name in the Suppliers search shows that
  * product's details (and who supplies it).
  *
- * Test suppliers get run-unique names and are removed again at the end.
+ * Test suppliers get run-unique names and are removed again at the end. Adding and deleting a
+ * supplier each wait for the seeded Authorizer and Chairman to approve.
  */
 
 type Product = { id: string; name: string; supplierId?: string }
@@ -29,6 +31,10 @@ test.afterAll(async () => {
   for (const [id, supplier] of Object.entries(suppliers)) {
     if (supplier.name.startsWith('E2E Supplier ')) await db.remove(`erp/suppliers/${id}`)
   }
+  const requests = (await db.read<Record<string, { targetName: string }>>('erp/changeRequests')) ?? {}
+  for (const [id, request] of Object.entries(requests)) {
+    if (request.targetName === supplierName) await db.remove(`erp/changeRequests/${id}`)
+  }
   await db?.close()
 })
 
@@ -36,7 +42,9 @@ const search = (page: Page) => page.getByPlaceholder('Search suppliers or produc
 const supplierRow = (page: Page, name: string) => page.locator('tbody tr', { hasText: name })
 
 test.describe.serial('Suppliers & Imports', () => {
-  test('TC-05.1 a new supplier can be saved with the products they supply', async ({ page }, testInfo) => {
+  test('TC-05.1 a new supplier can be saved with the products they supply', async ({ browser, page }, testInfo) => {
+    test.setTimeout(150_000)
+    test.skip(!hasApproverLogins(), 'A new supplier needs the Authorizer and Chairman logins seeded on the emulators.')
     await loginAsAdmin(page)
     await navigate(page, '/admin/suppliers')
 
@@ -62,7 +70,8 @@ test.describe.serial('Suppliers & Imports', () => {
     await screenshot(page, 'supplier-add-products', testInfo)
 
     await dialog.getByRole('button', { name: 'Save supplier' }).click()
-    await expect(page.getByText('New supplier added.')).toBeVisible()
+    await expect(page.getByText('New supplier sent for approval')).toBeVisible()
+    await approveThroughBothStages(browser, supplierName, page)
 
     const row = supplierRow(page, supplierName)
     await expect(row).toContainText(`Supplies: ${addedProduct}, ${typedProduct}`)
@@ -118,12 +127,16 @@ test.describe.serial('Suppliers & Imports', () => {
     await expect(page.getByText('No suppliers found.')).toBeVisible()
   })
 
-  test('TC-05.2 the test supplier can be deleted again', async ({ page }) => {
+  test('TC-05.2 the test supplier can be deleted again', async ({ browser, page }) => {
+    test.setTimeout(150_000)
+    test.skip(!hasApproverLogins(), 'Deleting needs the Authorizer and Chairman logins seeded on the emulators.')
     await loginAsAdmin(page)
     await navigate(page, '/admin/suppliers')
     const row = supplierRow(page, supplierName)
     await row.getByRole('button', { name: `Delete ${supplierName}` }).click()
-    await expect(page.getByText(`${supplierName} removed from supplier list.`)).toBeVisible()
+    await expect(page.getByText(`Deleting ${supplierName} was sent for approval`)).toBeVisible()
+    await expect(row).toBeVisible()
+    await approveThroughBothStages(browser, supplierName, page)
     await expect(row).toHaveCount(0)
   })
 })

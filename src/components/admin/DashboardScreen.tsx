@@ -56,7 +56,6 @@ import {
   REVENUE_RANGE_OPTIONS,
   RevenueRange,
   toArray,
-  userRoleIds,
 } from '@/lib/erp/utils'
 
 const PAYMENT_STATUS_COLORS: Record<string, string> = {
@@ -67,7 +66,7 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
 
 export function DashboardScreen() {
   const { data, loading, error, currentUser, saveInvestor } = useERP()
-  const snapshot = buildDashboardSnapshot(data, currentUser ? userRoleIds(currentUser) : undefined)
+  const snapshot = buildDashboardSnapshot(data, currentUser)
   const overduePayments = toArray(data?.orders).filter(
     (order) => order.due > 0 && new Date(order.paymentDueDate).getTime() < Date.now()
   ).length

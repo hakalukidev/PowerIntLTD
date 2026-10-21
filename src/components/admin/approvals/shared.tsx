@@ -3,8 +3,20 @@
 import { MessageCircle, MessageSquareText, PencilLine, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { useERP } from '@/lib/erp/provider'
 import type { DepositStatus, SubmissionEdit } from '@/lib/erp/types'
-import { APPROVAL_STAGE_LABELS, approvalStage, formatDateTime, formatIfDate, smsLink, whatsappLink } from '@/lib/erp/utils'
+import {
+  APPROVAL_PERMISSIONS,
+  APPROVAL_STAGE_LABELS,
+  approvalBlockReason,
+  approvalStage,
+  formatDateTime,
+  formatIfDate,
+  getPermissions,
+  smsLink,
+  whatsappLink,
+  type ApprovalParticipants,
+} from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 export const STATUS_STYLES: Record<DepositStatus, string> = {
@@ -17,9 +29,28 @@ export function StatusPill({ status }: { status: DepositStatus }) {
   return <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_STYLES[status])}>{status}</span>
 }
 
-/** Where a deposit or order stands between the Authorizer and the Chairman. */
-export function ApprovalStageNote({ record }: { record: { status: string; authorizedAt?: string; authorizedByName?: string } }) {
+type StagedRecord = { status?: string; authorizedAt?: string; authorizedByName?: string } & ApprovalParticipants
+
+/**
+ * The stage a submission is at and whether the signed-in user may act on it. `blocked` explains why
+ * someone who holds the stage's permission still may not (their own submission, or they authorized it).
+ */
+export function useApprovalAccess(record: StagedRecord) {
+  const { data, currentUser } = useERP()
   const stage = approvalStage(record)
+  const reason = approvalBlockReason(data, currentUser, stage, record)
+  const holdsStage = Boolean(stage && currentUser && getPermissions(data, currentUser).includes(APPROVAL_PERMISSIONS[stage]))
+  return { stage, canReview: !reason, blocked: holdsStage ? reason : null }
+}
+
+/** The approve button's label at each stage. */
+export function approveLabel(stage: ReturnType<typeof approvalStage>) {
+  return stage === 'authorizer' ? 'Authorize' : 'Final approve'
+}
+
+/** Where a submission stands between the Authorizer and the Chairman. */
+export function ApprovalStageNote({ record }: { record: StagedRecord }) {
+  const { stage, blocked } = useApprovalAccess(record)
   if (!stage) return null
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -32,6 +63,7 @@ export function ApprovalStageNote({ record }: { record: { status: string; author
           Authorized by <span className="font-medium text-foreground">{record.authorizedByName}</span> · {formatDateTime(record.authorizedAt)}
         </span>
       ) : null}
+      {blocked ? <span className="w-full text-muted-foreground">{blocked}</span> : null}
     </p>
   )
 }

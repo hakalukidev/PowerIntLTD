@@ -13,12 +13,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { approvalStage, canActAtStage, formatCurrency, formatDate, formatDealerBalance, partyCode, receivableOf, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { approvalStage, formatCurrency, formatDate, formatDealerBalance, partyCode, receivableOf, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { DUE_REFERENCE_OPTIONS } from '@/components/admin/sales/salesDocument'
 
 import {
   ApprovalStageNote,
+  approveLabel,
   EditHistory,
   EmptyState,
   FeedbackBanner,
@@ -28,6 +29,7 @@ import {
   SummaryRow,
   localDay,
   todayInput,
+  useApprovalAccess,
   type Feedback,
 } from './shared'
 
@@ -150,11 +152,10 @@ export function OrderRequestCard({
   onEdit: () => void
   badge?: React.ReactNode
 }) {
-  const { data, currentUser } = useERP()
+  const { data } = useERP()
   const { zones } = useZoneAccess()
   const customer = data?.customers[request.customerId]
-  const stage = approvalStage(request)
-  const canReview = canActAtStage(currentUser, stage)
+  const { stage, canReview } = useApprovalAccess(request)
 
   const history = useMemo(() => {
     const orders = toArray(data?.orders).filter((order) => order.customerId === request.customerId)
@@ -216,7 +217,7 @@ export function OrderRequestCard({
                 </Button>
                 <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
                   <Check className="h-4 w-4" />
-                  {busy ? 'Saving...' : stage === 'authorizer' ? 'Authorize' : 'Final approve'}
+                  {busy ? 'Saving...' : approveLabel(stage)}
                 </Button>
               </>
             ) : null}

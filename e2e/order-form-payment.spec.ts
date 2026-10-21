@@ -2,7 +2,7 @@ import { expect, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
 import { navigate, note, screenshot } from './support/evidence'
-import { partyApproveButton } from './support/approvals'
+import { approveAllThroughBothStages, authorizerDealerFields, hasApproverLogins } from './support/approvals'
 import { connectAsAdmin, testDealer, type AdminDb } from './support/firebase'
 
 /**
@@ -54,7 +54,8 @@ test.beforeAll(async () => {
   db = await connectAsAdmin()
   const now = new Date().toISOString()
   // A phone number that cannot belong to anyone; the alert route is stubbed as well.
-  await db.set(`erp/customers/${dealer.id}`, { ...testDealer(dealer.id, dealer.name, '000-E2E-TEST', ''), creditLimit: 0 })
+  // In the seeded Authorizer's depot, so they can authorize the dealer's orders.
+  await db.set(`erp/customers/${dealer.id}`, { ...testDealer(dealer.id, dealer.name, '000-E2E-TEST', ''), ...(await authorizerDealerFields(db)), creditLimit: 0 })
   await db.set(`erp/products/${product.id}`, {
     id: product.id, name: product.name, category: 'E2E', brand: 'E2E', sku: product.sku, warehouseId: '', supplierId: '',
     purchasePrice: 6000, sellingPrice: 10_000, wholesalePrice: 10_000, stockQty: 10, minStock: 0, maxStock: 100,
@@ -128,7 +129,9 @@ test('TC-10.2 Print quotation uses the form values and saves nothing', async ({ 
   expect((await requestsForDealer()).length).toBe(before)
 })
 
-test('TC-10.3 Payment unchecked puts the whole total on due; checked 5,000 of 10,000 leaves 5,000 due', async ({ page }, testInfo) => {
+test('TC-10.3 Payment unchecked puts the whole total on due; checked 5,000 of 10,000 leaves 5,000 due', async ({ browser, page }, testInfo) => {
+  test.setTimeout(240_000)
+  test.skip(!hasApproverLogins(), 'Approvals need the Authorizer and Chairman logins seeded on the emulators.')
   // Order A: Payment left unticked, so its fields are hidden.
   await fillOrder(page)
   await expect(page.getByLabel('Payment')).not.toBeChecked()
@@ -163,20 +166,8 @@ test('TC-10.3 Payment unchecked puts the whole total on due; checked 5,000 of 10
   expect(requestA).toMatchObject({ total: 10_000, due: 10_000 })
   expect(requestB).toMatchObject({ total: 10_000, due: 5000, billNumber })
 
-  // Authorize, then give final approval, for both orders.
-  await navigate(page, '/admin/approvals')
-  for (let step = 0; step < 4; step += 1) {
-    const approveButton = await partyApproveButton(page, dealer.name)
-    const approvedBefore = (await requestsForDealer()).filter((request) => request.status === 'approved').length
-    const authorizedBefore = JSON.stringify(await requestsForDealer())
-    await approveButton.click()
-    await expect
-      .poll(async () => {
-        const now = await requestsForDealer()
-        return now.filter((request) => request.status === 'approved').length !== approvedBefore || JSON.stringify(now) !== authorizedBefore
-      })
-      .toBe(true)
-  }
+  // The admin submitted both, so the Authorizer accepts them and the Chairman gives final approval.
+  await approveAllThroughBothStages(browser, dealer.name, 2, page)
   await expect.poll(async () => (await requestsForDealer()).every((request) => request.status === 'approved' && request.orderId)).toBe(true)
 
   const approved = await requestsForDealer()

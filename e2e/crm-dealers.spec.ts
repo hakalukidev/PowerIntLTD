@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
+import { approveThroughBothStages, hasApproverLogins } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin, testDealer, type AdminDb } from './support/firebase'
 
@@ -104,9 +105,11 @@ test.describe('Dealers (CRM)', () => {
     }
   })
 
-  test('TC-01.3 a dealer added with a zone and sub-zone appears under that zone', async ({ page }, testInfo) => {
+  test('TC-01.3 a dealer added with a zone and sub-zone appears under that zone', async ({ browser, page }, testInfo) => {
+    test.setTimeout(150_000)
     const zone = zones.find((candidate) => candidate.thanas?.length) ?? zones[0]
     test.skip(!zone, 'No zones are set up yet.')
+    test.skip(!hasApproverLogins(), 'A new dealer needs the Authorizer and Chairman logins seeded on the emulators.')
     const subZone = zone.thanas?.[0]?.thana
     const name = `E2E UI Dealer ${Date.now()}`
 
@@ -130,19 +133,22 @@ test.describe('Dealers (CRM)', () => {
       await dialog.getByRole('button', { name: 'Save dealer' }).click()
       await expect(page.getByRole('dialog')).toHaveCount(0)
 
+      // A new dealer is only added once the Authorizer and the Chairman approve it.
+      await expect(page.getByText('New dealer sent for approval')).toBeVisible()
+      await approveThroughBothStages(browser, name, page)
+
       await choose(page, filterSelect(page, 'Zone'), zone.name)
       await expect(dealerRow(page, name)).toBeVisible()
       note(testInfo, `Dealer saved in ${zone.name}${subZone ? ` / ${subZone}` : ''} and listed under that zone filter.`)
     } finally {
-      // Remove through the app, and directly as a fallback if the UI step failed part-way.
-      const row = dealerRow(page, name)
-      if (await row.count()) {
-        await row.getByRole('button', { name: `Delete ${name}` }).click()
-        await expect(row).toHaveCount(0)
-      }
+      // Deleting through the app would only file another request, so remove the test records directly.
       const customers = (await db.read<Record<string, { name: string }>>('erp/customers')) ?? {}
       for (const [id, customer] of Object.entries(customers)) {
         if (customer.name === name) await db.remove(`erp/customers/${id}`)
+      }
+      const requests = (await db.read<Record<string, { targetName: string }>>('erp/changeRequests')) ?? {}
+      for (const [id, request] of Object.entries(requests)) {
+        if (request.targetName === name) await db.remove(`erp/changeRequests/${id}`)
       }
     }
   })

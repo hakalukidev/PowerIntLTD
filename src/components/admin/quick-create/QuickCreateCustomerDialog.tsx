@@ -111,7 +111,7 @@ export function QuickCreateCustomerDialog({
           </div>
           {feedback ? <p className="text-sm text-destructive">{feedback}</p> : null}
           {changesNeedApproval ? (
-            <p className="text-sm text-muted-foreground">The new customer is sent to an admin for approval and can be picked once approved.</p>
+            <p className="text-sm text-muted-foreground">The new customer is sent for approval (Authorizer, then Chairman) and can be picked once approved.</p>
           ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

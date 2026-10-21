@@ -71,7 +71,7 @@ import { useERP } from '@/lib/erp/provider'
 import { dueCommitmentReminders, localToday } from '@/lib/erp/commitmentReminders'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { cn } from '@/lib/utils'
-import { formatDate, formatDateTime, userRoleIds, userRoleNames } from '@/lib/erp/utils'
+import { formatDate, formatDateTime, notificationVisibleTo, userRoleNames } from '@/lib/erp/utils'
 
 type NavigationItem = {
   label: string
@@ -170,7 +170,7 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Payment Form',
-        description: 'Supplier payments by bank or cash, sent to an admin for approval',
+        description: 'Supplier payments by bank or cash, sent for approval (Authorizer, then Chairman)',
         href: '/admin/supplier-payment',
         icon: Send,
         permission: 'suppliers.view',
@@ -275,7 +275,7 @@ const navigationGroups: NavigationGroup[] = [
       },
       {
         label: 'Expense Form',
-        description: 'Staff expenses with a receipt, sent to an admin for approval',
+        description: 'Staff expenses with a receipt, sent for approval (Authorizer, then Chairman)',
         href: '/admin/expense',
         icon: Receipt,
         permission: 'finance.view',
@@ -847,12 +847,7 @@ function NotificationBell() {
   }
 
   const notifications = Object.values(data?.notifications ?? {})
-    .filter((notification) => {
-      if (!currentUser || currentUser.roleId === 'admin') return true
-      if (!notification.roles || notification.roles.length === 0) return true
-      const roleIds = userRoleIds(currentUser)
-      return notification.roles.some((role) => roleIds.includes(role))
-    })
+    .filter((notification) => !currentUser || notificationVisibleTo(notification, currentUser))
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
 
   const unread = notifications.filter((notification) => !notification.read)

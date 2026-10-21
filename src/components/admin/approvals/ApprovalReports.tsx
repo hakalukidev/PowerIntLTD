@@ -281,17 +281,21 @@ export function DailyClosingReport({ day }: { day: string }) {
 
   const report = useMemo(() => {
     const orders = toArray(data?.orders).filter((order) => localDay(order.createdAt) === day)
-    const deposits = toArray(data?.deposits).filter((deposit) => deposit.status === 'approved' && localDay(deposit.reviewedAt) === day)
-    const payments = toArray(data?.supplierPayments).filter((payment) => payment.status === 'approved' && localDay(payment.reviewedAt) === day)
-    // Expenses entered on the finance page have no status and count on their own date.
-    const expenses = toArray(data?.expenses).filter((expense) =>
-      expense.status ? expense.status === 'approved' && localDay(expense.reviewedAt) === day : localDay(expense.date) === day
-    )
-    const pending =
-      toArray(data?.orderRequests).filter((item) => item.status === 'pending').length +
-      toArray(data?.deposits).filter((item) => item.status === 'pending').length +
-      toArray(data?.supplierPayments).filter((item) => item.status === 'pending').length +
-      toArray(data?.expenses).filter((item) => item.status === 'pending').length
+    // Approved records count on the date entered on their form, not the day they were approved.
+    const deposits = toArray(data?.deposits).filter((deposit) => deposit.status === 'approved' && localDay(deposit.date) === day)
+    const payments = toArray(data?.supplierPayments).filter((payment) => payment.status === 'approved' && localDay(payment.date) === day)
+    // Expenses entered on the finance page have no status and are already approved.
+    const expenses = toArray(data?.expenses).filter((expense) => (!expense.status || expense.status === 'approved') && localDay(expense.date) === day)
+    const sections: Array<Record<string, { status?: string }> | undefined> = [
+      data?.orderRequests,
+      data?.deposits,
+      data?.supplierPayments,
+      data?.expenses,
+      data?.purchaseRequests,
+      data?.ledgerEntryRequests,
+      data?.changeRequests,
+    ]
+    const pending = sections.reduce((sum, section) => sum + Object.values(section ?? {}).filter((item) => item.status === 'pending').length, 0)
 
     const sales = orders.reduce((sum, order) => sum + order.total, 0)
     const orderPaid = orders.reduce((sum, order) => sum + order.paid, 0)

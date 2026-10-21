@@ -27,7 +27,10 @@ function run(command, commandArgs) {
 if (args[0] === '--inner') {
   // Runs inside `firebase emulators:exec`, once the emulators are up.
   const seeded = run('node', ['scripts/seed-emulator.mjs'])
-  process.exit(seeded === 0 ? run('npx', ['playwright', 'test', ...args.slice(1)]) : seeded)
+  if (seeded !== 0) process.exit(seeded)
+  // The backup's stored roles predate the approval permissions; give them as a live deploy would.
+  const granted = run('node', ['scripts/grant-approval-permissions.mjs', '--apply'])
+  process.exit(granted === 0 ? run('npx', ['playwright', 'test', ...args.slice(1)]) : granted)
 }
 
 const quote = (value) => `'${value.replace(/'/g, `'\\''`)}'`

@@ -137,7 +137,7 @@ export default function FinancePage() {
       }
       await saveExpense(input)
       setExpenseForm({ ...emptyExpenseForm, date: expenseForm.date })
-      setFeedback(changesNeedApproval ? 'Expense sent to an admin for approval.' : 'Expense recorded.')
+      setFeedback(changesNeedApproval ? 'Expense sent for approval (Authorizer, then Chairman).' : 'Expense recorded.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to record expense.')
     }
@@ -148,7 +148,7 @@ export default function FinancePage() {
 
     try {
       await deleteExpense(expenseId)
-      setFeedback(changesNeedApproval ? 'Removing the expense was sent to an admin for approval.' : 'Expense removed.')
+      setFeedback(changesNeedApproval ? 'Removing the expense was sent for approval (Authorizer, then Chairman).' : 'Expense removed.')
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete expense.')
     }

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
+import { approveThroughBothStages, hasApproverLogins } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin } from './support/firebase'
 
@@ -9,7 +10,8 @@ import { connectAsAdmin } from './support/firebase'
  * the quantity received, and the total after it.
  *
  * Runs against the real database: seeds a run-unique product (27 in stock) and supplier, receives
- * 15 units through the Receive purchase dialog, then deletes the purchase, product, supplier and the
+ * 15 units through the Receive purchase dialog (approved by the seeded Authorizer and Chairman),
+ * then deletes the purchase, its request, product, supplier and the
  * activity and notification the receive wrote, including on failure. The supplier alert is stubbed
  * out: its portal records can only be removed server-side, and it is not what this test covers.
  */
@@ -18,9 +20,10 @@ type Purchase = { id: string; productId: string; quantity: number; unitCost: num
 
 const amount = (text: string) => Number(text.replace(/[^\d.-]/g, '')) || 0
 
-test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 42', async ({ page }, testInfo) => {
-  // Two workspace loads plus cleanup on live data; the default 30s can cut off the cleanup.
-  test.setTimeout(120_000)
+test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 42', async ({ browser, page }, testInfo) => {
+  // Workspace loads, both approvals and cleanup; the default 30s can cut off the cleanup.
+  test.setTimeout(240_000)
+  test.skip(!hasApproverLogins(), 'A purchase needs the Authorizer and Chairman logins seeded on the emulators.')
   const stamp = Date.now()
   const productId = `product_e2e_${stamp}`
   const supplierId = `supplier_e2e_${stamp}`
@@ -68,9 +71,14 @@ test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 
     await quantity.fill('15')
     const cost = dialog.locator('div.space-y-2').filter({ has: page.locator('p', { hasText: /^Unit cost$/ }) }).locator('input')
     await cost.fill(String(unitCost))
-    await expect(dialog.getByText('Stock after receive: 42 units')).toBeVisible()
-    await dialog.getByRole('button', { name: 'Receive stock' }).click()
-    await expect(page.getByText('Purchase received and inventory updated successfully.')).toBeVisible({ timeout: 15_000 })
+    await expect(dialog.getByText('Stock after approval: 42 units')).toBeVisible()
+    await dialog.getByRole('button', { name: 'Send for approval' }).click()
+    await expect(page.getByText('Purchase sent for approval.')).toBeVisible({ timeout: 15_000 })
+
+    // Stock only comes in with the final approval.
+    expect((await db.read<{ stockQty: number }>(`erp/products/${productId}`))?.stockQty).toBe(27)
+    await approveThroughBothStages(browser, supplierName, page)
+    await expect.poll(async () => (await db.read<{ stockQty: number }>(`erp/products/${productId}`))?.stockQty).toBe(42)
 
     // The purchase keeps the stock before and after it was received.
     const purchase = Object.values((await db.read<Record<string, Purchase>>('erp/purchases')) ?? {}).find((item) => item.productId === productId)
@@ -112,8 +120,12 @@ test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 
     const activities = (await db.read<Record<string, { message?: string }>>('erp/activities')) ?? {}
     const notifications = (await db.read<Record<string, { body?: string }>>('erp/notifications')) ?? {}
     const purchases = (await db.read<Record<string, Purchase>>('erp/purchases')) ?? {}
+    const requests = (await db.read<Record<string, Purchase>>('erp/purchaseRequests')) ?? {}
+    const audit = (await db.read<Record<string, { party?: string }>>('erp/auditLog')) ?? {}
     const paths = [`erp/products/${productId}`, `erp/suppliers/${supplierId}`]
     for (const [id, item] of Object.entries(purchases)) if (item.productId === productId) paths.push(`erp/purchases/${id}`)
+    for (const [id, item] of Object.entries(requests)) if (item.productId === productId) paths.push(`erp/purchaseRequests/${id}`)
+    for (const [id, item] of Object.entries(audit)) if (item.party === supplierName) paths.push(`erp/auditLog/${id}`)
     for (const [id, activity] of Object.entries(activities)) if (activity.message?.includes(productName)) paths.push(`erp/activities/${id}`)
     for (const [id, item] of Object.entries(notifications)) if (item.body?.includes(productName)) paths.push(`erp/notifications/${id}`)
     const failed: string[] = []

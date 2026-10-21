@@ -239,7 +239,7 @@ export default function SuppliersPage() {
     try {
       await deleteSupplier(supplier.id)
       setFeedback(
-        changesNeedApproval ? `Deleting ${supplier.name} was sent to an admin for approval.` : `${supplier.name} removed from supplier list.`
+        changesNeedApproval ? `Deleting ${supplier.name} was sent for approval (Authorizer, then Chairman).` : `${supplier.name} removed from supplier list.`
       )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to delete supplier.')
@@ -278,7 +278,7 @@ export default function SuppliersPage() {
       )
       setFeedback(
         changesNeedApproval
-          ? `Changing ${supplier.name}'s LC status to ${lcStatusLabels[lcStatus]} was sent to an admin for approval.`
+          ? `Changing ${supplier.name}'s LC status to ${lcStatusLabels[lcStatus]} was sent for approval (Authorizer, then Chairman).`
           : `${supplier.name} LC status changed to ${lcStatusLabels[lcStatus]}.`
       )
     } catch (reason) {

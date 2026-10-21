@@ -63,6 +63,10 @@ test.afterAll(async () => {
   for (const [id, item] of Object.entries(notifications)) {
     if (item.body?.includes(String(stamp))) await db.remove(`erp/notifications/${id}`)
   }
+  const audit = (await db.read<Record<string, { refId?: string }>>('erp/auditLog')) ?? {}
+  for (const [id, entry] of Object.entries(audit)) {
+    if (entry.refId === order.id) await db.remove(`erp/auditLog/${id}`)
+  }
 
   expect(await db.read(`erp/orders/${order.id}`)).toBeNull()
   expect(Object.keys((await db.read<StatusMap>('erp/settings/orderStatuses')) ?? {}).sort()).toEqual(Object.keys(statusesBefore).sort())
@@ -118,6 +122,15 @@ test.describe('Configurable order statuses', () => {
     await page.keyboard.press('Escape')
     await expect(row).toContainText(firstLabel)
     await expect.poll(async () => (await db.read<{ status: string }>(`erp/orders/${order.id}`))?.status).not.toBe('pending')
+
+    // Status changes need no approval, but each one is on the Daily Audit: order, old → new, who and when.
+    await expect
+      .poll(async () =>
+        Object.values((await db.read<Record<string, { kind: string; refId: string; summary: string; decision: string; reviewedByName: string }>>('erp/auditLog')) ?? {}).find(
+          (entry) => entry.kind === 'order_status' && entry.refId === order.id
+        )
+      )
+      .toMatchObject({ decision: 'changed', summary: expect.stringContaining(`→ ${firstLabel}`), reviewedByName: expect.any(String) })
 
     // Rename it: the table, filter and dialog all follow.
     await page.getByRole('button', { name: 'Manage statuses' }).click()

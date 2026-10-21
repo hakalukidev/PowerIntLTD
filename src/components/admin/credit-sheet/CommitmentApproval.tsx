@@ -65,14 +65,14 @@ export function CommitmentReviewActions({
   commitment: CustomerCommitment;
   onError: (message: string | null) => void;
 }) {
-  const { currentUser, reviewCustomerCommitment } = useERP();
+  const { data, currentUser, reviewCustomerCommitment } = useERP();
   const [busy, setBusy] = useState(false);
   const stage =
     commitment.approvalStage === "authorizer" ||
     commitment.approvalStage === "chairman"
       ? commitment.approvalStage
       : null;
-  if (!stage || !canActAtStage(currentUser, stage)) return null;
+  if (!stage || !canActAtStage(data, currentUser, stage)) return null;
 
   async function review(decision: "approve" | "reject") {
     onError(null);

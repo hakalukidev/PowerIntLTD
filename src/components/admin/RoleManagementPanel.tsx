@@ -16,7 +16,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
@@ -504,23 +503,11 @@ export function RoleManagementPanel() {
                   </div>
                 ) : null}
 
-                {editingRole?.id !== 'admin' ? (
-                  <label className="flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-border/70 p-3">
-                    <span className="space-y-1">
-                      <span className="block text-sm font-medium text-foreground">Changes need admin approval</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Adding, editing or deleting dealers, suppliers, credit sheet entries and expenses only files a request. Nothing
-                        changes until an admin approves it on the Approvals page. Deposits, payments and expense forms always need
-                        approval.
-                      </span>
-                    </span>
-                    <Switch
-                      checked={form.requiresApproval}
-                      onCheckedChange={(checked) => setForm((current) => ({ ...current, requiresApproval: checked }))}
-                      aria-label="Changes need admin approval"
-                    />
-                  </label>
-                ) : null}
+                <p className="rounded-xl border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
+                  Every add, edit and delete (orders, deposits, ledger entries, payments, expenses, purchases, dealers and suppliers)
+                  waits for a user with <span className="font-medium text-foreground">Authorize submissions</span>, then one with{' '}
+                  <span className="font-medium text-foreground">Final approval</span>. Both are in the permission list under Approvals.
+                </p>
 
                 {editingRole?.id !== 'admin' ? (
                   <div className="space-y-2">

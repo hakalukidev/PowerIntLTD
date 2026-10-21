@@ -17,8 +17,10 @@ const KIND_LABELS: Record<AuditKind, string> = {
   deposit: 'Deposit',
   supplier_payment: 'Supplier payment',
   expense: 'Expense',
+  purchase: 'Purchase',
   delivery: 'Delivery',
   change: 'Record change',
+  order_status: 'Order status',
   employee: 'Employee joining',
   advance: 'Emergency advance',
   business: 'Sub business',
@@ -29,8 +31,10 @@ const PLURAL_LABELS: Record<AuditKind, string> = {
   deposit: 'Deposits',
   supplier_payment: 'Supplier payments',
   expense: 'Expenses',
+  purchase: 'Purchases',
   delivery: 'Deliveries',
   change: 'Record changes',
+  order_status: 'Order status changes',
   employee: 'Employees joined',
   advance: 'Emergency advances',
   business: 'Sub business entries',
@@ -51,7 +55,8 @@ export default function DailyAuditPage() {
   const visible = kind === 'all' ? entries : entries.filter((entry) => entry.kind === kind)
 
   const totals = (Object.keys(KIND_LABELS) as AuditKind[]).map((item) => {
-    const approved = entries.filter((entry) => entry.kind === item && entry.decision === 'approved')
+    // Order status changes need no approval, so every one counts.
+    const approved = entries.filter((entry) => entry.kind === item && (entry.decision === 'approved' || entry.decision === 'changed'))
     return { kind: item, count: approved.length, amount: approved.reduce((sum, entry) => sum + entry.amount, 0) }
   })
 
@@ -75,9 +80,10 @@ export default function DailyAuditPage() {
               className={`rounded-lg border p-3 text-left transition-colors ${kind === total.kind ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}
             >
               <p className="text-xs text-muted-foreground">
-                {PLURAL_LABELS[total.kind]} {total.kind === 'delivery' ? 'submitted' : 'approved'}
+                {PLURAL_LABELS[total.kind]} {total.kind === 'delivery' ? 'submitted' : total.kind === 'order_status' ? 'today' : 'approved'}
               </p>
-              <p className="mt-1 text-lg font-semibold tabular-nums">{formatCurrency(total.amount)}</p>
+              {/* A status change moves no money, so its tile only counts them. */}
+              <p className="mt-1 text-lg font-semibold tabular-nums">{total.kind === 'order_status' ? total.count : formatCurrency(total.amount)}</p>
               <p className="text-xs text-muted-foreground">{total.count} entr{total.count === 1 ? 'y' : 'ies'}</p>
             </button>
           ))}
@@ -106,8 +112,10 @@ export default function DailyAuditPage() {
                     <TableRow key={entry.id} className="align-top">
                       <TableCell>
                         <span className="block font-medium">{KIND_LABELS[entry.kind]}</span>
-                        {entry.kind === 'delivery' ? (
-                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">submitted</span>
+                        {entry.kind === 'delivery' || entry.decision === 'changed' ? (
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                            {entry.decision === 'changed' ? 'changed' : 'submitted'}
+                          </span>
                         ) : (
                           <StatusPill status={entry.decision} />
                         )}

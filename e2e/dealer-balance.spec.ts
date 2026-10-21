@@ -1,13 +1,15 @@
 import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import { loginAsAdmin } from './auth'
+import { approveThroughBothStages, authorizerDealerFields, hasApproverLogins } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin, type AdminDb } from './support/firebase'
 
 /**
  * The ledger is the only source of a dealer's due. The opening due from the dealer form is the
- * sheet's first line, a hand-entered Credit Sheet entry changes the due straight away, and a
- * dealer who has paid ahead shows "Advance".
+ * sheet's first line, a hand-entered Credit Sheet entry changes the due once it gets both
+ * approvals, and a dealer who has paid ahead shows "Advance". Every change here is submitted by the
+ * admin and approved by the seeded Authorizer and Chairman.
  *
  * One test dealer is added through the form and removed afterwards with its ledger lines,
  * activities and notifications. The dealer alert route is stubbed, so nothing is sent.
@@ -39,6 +41,13 @@ async function choose(page: Page, trigger: Locator, option: string) {
 
 const openingDueInput = (page: Page) => page.getByRole('dialog').getByLabel(/^Opening due \(/)
 
+/** Opens the test dealer's sheet on the Credit Sheet page, unless it is already open. */
+async function openSheet(page: Page) {
+  const view = page.getByRole('button', { name: `View ${name} details` })
+  if (await view.count()) await view.click()
+  await expect(page.getByRole('button', { name: 'Add ledger entry' })).toBeVisible()
+}
+
 test.beforeAll(async () => {
   db = await connectAsAdmin()
 })
@@ -50,10 +59,10 @@ test.afterAll(async () => {
     for (const entry of await entriesOf(customer.id)) await db.remove(`erp/creditLedgerEntries/${entry.id}`)
     await db.remove(`erp/customers/${customer.id}`)
   }
-  for (const section of ['activities', 'notifications']) {
-    const records = (await db.read<Record<string, { message?: string; title?: string; body?: string }>>(`erp/${section}`)) ?? {}
+  for (const section of ['activities', 'notifications', 'changeRequests', 'ledgerEntryRequests', 'auditLog']) {
+    const records = (await db.read<Record<string, unknown>>(`erp/${section}`)) ?? {}
     for (const [id, record] of Object.entries(records)) {
-      if (`${record.title ?? ''} ${record.message ?? ''} ${record.body ?? ''}`.includes(name)) await db.remove(`erp/${section}/${id}`)
+      if (JSON.stringify(record).includes(name)) await db.remove(`erp/${section}/${id}`)
     }
   }
   await db.close()
@@ -65,8 +74,9 @@ test.beforeEach(async ({ page }) => {
   await loginAsAdmin(page)
 })
 
-test('TC-A.1 opening due, a hand entry and an advance all come from the ledger', async ({ page }, testInfo) => {
-  test.setTimeout(180_000)
+test('TC-A.1 opening due, a hand entry and an advance all come from the ledger', async ({ browser, page }, testInfo) => {
+  test.setTimeout(420_000)
+  test.skip(!hasApproverLogins(), 'Changes need the Authorizer and Chairman logins seeded on the emulators.')
   const zones = Object.values((await db.read<Record<string, { name: string }>>('erp/zones')) ?? {})
   test.skip(zones.length === 0, 'No zones are set up yet.')
 
@@ -80,9 +90,13 @@ test('TC-A.1 opening due, a hand entry and an advance all come from the ledger',
   await openingDueInput(page).fill('1000')
   await dialog.getByRole('button', { name: 'Save dealer' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(await dealer()).toBeUndefined()
+  await approveThroughBothStages(browser, name, page)
 
   await expect.poll(async () => (await dealer())?.due).toBe(1000)
   const { id } = (await dealer())!
+  // Into the seeded Authorizer's depot, so they can authorize the dealer's later changes.
+  await db.update(`erp/customers/${id}`, await authorizerDealerFields(db))
   expect(await entriesOf(id)).toEqual([expect.objectContaining({ particulars: 'Opening due', credit: 1000, debit: 0, kind: 'opening' })])
 
   // Editing the opening due changes that line, and the due with it.
@@ -92,6 +106,8 @@ test('TC-A.1 opening due, a hand entry and an advance all come from the ledger',
   await openingDueInput(page).fill('1500')
   await page.getByRole('dialog').getByRole('button', { name: 'Update dealer' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect((await dealer())?.due).toBe(1000)
+  await approveThroughBothStages(browser, name, page)
   await expect.poll(async () => (await dealer())?.due).toBe(1500)
   expect((await entriesOf(id)).map((entry) => entry.credit)).toEqual([1500])
 
@@ -104,7 +120,10 @@ test('TC-A.1 opening due, a hand entry and an advance all come from the ledger',
   await entryDialog.locator('div.space-y-2').filter({ hasText: /Debit amount/ }).locator('input').fill('2000')
   await entryDialog.getByRole('button', { name: 'Save entry' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect((await dealer())?.due).toBe(1500)
+  await approveThroughBothStages(browser, name, page)
   await expect.poll(async () => (await dealer())?.due).toBe(-500)
+  await openSheet(page)
 
   // The sheet closes on "Advance 500"; only the hand entry can be deleted, not the opening due.
   const footer = page.locator('tfoot')
@@ -124,8 +143,10 @@ test('TC-A.1 opening due, a hand entry and an advance all come from the ledger',
 
   // Deleting the payment puts the due back to the opening 1,500.
   await navigate(page, '/admin/credit-sheet')
-  await page.getByRole('button', { name: `View ${name} details` }).click()
+  await openSheet(page)
   await page.getByRole('button', { name: 'Delete ledger entry' }).click()
+  await expect(page.getByText('Removing the entry was sent for approval.')).toBeVisible()
+  await approveThroughBothStages(browser, name, page)
   await expect.poll(async () => (await dealer())?.due).toBe(1500)
   note(testInfo, `${name}: opening 1,000 → 1,500, a 2,000 payment → Advance 500, payment deleted → 1,500.`)
 })

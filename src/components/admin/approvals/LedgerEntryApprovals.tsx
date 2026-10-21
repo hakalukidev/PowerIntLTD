@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { useERP } from '@/lib/erp/provider'
 import type { LedgerEntryRequestRecord } from '@/lib/erp/types'
-import { approvalStage, canActAtStage, formatCurrency, formatDate, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
+import { approvalStage, formatCurrency, formatDate, sortByCreatedAtDesc, toArray, userRoleNames } from '@/lib/erp/utils'
 
-import { ApprovalStageNote, EmptyState, FeedbackBanner, StatusPill, SubmittedBy, localDay, todayInput, type Feedback } from './shared'
+import { ApprovalStageNote, approveLabel, EmptyState, FeedbackBanner, StatusPill, SubmittedBy, localDay, todayInput, useApprovalAccess, type Feedback } from './shared'
 
 /** Send a ledger entry on to the Chairman, approve or reject it, reporting the result through `setFeedback`. */
 export function useLedgerEntryReview(setFeedback: (feedback: Feedback) => void) {
@@ -53,9 +53,8 @@ export function LedgerEntryCard({
   onReview: (decision: 'approve' | 'reject') => void
   badge?: React.ReactNode
 }) {
-  const { data, currentUser } = useERP()
-  const stage = approvalStage(request)
-  const canReview = canActAtStage(currentUser, stage)
+  const { data } = useERP()
+  const { stage, canReview } = useApprovalAccess(request)
   const isDebit = request.debit > 0
   const submitter = data?.users[request.submittedById]
   return (
@@ -95,7 +94,7 @@ export function LedgerEntryCard({
             </Button>
             <Button size="sm" className="gap-1.5" disabled={busy} onClick={() => onReview('approve')}>
               {stage === 'authorizer' ? <Send className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-              {stage === 'authorizer' ? 'Submit to Chairman' : 'Final approve'}
+              {approveLabel(stage)}
             </Button>
           </div>
         ) : null}

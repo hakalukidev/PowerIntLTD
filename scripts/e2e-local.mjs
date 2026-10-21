@@ -10,6 +10,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import os from 'node:os'
+import path from 'node:path'
 
 const env = process.env
 if (env.NEXT_PUBLIC_FIREBASE_EMULATOR !== '1' || !env.FIREBASE_AUTH_EMULATOR_HOST || !env.FIREBASE_DATABASE_EMULATOR_HOST) {
@@ -30,7 +32,10 @@ if (args[0] === '--inner') {
   if (seeded !== 0) process.exit(seeded)
   // The backup's stored roles predate the approval permissions; give them as a live deploy would.
   const granted = run('node', ['scripts/grant-approval-permissions.mjs', '--apply'])
-  process.exit(granted === 0 ? run('npx', ['playwright', 'test', ...args.slice(1)]) : granted)
+  if (granted !== 0) process.exit(granted)
+  // Likewise they predate the create/edit split: give `.create` wherever they have `.edit`.
+  const split = run('node', ['scripts/split-edit-permission.mjs', '--apply', '--backup', path.join(os.tmpdir(), 'powerint-e2e-backups')])
+  process.exit(split === 0 ? run('npx', ['playwright', 'test', ...args.slice(1)]) : split)
 }
 
 const quote = (value) => `'${value.replace(/'/g, `'\\''`)}'`

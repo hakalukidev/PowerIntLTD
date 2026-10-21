@@ -37,6 +37,8 @@ type ZoneManagerDialogProps = {
 
 export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false }: ZoneManagerDialogProps) {
   const { data, users, saveZone, deleteZone, hasPermission } = useERP()
+  const canCreate = hasPermission('zones.create')
+  const canEdit = hasPermission('zones.edit')
   const canDelete = hasPermission('zones.delete')
   const zones = useMemo(() => toArray(data?.zones).sort((left, right) => left.name.localeCompare(right.name)), [data?.zones])
   const customers = useMemo(() => toArray(data?.customers), [data?.customers])
@@ -288,9 +290,11 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1.5">
-                    <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={() => startEdit(zone)} aria-label={`Edit ${zone.name}`}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
+                    {canEdit ? (
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={() => startEdit(zone)} aria-label={`Edit ${zone.name}`}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    ) : null}
                     {canDelete ? (
                       <Button
                         type="button"
@@ -310,12 +314,14 @@ export function ZoneManagerDialog({ open, onOpenChange, startWithNewZone = false
             ) : (
               <p className="py-6 text-center text-sm text-muted-foreground">No zones yet. Create the first one to start grouping dealers.</p>
             )}
-            <div className="flex justify-end">
-              <Button type="button" className="rounded-xl" onClick={startCreate}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                New zone
-              </Button>
-            </div>
+            {canCreate ? (
+              <div className="flex justify-end">
+                <Button type="button" className="rounded-xl" onClick={startCreate}>
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  New zone
+                </Button>
+              </div>
+            ) : null}
           </div>
         )}
       </DialogContent>

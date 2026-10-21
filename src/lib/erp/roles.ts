@@ -4,18 +4,21 @@ import type { PermissionDefinition, RoleRecord } from './types'
 /**
  * Roles saved before the permission catalog was split into per-module view/edit/delete
  * grants still store these coarse ids. They expand to their closest granular equivalents
- * so existing roles keep the access they had instead of losing it silently.
+ * so existing roles keep the access they had instead of losing it silently. They predate the
+ * create/edit split, so "manage" grants both; saving the role stores the granular ids instead.
+ * (Stored `<module>.edit` grants were given `.create` once by scripts/split-edit-permission.mjs.)
  */
 const LEGACY_PERMISSION_MAP: Record<string, string[]> = {
   view_dashboard: ['dashboard.view'],
   view_products: ['inventory.view'],
-  manage_products: ['inventory.view', 'inventory.edit'],
-  manage_orders: ['sales.view', 'sales.edit', 'couriers.view', 'couriers.edit'],
+  manage_products: ['inventory.view', 'inventory.create', 'inventory.edit'],
+  manage_orders: ['sales.view', 'sales.create', 'sales.edit', 'couriers.view', 'couriers.create', 'couriers.edit'],
   view_reports: ['reports.view', 'customers.view'],
   view_finance: ['suppliers.view', 'finance.view', 'sellers.view'],
   view_employees: ['employees.view', 'sales_target.view', 'salary.view'],
   manage_employees: [
     'employees.view',
+    'employees.create',
     'employees.edit',
     'sales_target.view',
     'sales_target.edit',

@@ -64,7 +64,7 @@ export default function SupplierPaymentPage() {
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
   // Accountants enter payments through finance access, without being able to edit suppliers.
-  const canEdit = hasPermission('suppliers.edit') || hasPermission('finance.edit')
+  const canCreate = hasPermission('suppliers.create') || hasPermission('finance.create')
 
   const suppliers = useMemo(
     () => toArray(data?.suppliers).sort((left, right) => left.name.localeCompare(right.name)),
@@ -343,7 +343,7 @@ export default function SupplierPaymentPage() {
                   </p>
                 ) : null}
                 <div className="flex justify-end sm:col-span-2">
-                  <Button type="submit" disabled={!canEdit || isSaving} className="w-full sm:w-auto">
+                  <Button type="submit" disabled={!canCreate || isSaving} className="w-full sm:w-auto">
                     {isSaving ? 'Submitting...' : 'Submit for approval'}
                   </Button>
                 </div>

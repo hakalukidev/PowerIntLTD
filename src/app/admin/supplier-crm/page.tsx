@@ -51,6 +51,7 @@ function hasBankDetails(supplier: SupplierRecord) {
 
 export default function SupplierCrmPage() {
   const { data, deleteSupplier, hasPermission, changesNeedApproval } = useERP()
+  const canCreate = hasPermission('suppliers.create')
   const canEdit = hasPermission('suppliers.edit')
   const canDelete = hasPermission('suppliers.delete')
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
@@ -183,11 +184,11 @@ export default function SupplierCrmPage() {
               <CardDescription>Search by name, phone, company, NID, trade license, or location.</CardDescription>
             </div>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-[minmax(220px,1fr)_auto]">
-              <div className={cn('relative col-span-2 xl:col-span-1', !canEdit && 'xl:col-span-2')}>
+              <div className={cn('relative col-span-2 xl:col-span-1', !canCreate && 'xl:col-span-2')}>
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-9" placeholder="Search by name or phone" />
               </div>
-              {canEdit ? (
+              {canCreate ? (
                 <Button onClick={openCreateDialog} className="col-span-2 h-10 rounded-xl xl:col-span-1">
                   <Plus className="mr-2 h-4 w-4" />
                   Add supplier

@@ -163,13 +163,16 @@ function SheetBrandHeader({ topLeft, topRight, heading, badge }: { topLeft: stri
 export default function CreditSheetPage() {
   const { data, currentUser, hasPermission, recordCreditLedgerEntry, deleteCreditLedgerEntry, changesNeedApproval } = useERP()
   const currency = data?.settings.currency
+  const canCreate = hasPermission('credit_sheet.create')
   const canEdit = hasPermission('credit_sheet.edit')
   // A zone in charge cannot change the sheet but may add a commitment or a ledger entry for their zone's
   // clients; each goes to the Authorizer, then the Chairman.
   const zoneInCharge = isZoneInCharge(currentUser, toArray(data?.zones))
-  const canAddCommitment = canEdit || zoneInCharge
-  const canAddEntry = canEdit || zoneInCharge
-  const canManageZones = hasPermission('zones.edit')
+  const canAddCommitment = canCreate || zoneInCharge
+  const canAddEntry = canCreate || zoneInCharge
+  const canAddZone = hasPermission('zones.create')
+  const canEditZones = hasPermission('zones.edit')
+  const canManageZones = canAddZone || canEditZones
   // Zone managers and zone-limited roles are limited to their own zones; everyone else sees all zones.
   const { zones, zoneOptions, visibleZoneIds, customers } = useZoneAccess()
   const allCustomers = useMemo(() => toArray(data?.customers), [data?.customers])
@@ -1049,14 +1052,18 @@ export default function CreditSheetPage() {
             <div className="flex flex-wrap gap-2">
               {canManageZones ? (
                 <>
-                  <Button type="button" size="sm" className="rounded-lg" onClick={() => openZones(true)}>
-                    <Plus className="mr-1.5 h-4 w-4" />
-                    Add zone
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => openZones(false)}>
-                    <MapPinned className="mr-1.5 h-4 w-4" />
-                    Manage zones
-                  </Button>
+                  {canAddZone ? (
+                    <Button type="button" size="sm" className="rounded-lg" onClick={() => openZones(true)}>
+                      <Plus className="mr-1.5 h-4 w-4" />
+                      Add zone
+                    </Button>
+                  ) : null}
+                  {canEditZones ? (
+                    <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => openZones(false)}>
+                      <MapPinned className="mr-1.5 h-4 w-4" />
+                      Manage zones
+                    </Button>
+                  ) : null}
                 </>
               ) : null}
               <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={handlePrintSheet}>

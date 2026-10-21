@@ -194,6 +194,7 @@ export function UserManagementPanel() {
     return labels.length ? labels.join(', ') : '—'
   }
   const canView = hasPermission('users.view')
+  const canCreate = hasPermission('users.create')
   const canManage = hasPermission('users.edit')
   const canDelete = hasPermission('users.delete')
 
@@ -316,14 +317,16 @@ export function UserManagementPanel() {
           <CardDescription>Login ID and role map for the team already stored in Firebase.</CardDescription>
         </div>
 
-        {canManage ? (
+        {canCreate || canManage ? (
         <Dialog open={open} onOpenChange={handleOpenChange}>
-          <DialogTrigger asChild>
-            <Button className="rounded-xl" onClick={handleAddClick}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add user
-            </Button>
-          </DialogTrigger>
+          {canCreate ? (
+            <DialogTrigger asChild>
+              <Button className="rounded-xl" onClick={handleAddClick}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add user
+              </Button>
+            </DialogTrigger>
+          ) : null}
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingUser ? 'Edit user' : 'Create a new user'}</DialogTitle>

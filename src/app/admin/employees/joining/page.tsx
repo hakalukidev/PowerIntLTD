@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 
 export default function EmployeeJoiningPage() {
   const { data, currentUser, saveEmployee, hasPermission } = useERP()
-  const canSubmit = hasPermission('employees.edit')
+  const canSubmit = hasPermission('employees.create')
   const isAdmin = currentUser?.roleId === 'admin'
   const currency = data?.settings.currency
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])

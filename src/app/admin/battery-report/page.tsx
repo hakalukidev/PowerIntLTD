@@ -130,6 +130,7 @@ export default function BatteryReportPage() {
   const [verdictFilter, setVerdictFilter] = useState<BatteryVerdict | 'all'>('all')
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
+  const canCreate = hasPermission('customers.create')
   const canEdit = hasPermission('customers.edit')
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => ({ ...current, [key]: value }))
 
@@ -506,7 +507,7 @@ export default function BatteryReportPage() {
                     Cancel edit
                   </Button>
                 ) : null}
-                <Button type="submit" disabled={!canEdit || isSaving}>
+                <Button type="submit" disabled={!(editingId ? canEdit : canCreate) || isSaving}>
                   {isSaving ? 'Saving...' : editingId ? 'Update report' : 'Save report'}
                 </Button>
               </div>

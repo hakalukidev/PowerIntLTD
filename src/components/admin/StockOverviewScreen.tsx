@@ -249,6 +249,7 @@ export function StockOverviewScreen() {
   const [pendingImageDeleteId, setPendingImageDeleteId] = useState<string | null>(null)
 
   const deferredSearch = useDeferredValue(search)
+  const canCreateInventory = hasPermission('inventory.create')
   const canManageInventory = hasPermission('inventory.edit')
   const canDeleteInventory = hasPermission('inventory.delete')
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
@@ -559,13 +560,13 @@ export function StockOverviewScreen() {
         <Card className="border-border/70 shadow-sm">
           <CardContent className="flex flex-col gap-6 p-6">
             <div className="flex flex-wrap gap-3 xl:justify-end">
-                <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canManageInventory || warehouses.length === 0}>
+                <Button className="rounded-xl" onClick={openCreateProductDialog} disabled={!canCreateInventory || warehouses.length === 0}>
                   Add product
                 </Button>
-                <Button variant="secondary" className="rounded-xl" onClick={openReceivePurchaseDialog} disabled={!canManageInventory || products.length === 0}>
+                <Button variant="secondary" className="rounded-xl" onClick={openReceivePurchaseDialog} disabled={!canCreateInventory || products.length === 0}>
                   Receive purchase
                 </Button>
-                <Button variant="outline" className="rounded-xl" onClick={openCreateWarehouseDialog} disabled={!canManageInventory}>
+                <Button variant="outline" className="rounded-xl" onClick={openCreateWarehouseDialog} disabled={!canCreateInventory}>
                   Add warehouse
                 </Button>
             </div>
@@ -654,7 +655,7 @@ export function StockOverviewScreen() {
                 </div>
               ) : <div />}
 
-              {activeInventoryView === 'warehouses' && canManageInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={openCreateWarehouseDialog}>Add warehouse</Button> : null}
+              {activeInventoryView === 'warehouses' && canCreateInventory ? <Button variant="outline" size="sm" className="rounded-lg" onClick={openCreateWarehouseDialog}>Add warehouse</Button> : null}
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-border/70">
@@ -772,7 +773,7 @@ export function StockOverviewScreen() {
               <DialogTitle>{editingProductId ? 'Edit product' : 'Add product'}</DialogTitle>
               <DialogDescription>Use the essential fields only. This form is optimized for workshop and lift inventory records.</DialogDescription>
             </DialogHeader>
-            {canManageInventory ? (
+            {(editingProductId ? canManageInventory : canCreateInventory) ? (
               <form className="space-y-5" onSubmit={handleSaveProduct}>
                 <div className="grid gap-5 sm:grid-cols-2">
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product name</p><Input placeholder="Two Post Service Lift" value={productForm.name} onChange={(event) => setProductForm((current) => ({ ...current, name: event.target.value }))} required /></div>
@@ -816,7 +817,7 @@ export function StockOverviewScreen() {
               <DialogTitle>Receive purchase</DialogTitle>
               <DialogDescription>Select a product, confirm the supplier and enter the quantity. Stock goes up once the Authorizer and the Chairman approve it.</DialogDescription>
             </DialogHeader>
-            {canManageInventory ? (
+            {canCreateInventory ? (
               <form className="space-y-5" onSubmit={handleReceivePurchase}>
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product</p><Combobox options={purchaseProductOptions} value={purchaseForm.productId} onChange={(value) => { const product = data?.products[value]; setPurchaseForm((current) => ({ ...current, productId: value, supplierId: product?.supplierId || SUPPLIER_NONE, unitCost: product ? String(product.purchasePrice) : current.unitCost })) }} placeholder="Select product" searchPlaceholder="Search products..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseProductOpen(true) }} createNewLabel="Create product" /></div>
                 {selectedPurchaseProduct ? <div className="rounded-2xl border border-border/70 bg-muted/30 p-4"><div className="grid gap-3 sm:grid-cols-3"><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current stock</p><p className="mt-1 text-lg font-semibold">{selectedPurchaseProduct.stockQty} units</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Warehouse</p><p className="mt-1 text-lg font-semibold">{data?.warehouses[selectedPurchaseProduct.warehouseId]?.name ?? 'Unknown'}</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Last cost</p><p className="mt-1 text-lg font-semibold">{formatCurrency(selectedPurchaseProduct.purchasePrice, currency)}</p></div></div></div> : null}
@@ -836,7 +837,7 @@ export function StockOverviewScreen() {
               <DialogTitle>{editingWarehouseId ? 'Edit warehouse' : 'Add warehouse'}</DialogTitle>
               <DialogDescription>Keep storage names and locations clean so product assignment stays clear for the team.</DialogDescription>
             </DialogHeader>
-            {canManageInventory ? (
+            {(editingWarehouseId ? canManageInventory : canCreateInventory) ? (
               <form className="space-y-5" onSubmit={handleSaveWarehouse}>
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse name</p><Input placeholder="Dhaka Main Warehouse" value={warehouseForm.name} onChange={(event) => setWarehouseForm((current) => ({ ...current, name: event.target.value }))} required /></div>
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Location</p><Input placeholder="Mirpur, Dhaka" value={warehouseForm.location} onChange={(event) => setWarehouseForm((current) => ({ ...current, location: event.target.value }))} required /></div>

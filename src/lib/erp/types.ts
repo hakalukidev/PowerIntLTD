@@ -3,7 +3,7 @@ export type PermissionDefinition = {
   label: string
   description: string
   category: string
-  action: 'view' | 'edit' | 'delete' | 'approve'
+  action: 'view' | 'create' | 'edit' | 'delete' | 'approve'
 }
 
 export type RoleRecord = {

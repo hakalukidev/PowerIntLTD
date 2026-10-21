@@ -43,7 +43,7 @@ export default function ReplacementPage() {
   const [reviewingId, setReviewingId] = useState<string | null>(null)
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
-  const canEdit = hasPermission('customers.edit')
+  const canCreate = hasPermission('customers.create')
 
   const dealerOptions = useMemo<ComboboxOption[]>(
     () =>
@@ -168,7 +168,7 @@ export default function ReplacementPage() {
                   </p>
                 ) : null}
                 <div className="flex justify-end sm:col-span-2">
-                  <Button type="submit" disabled={!canEdit || isSaving} className="w-full sm:w-auto">
+                  <Button type="submit" disabled={!canCreate || isSaving} className="w-full sm:w-auto">
                     {isSaving ? 'Submitting...' : 'Submit for approval'}
                   </Button>
                 </div>

@@ -129,6 +129,7 @@ export default function LeadsPage() {
   const { data, saveLead, deleteLead, hasPermission } = useERP()
   const leads = useMemo(() => toArray(data?.leads), [data?.leads])
   const { zones, zoneOptions } = useZoneAccess()
+  const canCreate = hasPermission('leads.create')
   const canEdit = hasPermission('leads.edit')
   const canDelete = hasPermission('leads.delete')
 
@@ -379,7 +380,7 @@ export default function LeadsPage() {
               <Button variant="outline" className="rounded-xl" onClick={() => void exportPdf('leads.pdf', 'Leads', exportHeaders, exportRows())}>
                 Export PDF
               </Button>
-              {canEdit ? (
+              {canCreate ? (
                 <Button onClick={openCreateDialog} className="h-10 rounded-xl">
                   <Plus className="mr-2 h-4 w-4" />
                   Add lead

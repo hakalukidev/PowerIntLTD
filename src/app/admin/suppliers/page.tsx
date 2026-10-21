@@ -55,6 +55,7 @@ const MAX_PRODUCT_MATCHES = 6
 
 export default function SuppliersPage() {
   const { data, saveSupplier, deleteSupplier, changesNeedApproval, hasPermission } = useERP()
+  const canCreate = hasPermission('suppliers.create')
   const canEdit = hasPermission('suppliers.edit')
   const canDelete = hasPermission('suppliers.delete')
   const suppliers = useMemo(() => toArray(data?.suppliers), [data?.suppliers])
@@ -418,7 +419,7 @@ export default function SuppliersPage() {
                   <SelectItem value="importer">Importer</SelectItem>
                 </SelectContent>
               </Select>
-              {canEdit ? (
+              {canCreate ? (
                 <Button onClick={openCreateDialog} className="h-10 rounded-xl">
                   <Plus className="mr-2 h-4 w-4" />
                   Add supplier

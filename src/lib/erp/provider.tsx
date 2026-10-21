@@ -153,9 +153,11 @@ const ATTENDANCE_HANDLER_PERMISSIONS = ['attendance.view', 'attendance.edit']
 export const INVENTORY_MANAGER_PERMISSIONS = [
   'dashboard.view',
   'inventory.view',
+  'inventory.create',
   'inventory.edit',
   'inventory.delete',
   'damage_products.view',
+  'damage_products.create',
   'damage_products.edit',
   'damage_products.delete',
   'suppliers.view',
@@ -2436,7 +2438,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     // The API route re-checks this server-side; this is only for a fast, clear error.
-    if (!hasPermissionCheck(data, currentUser, 'users.edit')) {
+    if (!hasPermissionCheck(data, currentUser, 'users.create')) {
       throw new Error('You do not have permission to create users.')
     }
 
@@ -2559,7 +2561,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('You need to log in before creating roles.')
     }
 
-    if (!hasPermissionCheck(data, currentUser, 'roles.edit')) {
+    if (!hasPermissionCheck(data, currentUser, 'roles.create')) {
       throw new Error('You do not have permission to create roles.')
     }
 
@@ -5268,7 +5270,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!data || !currentUser) {
       throw new Error('You need to log in first.')
     }
-    if (!currentPermissions.includes('customers.edit')) {
+    if (!currentPermissions.includes(reportId ? 'customers.edit' : 'customers.create')) {
       throw new Error('You do not have permission to write battery reports.')
     }
 

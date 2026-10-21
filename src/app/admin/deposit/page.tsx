@@ -48,7 +48,7 @@ export default function DepositPage() {
   const roleIds = currentUser ? userRoleIds(currentUser) : []
   const isAdmin = roleIds.includes('admin')
   const isApprover = hasPermission(APPROVAL_PERMISSIONS.authorizer) || hasPermission(APPROVAL_PERMISSIONS.chairman)
-  const canEdit = hasPermission('credit_sheet.edit')
+  const canCreate = hasPermission('credit_sheet.create')
   const methods = data?.settings.depositMethods ?? []
 
   const sortedCustomers = useMemo(() => [...customers].sort((left, right) => left.name.localeCompare(right.name)), [customers])
@@ -189,7 +189,7 @@ export default function DepositPage() {
                   </p>
                 ) : null}
                 <div className="flex justify-end sm:col-span-2">
-                  <Button type="submit" disabled={!canEdit || isSaving} className="w-full sm:w-auto">
+                  <Button type="submit" disabled={!canCreate || isSaving} className="w-full sm:w-auto">
                     {isSaving ? 'Submitting...' : 'Submit for approval'}
                   </Button>
                 </div>

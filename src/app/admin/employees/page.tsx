@@ -59,6 +59,7 @@ function employmentToneClass(status: EmploymentStatus) {
 
 export default function EmployeesPage() {
   const { data, currentUser, saveEmployee, deleteEmployee, hasPermission } = useERP()
+  const canCreate = hasPermission('employees.create')
   const canManage = hasPermission('employees.edit')
   const isAdmin = currentUser?.roleId === 'admin'
   const employees = useMemo(() => toArray(data?.employees), [data?.employees])
@@ -246,7 +247,7 @@ export default function EmployeesPage() {
                   <SelectItem value="rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
-              {canManage ? (
+              {canCreate ? (
                 <Button onClick={openCreateDialog} className="h-10 rounded-xl">
                   <Plus className="mr-2 h-4 w-4" />
                   {isAdmin ? 'Add employee' : 'Joining form'}

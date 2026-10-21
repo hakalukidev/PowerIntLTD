@@ -27,22 +27,27 @@ function shiftMonths(months: number) {
   return value.toISOString()
 }
 
+type ModuleAction = 'view' | 'create' | 'edit' | 'delete'
+
 type ModuleActionConfig = {
   category: string
   noun: string
-  actions?: Array<'view' | 'edit' | 'delete'>
+  actions?: ModuleAction[]
 }
 
 function moduleActions(prefix: string, config: ModuleActionConfig): PermissionDefinition[] {
-  const actions = config.actions ?? ['view', 'edit', 'delete']
-  const labels: Record<'view' | 'edit' | 'delete', (noun: string) => string> = {
+  const actions = config.actions ?? ['view', 'create', 'edit', 'delete']
+  const labels: Record<ModuleAction, (noun: string) => string> = {
     view: (noun) => `View ${noun}`,
-    edit: (noun) => `Create & edit ${noun}`,
+    create: (noun) => `Create ${noun}`,
+    edit: (noun) => `Edit ${noun}`,
     delete: (noun) => `Delete ${noun}`,
   }
-  const descriptions: Record<'view' | 'edit' | 'delete', (noun: string) => string> = {
+  const descriptions: Record<ModuleAction, (noun: string) => string> = {
     view: (noun) => `See ${noun} records and details.`,
-    edit: (noun) => `Add new and update existing ${noun} records.`,
+    create: (noun) => `Add new ${noun} records.`,
+    // Without a separate Create, Edit is also what adds records (recording a sale, paying, marking attendance).
+    edit: (noun) => (actions.includes('create') ? `Update existing ${noun} records.` : `Add new and update existing ${noun} records.`),
     delete: (noun) => `Remove ${noun} records permanently.`,
   }
 
@@ -283,12 +288,16 @@ export function createDefaultERPData(): ERPData {
         permissions: [
           'dashboard.view',
           'sales.view',
+          'sales.create',
           'sales.edit',
           'customers.view',
+          'customers.create',
           'customers.edit',
           'credit_sheet.view',
+          'credit_sheet.create',
           'credit_sheet.edit',
           'leads.view',
+          'leads.create',
           'leads.edit',
           'couriers.view',
           'reports.view',
@@ -306,12 +315,16 @@ export function createDefaultERPData(): ERPData {
           'dashboard.view',
           'inventory.view',
           'sales.view',
+          'sales.create',
           'sales.edit',
           'customers.view',
+          'customers.create',
           'customers.edit',
           'credit_sheet.view',
+          'credit_sheet.create',
           'credit_sheet.edit',
           'leads.view',
+          'leads.create',
           'leads.edit',
         ],
         zoneIds: [],
@@ -324,10 +337,12 @@ export function createDefaultERPData(): ERPData {
         permissions: [
           'dashboard.view',
           'inventory.view',
+          'inventory.create',
           'inventory.edit',
           'sales.view',
           ...permissionIds('couriers'),
           'damage_products.view',
+          'damage_products.create',
           'damage_products.edit',
         ],
         dataScope: 'all',

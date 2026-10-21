@@ -207,10 +207,11 @@ function withFallbackOption(options: string[], current: string): string[] {
 export default function CustomersPage() {
   const { data, currentUser, saveCustomer, deleteCustomer, saveCustomerCommitment, deleteCustomerCommitment, changesNeedApproval, hasPermission } =
     useERP()
+  const canCreate = hasPermission('customers.create')
   const canEdit = hasPermission('customers.edit')
   // A zone in charge cannot change client data, but may add a commitment; it then goes to the Authorizer and the Chairman.
   const zoneInCharge = useMemo(() => isZoneInCharge(currentUser, toArray(data?.zones)), [currentUser, data?.zones])
-  const canAddCommitment = canEdit || zoneInCharge
+  const canAddCommitment = canCreate || zoneInCharge
   const canDelete = hasPermission('customers.delete')
   const openingDueOf = (customerId: string) => data?.creditLedgerEntries[openingDueEntryId(customerId)]?.credit ?? 0
   const currency = data?.settings.currency
@@ -1352,7 +1353,7 @@ export default function CustomersPage() {
                 <BellRing className="mr-2 h-4 w-4" />
                 Reminder dealers
               </Button>
-              {canEdit ? (
+              {canCreate ? (
                 <Button onClick={openCreateDialog} className="h-10 rounded-xl">
                   <Plus className="mr-2 h-4 w-4" />
                   Add dealer

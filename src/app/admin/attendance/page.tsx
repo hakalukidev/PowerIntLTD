@@ -48,7 +48,7 @@ export default function AttendancePage() {
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
-  const canClaimDa = isAdmin || hasPermission('finance.edit')
+  const canClaimDa = isAdmin || hasPermission('finance.create')
   const today = dayKey()
   const currency = data?.settings.currency
   const handlerIds = data?.settings.attendanceHandlerIds ?? []

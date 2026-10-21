@@ -74,7 +74,7 @@ export default function OrderFormPage() {
   const [pricesOpen, setPricesOpen] = useState(false)
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
-  const canEdit = hasPermission('sales.edit')
+  const canCreate = hasPermission('sales.create')
   const blockOverLimit = data?.settings.blockOverLimitOrders ?? false
 
   const sortedCustomers = useMemo(() => [...customers].sort((left, right) => left.name.localeCompare(right.name)), [customers])
@@ -522,7 +522,7 @@ export default function OrderFormPage() {
               <Printer className="h-4 w-4" />
               Print quotation
             </Button>
-            <Button type="submit" size="lg" disabled={!canEdit || isSaving || submitBlocked} className="w-full sm:w-auto">
+            <Button type="submit" size="lg" disabled={!canCreate || isSaving || submitBlocked} className="w-full sm:w-auto">
               {isSaving ? 'Submitting...' : 'Submit for approval'}
             </Button>
           </div>

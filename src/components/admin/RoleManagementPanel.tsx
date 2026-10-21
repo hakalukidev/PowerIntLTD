@@ -1,7 +1,7 @@
 "use client"
 
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react'
-import { ArrowLeft, ArrowRight, CheckCheck, Pencil, Plus, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Fragment, useMemo, useState, type FormEvent } from 'react'
+import { CheckCheck, Pencil, Plus, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,17 +31,97 @@ const initialForm = {
   requiresApproval: false,
 }
 
-function groupByCategory(permissions: PermissionDefinition[]) {
-  const map = new Map<string, PermissionDefinition[]>()
-  for (const permission of permissions) {
-    const list = map.get(permission.category) ?? []
-    list.push(permission)
-    map.set(permission.category, list)
-  }
-  return Array.from(map.entries())
+const MATRIX_ACTIONS = [
+  { action: 'view', label: 'View' },
+  { action: 'create', label: 'Create' },
+  { action: 'edit', label: 'Edit' },
+  { action: 'delete', label: 'Delete' },
+] as const
+
+type MatrixAction = (typeof MATRIX_ACTIONS)[number]['action']
+
+type ModuleRow = {
+  prefix: string
+  name: string
+  permissions: Partial<Record<MatrixAction, PermissionDefinition>>
 }
 
-function PermissionPicker({
+type MatrixGroup = {
+  category: string
+  modules: ModuleRow[]
+  /** Permissions that are not View/Create/Edit/Delete (the two approval stages): one checkbox each. */
+  others: PermissionDefinition[]
+}
+
+function isMatrixAction(action: PermissionDefinition['action']): action is MatrixAction {
+  return MATRIX_ACTIONS.some((entry) => entry.action === action)
+}
+
+/** "View the credit sheet" → "Credit sheet". */
+function moduleName(permission: PermissionDefinition) {
+  const noun = permission.label.replace(/^\S+\s+/, '').replace(/^the\s+/i, '')
+  return noun.charAt(0).toUpperCase() + noun.slice(1)
+}
+
+function buildMatrix(permissions: PermissionDefinition[]): MatrixGroup[] {
+  const groups = new Map<string, MatrixGroup>()
+  const modules = new Map<string, ModuleRow>()
+  for (const permission of permissions) {
+    const group = groups.get(permission.category) ?? { category: permission.category, modules: [], others: [] }
+    groups.set(permission.category, group)
+    if (!isMatrixAction(permission.action)) {
+      group.others.push(permission)
+      continue
+    }
+    const prefix = permission.id.slice(0, permission.id.lastIndexOf('.'))
+    let row = modules.get(prefix)
+    if (!row) {
+      row = { prefix, name: moduleName(permission), permissions: {} }
+      modules.set(prefix, row)
+      group.modules.push(row)
+    }
+    row.permissions[permission.action] = permission
+    if (permission.action === 'view') row.name = moduleName(permission)
+  }
+  return Array.from(groups.values())
+}
+
+function rowPermissions(row: ModuleRow) {
+  return MATRIX_ACTIONS.flatMap(({ action }) => (row.permissions[action] ? [row.permissions[action]!.id] : []))
+}
+
+function MatrixCheckbox({
+  checked,
+  indeterminate = false,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  label: string
+  onChange: () => void
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="h-4 w-4 cursor-pointer accent-primary"
+      aria-label={label}
+      title={label}
+      checked={checked}
+      ref={(element) => {
+        if (element) element.indeterminate = indeterminate && !checked
+      }}
+      onChange={onChange}
+    />
+  )
+}
+
+/**
+ * One row per module, grouped by category, with a View / Create / Edit / Delete checkbox each.
+ * Ticking Create, Edit or Delete also ticks View (they are unusable without it), and unticking
+ * View clears the module's other actions. The approval stages get one checkbox per row.
+ */
+function PermissionMatrix({
   allPermissions,
   selected,
   onChange,
@@ -53,73 +133,53 @@ function PermissionPicker({
   const [search, setSearch] = useState('')
 
   const selectedSet = useMemo(() => new Set(selected), [selected])
-  const grouped = useMemo(() => groupByCategory(allPermissions), [allPermissions])
+  const groups = useMemo(() => buildMatrix(allPermissions), [allPermissions])
   const query = search.trim().toLowerCase()
 
-  function matches(permission: PermissionDefinition) {
-    if (!query) return true
-    return (
-      permission.label.toLowerCase().includes(query) ||
-      permission.category.toLowerCase().includes(query) ||
-      permission.description.toLowerCase().includes(query)
-    )
-  }
+  const visibleGroups = groups
+    .map((group) => {
+      if (!query || group.category.toLowerCase().includes(query)) return group
+      const matches = (text: string) => text.toLowerCase().includes(query)
+      return {
+        ...group,
+        modules: group.modules.filter(
+          (row) => matches(row.name) || Object.values(row.permissions).some((permission) => matches(permission!.label))
+        ),
+        others: group.others.filter((permission) => matches(permission.label) || matches(permission.description)),
+      }
+    })
+    .filter((group) => group.modules.length > 0 || group.others.length > 0)
+  const visibleModules = visibleGroups.flatMap((group) => group.modules)
 
-  const availableGroups = grouped
-    .map(([category, perms]) => [category, perms.filter((p) => !selectedSet.has(p.id) && matches(p))] as const)
-    .filter(([, perms]) => perms.length > 0)
-
-  const assignedGroups = grouped
-    .map(([category, perms]) => [category, perms.filter((p) => selectedSet.has(p.id) && matches(p))] as const)
-    .filter(([, perms]) => perms.length > 0)
-
-  function add(id: string) {
-    if (!selectedSet.has(id)) onChange([...selected, id])
-  }
-
-  function addAll() {
-    onChange(allPermissions.map((p) => p.id))
-  }
-
-  function removeAll() {
-    onChange([])
-  }
-
-  function remove(id: string) {
-    onChange(selected.filter((s) => s !== id))
-  }
-
-  function addCategory(category: string) {
-    const ids = grouped.find(([c]) => c === category)?.[1].map((p) => p.id) ?? []
+  /** Applies additions and removals, keeping View in step with the other actions. */
+  function apply(add: string[], remove: string[]) {
     const next = new Set(selected)
-    ids.forEach((id) => next.add(id))
+    remove.forEach((id) => next.delete(id))
+    add.forEach((id) => next.add(id))
+    for (const group of groups) {
+      for (const row of group.modules) {
+        const view = row.permissions.view?.id
+        if (!view) continue
+        const others = rowPermissions(row).filter((id) => id !== view)
+        if (remove.includes(view)) others.forEach((id) => next.delete(id))
+        else if (others.some((id) => add.includes(id) && next.has(id))) next.add(view)
+      }
+    }
     onChange(Array.from(next))
   }
 
-  function removeCategory(category: string) {
-    const ids = new Set(grouped.find(([c]) => c === category)?.[1].map((p) => p.id) ?? [])
-    onChange(selected.filter((id) => !ids.has(id)))
+  function toggle(id: string) {
+    if (selectedSet.has(id)) apply([], [id])
+    else apply([id], [])
   }
 
-  function handleDragStart(event: DragEvent<HTMLDivElement>, id: string) {
-    event.dataTransfer.setData('text/plain', id)
-    event.dataTransfer.effectAllowed = 'move'
+  function toggleIds(ids: string[]) {
+    if (ids.every((id) => selectedSet.has(id))) apply([], ids)
+    else apply(ids, [])
   }
 
-  function allowDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault()
-  }
-
-  function handleDropAdd(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault()
-    const id = event.dataTransfer.getData('text/plain')
-    if (id) add(id)
-  }
-
-  function handleDropRemove(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault()
-    const id = event.dataTransfer.getData('text/plain')
-    if (id) remove(id)
+  function columnIds(action: MatrixAction) {
+    return visibleModules.flatMap((row) => (row.permissions[action] ? [row.permissions[action]!.id] : []))
   }
 
   return (
@@ -142,7 +202,7 @@ function PermissionPicker({
           <button
             type="button"
             disabled={selected.length === allPermissions.length}
-            onClick={addAll}
+            onClick={() => onChange(allPermissions.map((p) => p.id))}
             className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <CheckCheck className="h-3.5 w-3.5" />
@@ -151,7 +211,7 @@ function PermissionPicker({
           <button
             type="button"
             disabled={selected.length === 0}
-            onClick={removeAll}
+            onClick={() => onChange([])}
             className="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/5 px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-400"
           >
             <X className="h-3.5 w-3.5" />
@@ -160,122 +220,121 @@ function PermissionPicker({
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div
-          className="flex max-h-[420px] flex-col rounded-2xl border border-border/70"
-          onDragOver={allowDrop}
-          onDrop={handleDropRemove}
-        >
-          <div className="flex items-center justify-between border-b border-border/70 bg-muted/40 px-3 py-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Available permissions
-            </p>
-            <Badge variant="outline" className="rounded-full text-[10px]">
-              {allPermissions.length - selected.length}
-            </Badge>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto p-3">
-            {availableGroups.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">No permissions match your search.</p>
+      <div className="max-h-[420px] overflow-auto rounded-2xl border border-border/70" data-testid="permission-matrix">
+        <table className="w-full min-w-[520px] border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr>
+              <th className="sticky left-0 top-0 z-30 border-b border-border/70 bg-muted px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Module
+              </th>
+              {MATRIX_ACTIONS.map(({ action, label }) => {
+                const ids = columnIds(action)
+                const count = ids.filter((id) => selectedSet.has(id)).length
+                return (
+                  <th
+                    key={action}
+                    className="sticky top-0 z-20 w-20 border-b border-border/70 bg-muted px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                  >
+                    <label className="flex cursor-pointer flex-col items-center gap-1">
+                      {label}
+                      <MatrixCheckbox
+                        label={`All ${label} permissions`}
+                        checked={ids.length > 0 && count === ids.length}
+                        indeterminate={count > 0}
+                        onChange={() => toggleIds(ids)}
+                      />
+                    </label>
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleGroups.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
+                  No permissions match your search.
+                </td>
+              </tr>
             ) : (
-              availableGroups.map(([category, perms]) => (
-                <div key={category} className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-foreground">{category}</p>
-                    <button
-                      type="button"
-                      className="text-[11px] font-medium text-primary hover:underline"
-                      onClick={() => addCategory(category)}
+              visibleGroups.map((group) => (
+                <Fragment key={group.category}>
+                  <tr>
+                    <th
+                      colSpan={5}
+                      scope="colgroup"
+                      className="border-b border-border/70 bg-background px-3 pb-1 pt-3 text-left text-xs font-semibold text-foreground"
                     >
-                      Add all
-                    </button>
-                  </div>
-                  <div className="space-y-1">
-                    {perms.map((permission) => (
-                      <div
-                        key={permission.id}
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, permission.id)}
-                        className="flex cursor-grab items-center justify-between gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5 text-sm active:cursor-grabbing"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate font-medium">{permission.label}</p>
-                          <p className="truncate text-xs text-muted-foreground">{permission.description}</p>
-                        </div>
-                        <button
-                          type="button"
-                          className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          onClick={() => add(permission.id)}
-                          title="Add permission"
+                      <span className="sticky left-3">{group.category}</span>
+                    </th>
+                  </tr>
+                  {group.modules.map((row) => {
+                    const ids = rowPermissions(row)
+                    const count = ids.filter((id) => selectedSet.has(id)).length
+                    return (
+                      <tr key={row.prefix} className="group">
+                        <th
+                          scope="row"
+                          className="sticky left-0 z-10 border-b border-border/40 bg-background px-3 py-1.5 text-left font-normal group-hover:bg-muted"
                         >
-                          <ArrowRight className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                          <label className="flex cursor-pointer items-center gap-2 pl-3">
+                            <MatrixCheckbox
+                              label={`All ${row.name} permissions`}
+                              checked={count === ids.length}
+                              indeterminate={count > 0}
+                              onChange={() => toggleIds(ids)}
+                            />
+                            <span className="max-w-[160px] truncate sm:max-w-none" title={row.name}>
+                              {row.name}
+                            </span>
+                          </label>
+                        </th>
+                        {MATRIX_ACTIONS.map(({ action }) => {
+                          const permission = row.permissions[action]
+                          return (
+                            <td key={action} className="border-b border-border/40 px-2 py-1.5 text-center group-hover:bg-muted">
+                              {permission ? (
+                                <MatrixCheckbox
+                                  label={permission.label}
+                                  checked={selectedSet.has(permission.id)}
+                                  onChange={() => toggle(permission.id)}
+                                />
+                              ) : (
+                                <span className="text-muted-foreground" aria-label={`No ${action} for ${row.name}`}>
+                                  —
+                                </span>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                  {group.others.map((permission) => (
+                    <tr key={permission.id} className="group">
+                      <th
+                        scope="row"
+                        className="sticky left-0 z-10 border-b border-border/40 bg-background px-3 py-1.5 text-left font-normal group-hover:bg-muted"
+                      >
+                        <span className="block max-w-[160px] pl-3 sm:max-w-none">{permission.label}</span>
+                      </th>
+                      <td colSpan={4} className="border-b border-border/40 px-2 py-1.5 group-hover:bg-muted">
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                          <MatrixCheckbox
+                            label={permission.label}
+                            checked={selectedSet.has(permission.id)}
+                            onChange={() => toggle(permission.id)}
+                          />
+                          <span>Allowed — {permission.description}</span>
+                        </label>
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))
             )}
-          </div>
-        </div>
-
-        <div
-          className="flex max-h-[420px] flex-col rounded-2xl border border-primary/30 bg-primary/[0.03]"
-          onDragOver={allowDrop}
-          onDrop={handleDropAdd}
-        >
-          <div className="flex items-center justify-between border-b border-primary/20 bg-primary/5 px-3 py-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-primary">Assigned permissions</p>
-            <Badge className="rounded-full bg-primary/10 text-[10px] text-primary hover:bg-primary/10">
-              {selected.length}
-            </Badge>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto p-3">
-            {assignedGroups.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Drag a permission here, or click its arrow, to grant it to this role.
-              </p>
-            ) : (
-              assignedGroups.map(([category, perms]) => (
-                <div key={category} className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-foreground">{category}</p>
-                    <button
-                      type="button"
-                      className="text-[11px] font-medium text-rose-600 hover:underline dark:text-rose-400"
-                      onClick={() => removeCategory(category)}
-                    >
-                      Remove all
-                    </button>
-                  </div>
-                  <div className="space-y-1">
-                    {perms.map((permission) => (
-                      <div
-                        key={permission.id}
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, permission.id)}
-                        className="flex cursor-grab items-center gap-2 rounded-lg border border-primary/20 bg-background px-2.5 py-1.5 text-sm active:cursor-grabbing"
-                      >
-                        <button
-                          type="button"
-                          className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                          onClick={() => remove(permission.id)}
-                          title="Remove permission"
-                        >
-                          <ArrowLeft className="h-4 w-4" />
-                        </button>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{permission.label}</p>
-                          <p className="truncate text-xs text-muted-foreground">{permission.description}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -295,6 +354,7 @@ export function RoleManagementPanel() {
   const [deleting, setDeleting] = useState(false)
 
   const canView = hasPermission('roles.view')
+  const canCreate = hasPermission('roles.create')
   const canManage = hasPermission('roles.edit')
   const canDelete = hasPermission('roles.delete')
 
@@ -425,18 +485,20 @@ export function RoleManagementPanel() {
           </div>
           <CardTitle>Roles & permissions</CardTitle>
           <CardDescription>
-            Define custom roles and pick exactly which view, edit, and delete permissions each one grants.
+            Define custom roles and tick exactly which view, create, edit, and delete permissions each one grants.
           </CardDescription>
         </div>
 
-        {canManage ? (
+        {canCreate || canManage ? (
           <Dialog open={open} onOpenChange={handleOpenChange}>
-            <DialogTrigger asChild>
-              <Button className="rounded-xl" onClick={handleAddClick}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create role
-              </Button>
-            </DialogTrigger>
+            {canCreate ? (
+              <DialogTrigger asChild>
+                <Button className="rounded-xl" onClick={handleAddClick}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create role
+                </Button>
+              </DialogTrigger>
+            ) : null}
             <DialogContent className="max-w-3xl">
               <DialogHeader>
                 <DialogTitle>{editingRole ? 'Edit role' : 'Create a new role'}</DialogTitle>
@@ -474,7 +536,7 @@ export function RoleManagementPanel() {
                   <p className="text-sm font-medium text-foreground">
                     Permissions<span className="ml-0.5 text-rose-500">*</span>
                   </p>
-                  <PermissionPicker
+                  <PermissionMatrix
                     allPermissions={allPermissions}
                     selected={form.permissions}
                     onChange={(permissions) => setForm((current) => ({ ...current, permissions }))}

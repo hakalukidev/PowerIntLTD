@@ -41,6 +41,7 @@ export default function DepotPage() {
   const { data, currentUser, hasPermission, deleteDepot, setDealersDepot } = useERP()
   const { zones, customers } = useZoneAccess()
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
+  const canCreate = hasPermission('customers.create')
   const canEdit = hasPermission('customers.edit')
 
   const depots = useMemo(() => toArray(data?.depots).sort((left, right) => left.name.localeCompare(right.name)), [data?.depots])
@@ -139,7 +140,7 @@ export default function DepotPage() {
                 their deliveries leave from the depot.
               </CardDescription>
             </div>
-            {canEdit ? (
+            {canCreate ? (
               <Button type="button" size="sm" className="shrink-0 gap-1.5" onClick={() => setEditing({ draft: emptyDraft() })}>
                 <Plus className="h-4 w-4" />
                 Add depot
@@ -149,7 +150,7 @@ export default function DepotPage() {
           <CardContent>
             {depots.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
-                {canEdit ? 'No depots yet. Add a depot to start putting dealers under it.' : 'You have no depot yet. Your dealers appear here once your depot is set up.'}
+                {canCreate ? 'No depots yet. Add a depot to start putting dealers under it.' : 'You have no depot yet. Your dealers appear here once your depot is set up.'}
               </p>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

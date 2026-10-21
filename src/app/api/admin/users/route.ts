@@ -150,7 +150,7 @@ async function resolveExtraRoles(
 
 export async function POST(request: Request) {
   try {
-    const { uid, db, isAdmin } = await requirePermission(request, 'users.edit')
+    const { uid, db, isAdmin } = await requirePermission(request, 'users.create')
     const body = (await request.json()) as UserPayload
 
     const name = (body.name ?? '').trim()

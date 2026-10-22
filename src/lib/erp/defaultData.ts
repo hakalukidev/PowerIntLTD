@@ -1233,6 +1233,8 @@ export function createDefaultERPData(): ERPData {
     orderRequests: {},
     changeRequests: {},
     purchaseRequests: {},
+    stockTransfers: {},
+    stockAdjustments: {},
     employeeAdvances: {},
     commissionAuthorizations: {},
     advanceRequests: {},

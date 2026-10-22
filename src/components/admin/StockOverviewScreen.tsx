@@ -2,13 +2,17 @@
 
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
+  ArrowLeftRight,
   PencilLine,
   Search,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
 import { InventoryManagersCard } from './InventoryManagersCard'
+import { StockAdjustmentDialog, StockTransferDialog } from './inventory/StockMovementDialogs'
+import { allocatedTotal, allocationLines, newAllocationRow, WarehouseAllocationRows, type AllocationRow } from './inventory/WarehouseAllocationRows'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
 import { QuickCreateSupplierDialog } from './quick-create/QuickCreateSupplierDialog'
 import { QuickCreateWarehouseDialog } from './quick-create/QuickCreateWarehouseDialog'
@@ -37,6 +41,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { formatCurrency, formatDateTime, formatTableAmount, getProductStatus, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatWarehouseSplit, stockInWarehouse, warehouseSplit } from '@/lib/erp/stock'
 import { uploadImageToCloudinary, deleteCloudinaryImage } from '@/lib/cloudinary'
 
 const SUPPLIER_NONE = '__none__'
@@ -53,7 +58,8 @@ type ProductFormState = {
   supplierId: string
   purchasePrice: string
   sellingPrice: string
-  stockQty: string
+  /** Opening stock by warehouse; only on Add product. */
+  openingRows: AllocationRow[]
   minStock: string
   maxStock: string
   imageUrl: string
@@ -68,6 +74,8 @@ type PurchaseFormState = {
   currency: string
   /** `YYYY-MM-DD` the goods were received; the purchase is posted on this date. */
   date: string
+  /** Where the quantity goes; must add up to it. */
+  allocations: AllocationRow[]
 }
 
 type WarehouseFormState = {
@@ -88,7 +96,7 @@ function createEmptyProductForm(warehouseId = ''): ProductFormState {
     supplierId: SUPPLIER_NONE,
     purchasePrice: '',
     sellingPrice: '',
-    stockQty: '0',
+    openingRows: [newAllocationRow(warehouseId)],
     minStock: '0',
     maxStock: '0',
     imageUrl: '',
@@ -104,6 +112,7 @@ function createEmptyPurchaseForm(currency = 'BDT'): PurchaseFormState {
     unitCost: '',
     currency,
     date: todayInput(),
+    allocations: [newAllocationRow()],
   }
 }
 
@@ -129,7 +138,6 @@ function productToForm(product: {
   supplierId: string
   purchasePrice: number
   sellingPrice: number
-  stockQty: number
   minStock: number
   maxStock: number
   imageUrl?: string
@@ -145,7 +153,7 @@ function productToForm(product: {
     supplierId: product.supplierId || SUPPLIER_NONE,
     purchasePrice: String(product.purchasePrice),
     sellingPrice: String(product.sellingPrice),
-    stockQty: String(product.stockQty),
+    openingRows: [],
     minStock: String(product.minStock),
     maxStock: String(product.maxStock),
     imageUrl: product.imageUrl || '',
@@ -223,6 +231,10 @@ export function StockOverviewScreen() {
   const [quickCreatePurchaseSupplierOpen, setQuickCreatePurchaseSupplierOpen] = useState(false)
   const [quickCreatePurchaseProductOpen, setQuickCreatePurchaseProductOpen] = useState(false)
   const [pendingSearchText, setPendingSearchText] = useState('')
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [adjustmentOpen, setAdjustmentOpen] = useState(false)
+  // The product a row's Transfer / Adjust button was pressed on.
+  const [movementProductId, setMovementProductId] = useState('')
 
   const warehouseOptions: ComboboxOption[] = useMemo(
     () => warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: warehouse.location })),
@@ -259,7 +271,7 @@ export function StockOverviewScreen() {
     let result = products
 
     if (selectedWarehouseFilter !== 'all') {
-      result = result.filter((product) => product.warehouseId === selectedWarehouseFilter)
+      result = result.filter((product) => stockInWarehouse(product, selectedWarehouseFilter) !== 0 || product.warehouseId === selectedWarehouseFilter)
     }
 
     if (selectedSupplierFilter !== 'all') {
@@ -272,7 +284,7 @@ export function StockOverviewScreen() {
     const query = deferredSearch.trim().toLowerCase()
     if (query) {
       result = result.filter((product) => {
-        const warehouseName = data?.warehouses[product.warehouseId]?.name ?? ''
+        const warehouseName = [data?.warehouses[product.warehouseId]?.name ?? '', ...warehouseSplit(product, data?.warehouses).map((entry) => entry.name)].join(' ')
         const supplierName = data?.suppliers[product.supplierId]?.name ?? ''
         return [product.name, product.sku, product.category, warehouseName, supplierName].join(' ').toLowerCase().includes(query)
       })
@@ -286,13 +298,15 @@ export function StockOverviewScreen() {
   const totalInventoryValue = useMemo(() => products.reduce((sum, product) => sum + product.purchasePrice * product.stockQty, 0), [products])
   const totalSellingValue = useMemo(() => products.reduce((sum, product) => sum + product.sellingPrice * product.stockQty, 0), [products])
   const totalUnits = useMemo(() => products.reduce((sum, product) => sum + product.stockQty, 0), [products])
+  const editingProduct = editingProductId ? data?.products[editingProductId] ?? null : null
   const selectedPurchaseProduct = useMemo(() => products.find((product) => product.id === purchaseForm.productId) ?? null, [products, purchaseForm.productId])
   const purchaseTotal = parseAmount(purchaseForm.unitCost) * parseAmount(purchaseForm.quantity)
 
   const warehouseSummaries = useMemo(() => {
     return warehouses.map((warehouse) => {
-      const warehouseProducts = products.filter((product) => product.warehouseId === warehouse.id)
-      const warehouseUnits = warehouseProducts.reduce((sum, product) => sum + product.stockQty, 0)
+      // Units on the shelves here, including those held for approved orders not yet delivered.
+      const warehouseProducts = products.filter((product) => stockInWarehouse(product, warehouse.id) !== 0)
+      const warehouseUnits = warehouseProducts.reduce((sum, product) => sum + stockInWarehouse(product, warehouse.id), 0)
       const warehouseLowStock = warehouseProducts.filter((product) => product.stockQty <= product.minStock).length
 
       return {
@@ -346,6 +360,13 @@ export function StockOverviewScreen() {
     resetPurchaseEditor()
     setFeedback(null)
     setReceivePurchaseOpen(true)
+  }
+
+  function openMovement(kind: 'transfer' | 'adjustment', productId = '') {
+    setMovementProductId(productId)
+    setFeedback(null)
+    if (kind === 'transfer') setTransferOpen(true)
+    else setAdjustmentOpen(true)
   }
 
   function openCreateWarehouseDialog() {
@@ -426,7 +447,7 @@ export function StockOverviewScreen() {
           purchasePrice: parseAmount(productForm.purchasePrice),
           sellingPrice: parseAmount(productForm.sellingPrice),
           wholesalePrice: parseAmount(productForm.sellingPrice),
-          stockQty: parseAmount(productForm.stockQty),
+          openingStock: editingProductId ? undefined : allocationLines(productForm.openingRows),
           minStock: parseAmount(productForm.minStock),
           maxStock: parseAmount(productForm.maxStock),
           imageUrl: nextImageUrl,
@@ -439,7 +460,14 @@ export function StockOverviewScreen() {
         await deleteCloudinaryImage(pendingImageDeleteId)
       }
 
-      setFeedback(editingProductId ? 'Product updated successfully.' : 'Product added to inventory successfully.')
+      const hasOpening = !editingProductId && allocatedTotal(productForm.openingRows) > 0
+      setFeedback(
+        editingProductId
+          ? 'Product updated successfully.'
+          : hasOpening
+            ? 'Product added. Its opening stock is sent for approval and shows once the Authorizer and the Chairman approve it.'
+            : 'Product added to inventory successfully.'
+      )
       setAddProductOpen(false)
       resetProductEditor()
     } catch (reason) {
@@ -497,6 +525,7 @@ export function StockOverviewScreen() {
         unitCost: parseAmount(purchaseForm.unitCost),
         currency: purchaseForm.currency,
         date: new Date(purchaseForm.date || todayInput()).toISOString(),
+        allocations: allocationLines(purchaseForm.allocations),
       })
 
       setFeedback('Purchase sent for approval. Stock and the supplier balance update after the final approval.')
@@ -567,6 +596,14 @@ export function StockOverviewScreen() {
                 </Button>
                 <Button variant="secondary" className="rounded-xl" onClick={openReceivePurchaseDialog} disabled={!canCreateInventory || products.length === 0}>
                   Receive purchase
+                </Button>
+                <Button variant="outline" className="rounded-xl gap-1.5" onClick={() => openMovement('transfer')} disabled={!canManageInventory || products.length === 0 || warehouses.length < 2}>
+                  <ArrowLeftRight className="h-4 w-4" />
+                  Transfer stock
+                </Button>
+                <Button variant="outline" className="rounded-xl gap-1.5" onClick={() => openMovement('adjustment')} disabled={!canManageInventory || products.length === 0}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                  Stock adjustment
                 </Button>
                 <Button variant="outline" className="rounded-xl" onClick={openCreateWarehouseDialog} disabled={!canCreateInventory}>
                   Add warehouse
@@ -715,18 +752,32 @@ export function StockOverviewScreen() {
                       const warehouse = data?.warehouses[product.warehouseId]
                       const supplier = data?.suppliers[product.supplierId]
                       const status = getProductStatus(product.stockQty, product.minStock)
+                      const split = warehouseSplit(product, data?.warehouses)
 
                       return (
                         <TableRow key={product.id}>
                           <TableCell><div className="flex items-center gap-3">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-14 w-14 rounded-xl border border-border/70 object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/30 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">No image</div>}<div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.category || 'General equipment'}</p></div></div></TableCell>
                           <TableCell className="font-medium"><p>{product.sku}</p>{product.serialNumber ? <p className="text-xs font-normal text-muted-foreground">SN: {product.serialNumber}</p> : null}{product.warrantyMonths ? <p className="text-xs font-normal text-muted-foreground">{product.warrantyMonths}mo warranty</p> : null}</TableCell>
-                          <TableCell><div><p className="font-medium">{warehouse?.name ?? 'Unknown warehouse'}</p><p className="text-xs text-muted-foreground">{warehouse?.location ?? 'Location unavailable'}</p></div></TableCell>
-                          <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} units</span><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
+                          <TableCell>
+                            <div data-warehouse-split>
+                              {split.length ? (
+                                split.map((entry) => (
+                                  <p key={entry.id} className="whitespace-nowrap">
+                                    <span className="font-medium">{entry.name}</span> <span className="tabular-nums text-muted-foreground">{entry.quantity}</span>
+                                  </p>
+                                ))
+                              ) : (
+                                <p className="font-medium">{warehouse?.name ?? 'Unknown warehouse'}</p>
+                              )}
+                              <p className="text-xs text-muted-foreground">Main: {warehouse?.name ?? 'none'}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell><div className="flex flex-col gap-2"><span className="font-medium">{product.stockQty} units</span>{product.reservedQty ? <span className="text-xs text-muted-foreground">+{product.reservedQty} held for orders</span> : null}<Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></div></TableCell>
                           <TableCell>{formatTableAmount(product.purchasePrice, currency)}</TableCell>
                           <TableCell>{formatTableAmount(product.sellingPrice, currency)}</TableCell>
                           <TableCell>{supplier?.name ?? 'Not assigned'}</TableCell>
                           <TableCell>{formatDateTime(product.updatedAt)}</TableCell>
-                          <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
+                          <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openMovement('transfer', product.id)} disabled={warehouses.length < 2}><ArrowLeftRight className="mr-2 h-4 w-4" />Transfer</Button><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openMovement('adjustment', product.id)}><SlidersHorizontal className="mr-2 h-4 w-4" />Adjust</Button><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditProductDialog(product.id)}><PencilLine className="mr-2 h-4 w-4" />Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteProduct(product.id)} disabled={busyProductId === product.id}><Trash2 className="mr-2 h-4 w-4" />Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
                         </TableRow>
                       )
                     }) : activeInventoryView === 'warehouses' ? warehouseSummaries.map((warehouse) => (
@@ -745,7 +796,7 @@ export function StockOverviewScreen() {
                       return (
                         <TableRow key={product.id}>
                           <TableCell><div><p className="font-semibold text-foreground">{product.name}</p><p className="text-sm text-muted-foreground">{product.sku}</p></div></TableCell>
-                          <TableCell>{warehouse?.name ?? 'Unknown warehouse'}</TableCell>
+                          <TableCell>{formatWarehouseSplit(product, data?.warehouses) || warehouse?.name || 'Unknown warehouse'}</TableCell>
                           <TableCell>{product.stockQty}</TableCell>
                           <TableCell>{product.minStock}</TableCell>
                           <TableCell><Badge variant="outline" className={statusBadgeClass(status)}>{statusLabel(status)}</Badge></TableCell>
@@ -756,7 +807,7 @@ export function StockOverviewScreen() {
                       <TableRow key={purchase.id}>
                         <TableCell className="font-semibold">{purchase.productName}</TableCell>
                         <TableCell>{purchase.supplierName}</TableCell>
-                        <TableCell>{purchase.quantity}</TableCell>
+                        <TableCell><p className="tabular-nums">{purchase.quantity}</p>{purchase.allocations && purchase.allocations.length > 1 ? <p className="text-xs text-muted-foreground">{purchase.allocations.map((line) => `${line.warehouseName} ${line.quantity}`).join(' · ')}</p> : purchase.allocations?.[0] ? <p className="text-xs text-muted-foreground">{purchase.allocations[0].warehouseName}</p> : null}</TableCell>
                         <TableCell>{formatTableAmount(purchase.unitCost, purchase.currency)}</TableCell>
                         <TableCell>{formatTableAmount(purchase.total, purchase.currency)}</TableCell>
                         <TableCell>{formatDateTime(purchase.createdAt)}</TableCell>
@@ -788,16 +839,36 @@ export function StockOverviewScreen() {
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Category</p><Input list="product-category-options" placeholder="Lift Series" value={productForm.category} onChange={(event) => setProductForm((current) => ({ ...current, category: event.target.value }))} /><datalist id="product-category-options">{categoryOptions.map((category) => (<option key={category} value={category} />))}</datalist></div>
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Serial number</p><Input placeholder="SN-000123" value={productForm.serialNumber} onChange={(event) => setProductForm((current) => ({ ...current, serialNumber: event.target.value }))} /></div>
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warranty (months)</p><Input type="number" min="0" placeholder="6" value={productForm.warrantyMonths} onChange={(event) => setProductForm((current) => ({ ...current, warrantyMonths: event.target.value }))} /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Warehouse</p><Combobox options={warehouseOptions} value={productForm.warehouseId} onChange={(value) => setProductForm((current) => ({ ...current, warehouseId: value }))} placeholder="Select warehouse" searchPlaceholder="Search warehouses..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateWarehouseOpen(true) }} createNewLabel="Create warehouse" /></div>
+                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Main warehouse</p><Combobox options={warehouseOptions} value={productForm.warehouseId} onChange={(value) => setProductForm((current) => ({ ...current, warehouseId: value, openingRows: !editingProductId && current.openingRows.length === 1 && !current.openingRows[0].quantity ? [{ ...current.openingRows[0], warehouseId: value }] : current.openingRows }))} placeholder="Select warehouse" searchPlaceholder="Search warehouses..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateWarehouseOpen(true) }} createNewLabel="Create warehouse" /></div>
                   <div className="space-y-2 sm:col-span-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={productForm.supplierId} onChange={(value) => setProductForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreateSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
                 </div>
                 <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Purchase cost ({currency})</p><Input type="number" min="0" step="any" placeholder="330000" value={productForm.purchasePrice} onChange={(event) => setProductForm((current) => ({ ...current, purchasePrice: event.target.value }))} required /></div>
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Selling price ({currency})</p><Input inputMode="numeric" placeholder="350000" value={productForm.sellingPrice} onChange={(event) => setProductForm((current) => ({ ...current, sellingPrice: event.target.value }))} required /></div>
-                  <div className="space-y-2"><p className="text-sm font-medium text-foreground">Opening stock</p><Input type="number" min="0" value={productForm.stockQty} onChange={(event) => setProductForm((current) => ({ ...current, stockQty: event.target.value }))} required /></div>
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Minimum stock</p><Input type="number" min="0" value={productForm.minStock} onChange={(event) => setProductForm((current) => ({ ...current, minStock: event.target.value }))} required /></div>
                   <div className="space-y-2"><p className="text-sm font-medium text-foreground">Maximum stock <span className="font-normal text-muted-foreground">(optional)</span></p><Input type="number" min="0" placeholder="No cap" value={productForm.maxStock} onChange={(event) => setProductForm((current) => ({ ...current, maxStock: event.target.value }))} /></div>
                 </div>
+                {editingProduct ? (
+                  <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/30 p-4" data-stock-readonly>
+                    <p className="text-sm font-medium text-foreground">Stock</p>
+                    <p className="text-sm">
+                      <span className="font-semibold tabular-nums">{editingProduct.stockQty}</span> available
+                      {editingProduct.reservedQty ? <span className="text-muted-foreground"> · {editingProduct.reservedQty} held for orders</span> : null}
+                    </p>
+                    <p className="text-sm text-muted-foreground">{formatWarehouseSplit(editingProduct, data?.warehouses) || 'No stock in any warehouse.'}</p>
+                    <p className="text-xs text-muted-foreground">Stock changes through Receive purchase, Transfer stock and Stock adjustment, each approved by the Authorizer and the Chairman.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 rounded-2xl border border-border/70 p-4">
+                    <WarehouseAllocationRows
+                      label="Opening stock"
+                      warehouses={warehouses}
+                      rows={productForm.openingRows}
+                      onChange={(openingRows) => setProductForm((current) => ({ ...current, openingRows }))}
+                    />
+                    <p className="text-xs text-muted-foreground">Leave at 0 for none. The product is saved now with no stock; the opening stock is added once the Authorizer and the Chairman approve it.</p>
+                  </div>
+                )}
                 <div className="space-y-3 rounded-2xl border border-border/70 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -826,11 +897,20 @@ export function StockOverviewScreen() {
             </DialogHeader>
             {canCreateInventory ? (
               <form className="space-y-5" onSubmit={handleReceivePurchase}>
-                <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product</p><Combobox options={purchaseProductOptions} value={purchaseForm.productId} onChange={(value) => { const product = data?.products[value]; setPurchaseForm((current) => ({ ...current, productId: value, supplierId: product?.supplierId || SUPPLIER_NONE, unitCost: product ? String(product.purchasePrice) : current.unitCost })) }} placeholder="Select product" searchPlaceholder="Search products..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseProductOpen(true) }} createNewLabel="Create product" /></div>
-                {selectedPurchaseProduct ? <div className="rounded-2xl border border-border/70 bg-muted/30 p-4"><div className="grid gap-3 sm:grid-cols-3"><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current stock</p><p className="mt-1 text-lg font-semibold">{selectedPurchaseProduct.stockQty} units</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Warehouse</p><p className="mt-1 text-lg font-semibold">{data?.warehouses[selectedPurchaseProduct.warehouseId]?.name ?? 'Unknown'}</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Last cost</p><p className="mt-1 text-lg font-semibold">{formatCurrency(selectedPurchaseProduct.purchasePrice, currency)}</p></div></div></div> : null}
+                <div className="space-y-2"><p className="text-sm font-medium text-foreground">Product</p><Combobox options={purchaseProductOptions} value={purchaseForm.productId} onChange={(value) => { const product = data?.products[value]; setPurchaseForm((current) => ({ ...current, productId: value, supplierId: product?.supplierId || SUPPLIER_NONE, unitCost: product ? String(product.purchasePrice) : current.unitCost, allocations: current.allocations.length === 1 ? [{ ...current.allocations[0], warehouseId: product?.warehouseId ?? '', quantity: current.quantity }] : current.allocations })) }} placeholder="Select product" searchPlaceholder="Search products..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseProductOpen(true) }} createNewLabel="Create product" /></div>
+                {selectedPurchaseProduct ? <div className="rounded-2xl border border-border/70 bg-muted/30 p-4"><div className="grid gap-3 sm:grid-cols-3"><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Current stock</p><p className="mt-1 text-lg font-semibold">{selectedPurchaseProduct.stockQty} units</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Warehouses</p><p className="mt-1 text-sm font-semibold">{formatWarehouseSplit(selectedPurchaseProduct, data?.warehouses) || 'No stock yet'}</p></div><div><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Last cost</p><p className="mt-1 text-lg font-semibold">{formatCurrency(selectedPurchaseProduct.purchasePrice, currency)}</p></div></div></div> : null}
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Supplier</p><Combobox options={supplierOptions} value={purchaseForm.supplierId} onChange={(value) => setPurchaseForm((current) => ({ ...current, supplierId: value }))} placeholder="Select supplier" searchPlaceholder="Search suppliers..." onCreateNew={(typedText) => { setPendingSearchText(typedText); setQuickCreatePurchaseSupplierOpen(true) }} createNewLabel="Create supplier" /></div>
                 <div className="space-y-2"><p className="text-sm font-medium text-foreground">Received date</p><DateInput value={purchaseForm.date} onChange={(value) => setPurchaseForm((current) => ({ ...current, date: value }))} required /></div>
-                <div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2"><p className="text-sm font-medium text-foreground">Quantity received</p><Input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => setPurchaseForm((current) => ({ ...current, quantity: event.target.value }))} required /></div><div className="space-y-2"><p className="text-sm font-medium text-foreground">Unit cost</p><Input type="number" min="0" step="any" placeholder="330000" value={purchaseForm.unitCost} onChange={(event) => setPurchaseForm((current) => ({ ...current, unitCost: event.target.value }))} required /></div></div>
+                <div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2"><p className="text-sm font-medium text-foreground">Quantity received</p><Input type="number" min="1" value={purchaseForm.quantity} onChange={(event) => { const quantity = event.target.value; setPurchaseForm((current) => ({ ...current, quantity, allocations: current.allocations.length === 1 ? [{ ...current.allocations[0], quantity }] : current.allocations })) }} required /></div><div className="space-y-2"><p className="text-sm font-medium text-foreground">Unit cost</p><Input type="number" min="0" step="any" placeholder="330000" value={purchaseForm.unitCost} onChange={(event) => setPurchaseForm((current) => ({ ...current, unitCost: event.target.value }))} required /></div></div>
+                <div className="rounded-2xl border border-border/70 p-4">
+                  <WarehouseAllocationRows
+                    label="Received into"
+                    warehouses={warehouses}
+                    rows={purchaseForm.allocations}
+                    total={parseAmount(purchaseForm.quantity)}
+                    onChange={(allocations) => setPurchaseForm((current) => ({ ...current, allocations }))}
+                  />
+                </div>
                 <div className="grid gap-5 sm:grid-cols-2"><div className="space-y-2"><p className="text-sm font-medium text-foreground">Currency</p><Select value={purchaseForm.currency} onValueChange={(value) => setPurchaseForm((current) => ({ ...current, currency: value }))}><SelectTrigger><SelectValue placeholder="Select currency" /></SelectTrigger><SelectContent>{currencyOptions.map((currencyOption) => (<SelectItem key={currencyOption} value={currencyOption}>{currencyOption}</SelectItem>))}</SelectContent></Select></div><div className="space-y-2 rounded-2xl border border-border/70 p-4"><p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Purchase total</p><p className="mt-1 text-2xl font-semibold">{formatCurrency(purchaseTotal, purchaseForm.currency)}</p><p className="mt-1 text-sm text-muted-foreground">Stock after approval: {(selectedPurchaseProduct?.stockQty ?? 0) + parseAmount(purchaseForm.quantity)} units</p></div></div>
                 <DialogFooter><Button type="button" variant="outline" onClick={() => setReceivePurchaseOpen(false)}>Cancel</Button><Button type="submit" variant="secondary" disabled={isReceivingPurchase}>{isReceivingPurchase ? 'Sending...' : 'Send for approval'}</Button></DialogFooter>
               </form>
@@ -858,6 +938,8 @@ export function StockOverviewScreen() {
         {loading ? <Card className="border-border/70 shadow-sm"><CardContent className="p-4 text-sm text-muted-foreground">Loading inventory...</CardContent></Card> : null}
       </div>
 
+      <StockTransferDialog open={transferOpen} onOpenChange={setTransferOpen} productId={movementProductId} onDone={setFeedback} />
+      <StockAdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} productId={movementProductId} onDone={setFeedback} />
       <QuickCreateWarehouseDialog
         open={quickCreateWarehouseOpen}
         onOpenChange={setQuickCreateWarehouseOpen}

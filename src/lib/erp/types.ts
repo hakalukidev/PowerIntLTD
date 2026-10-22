@@ -306,12 +306,24 @@ export type ProductRecord = {
   sku: string
   serialNumber?: string
   warrantyMonths?: number
+  /** The main warehouse: the default in forms. Stock itself is kept per warehouse in `stockByWarehouse`. */
   warehouseId: string
   supplierId: string
   purchasePrice: number
   sellingPrice: number
   wholesalePrice: number
+  /**
+   * Units that can still be sold: everything on the shelves (`stockByWarehouse`) less `reservedQty`.
+   * Stored and moved with the warehouse counts in the same update (see `planStockMoves`).
+   */
   stockQty: number
+  /**
+   * Units on the shelf in each warehouse, by warehouse id. Missing on products not yet migrated:
+   * their whole stock is then in their main warehouse (`warehouseStock` reads it that way).
+   */
+  stockByWarehouse?: Record<string, number>
+  /** Units in approved orders that are not posted for delivery yet: sold, but still in a warehouse. */
+  reservedQty?: number
   minStock: number
   maxStock: number
   status: ProductStatus
@@ -385,9 +397,18 @@ export type OrderRecord = {
   overCreditLimit?: boolean
   /** Set once an approved order is posted for delivery. */
   delivery?: OrderDelivery
+  /**
+   * Where the order's stock is. `reserved`: held against the products' totals since approval, not
+   * yet taken from a warehouse. `delivered`: taken from `delivery.warehouseId` when it was posted.
+   * `released`: given back when the order moved to a cancelling status. Missing on orders from
+   * before stock was kept per warehouse; their stock already came off and is never moved again.
+   */
+  stockState?: OrderStockState
   createdAt: string
   items: OrderItem[]
 }
+
+export type OrderStockState = 'reserved' | 'delivered' | 'released'
 
 /** `posted`: sent out, waiting for the delivery document. `submitted`: document received and sent to the audit. */
 export type DeliveryStatus = 'posted' | 'submitted'
@@ -446,6 +467,8 @@ export type PurchaseRecord = {
   stockAfter?: number
   /** The approved purchase request it came from; missing on older purchases. */
   requestId?: string
+  /** How the quantity was split between warehouses; missing on older purchases. */
+  allocations?: WarehouseQty[]
   /** The received date entered on the form (for older purchases, when it was saved). */
   createdAt: string
 }
@@ -463,6 +486,11 @@ export type PurchaseRequestRecord = {
   total: number
   /** The received date entered on the form; the purchase is posted on this date. */
   date: string
+  /**
+   * The warehouses the quantity goes into; they add up to `quantity`. Missing on requests from
+   * before stock was kept per warehouse: those go into the product's main warehouse.
+   */
+  allocations?: WarehouseQty[]
   status: DepositStatus
   submittedById: string
   submittedByName: string
@@ -476,6 +504,84 @@ export type PurchaseRequestRecord = {
   purchaseId?: string
   createdAt: string
   updatedAt: string
+}
+
+/** A quantity in one warehouse: a line of a purchase's or an opening stock's split. */
+export type WarehouseQty = {
+  warehouseId: string
+  warehouseName: string
+  quantity: number
+}
+
+/** Who submitted, authorized and approved a stock transfer or adjustment. */
+type StockRequestApproval = {
+  status: DepositStatus
+  submittedById: string
+  submittedByName: string
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  reviewedById?: string
+  reviewedByName?: string
+  reviewedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Stock moved from one warehouse to another. Nothing moves until the final approval. */
+export type StockTransferRecord = StockRequestApproval & {
+  id: string
+  productId: string
+  productName: string
+  fromWarehouseId: string
+  fromWarehouseName: string
+  toWarehouseId: string
+  toWarehouseName: string
+  quantity: number
+  /** The transfer date entered on the form. */
+  date: string
+  note: string
+}
+
+export type StockTransferInput = {
+  productId: string
+  fromWarehouseId: string
+  toWarehouseId: string
+  quantity: number
+  date?: string
+  note?: string
+}
+
+/** `opening` is the stock a product starts with, entered on Add product. */
+export type StockAdjustmentReason = 'opening' | 'count_correction' | 'damage' | 'lost' | 'other'
+
+/**
+ * Stock added or taken off by hand: a count correction, damage, loss, or a new product's opening
+ * stock. Nothing changes until the final approval.
+ */
+export type StockAdjustmentRecord = StockRequestApproval & {
+  id: string
+  productId: string
+  productName: string
+  reason: StockAdjustmentReason
+  /**
+   * The change in each warehouse, + or −. An adjustment has one line; an opening stock may be split
+   * over several warehouses.
+   */
+  lines: WarehouseQty[]
+  /** The sum of `lines`. */
+  quantity: number
+  note: string
+  /** The adjustment date entered on the form. */
+  date: string
+}
+
+export type StockAdjustmentInput = {
+  productId: string
+  reason: StockAdjustmentReason
+  lines: Array<{ warehouseId: string; quantity: number }>
+  note?: string
+  date?: string
 }
 
 export type TaskStatus = 'pending' | 'in-progress' | 'done'
@@ -552,6 +658,11 @@ export type OrderStatusConfig = {
    * Lists saved before this existed lack it; `getOrderStatuses` then gives it to Completed only.
    */
   isDelivered: boolean
+  /**
+   * The order is called off: moving it here gives its reserved stock back, and moving it out holds
+   * the stock again. Missing on statuses saved before this existed (false).
+   */
+  isCancelled?: boolean
 }
 
 export type AttendanceStatus = 'present' | 'absent'
@@ -758,6 +869,8 @@ export type AuditKind =
   | 'supplier_payment'
   | 'expense'
   | 'purchase'
+  | 'stock_transfer'
+  | 'stock_adjustment'
   | 'delivery'
   | 'change'
   | 'order_status'
@@ -1128,6 +1241,8 @@ export type ERPData = {
   supplierPayments: Record<string, SupplierPaymentRecord>
   orderRequests: Record<string, OrderRequestRecord>
   purchaseRequests: Record<string, PurchaseRequestRecord>
+  stockTransfers: Record<string, StockTransferRecord>
+  stockAdjustments: Record<string, StockAdjustmentRecord>
   changeRequests: Record<string, ChangeRequestRecord>
   auditLog: Record<string, AuditEntryRecord>
   /** Attendance by day (`YYYY-MM-DD`), then by employee id. */
@@ -1176,7 +1291,11 @@ export type ProductInput = {
   purchasePrice: number
   sellingPrice: number
   wholesalePrice?: number
-  stockQty: number
+  /**
+   * A new product's opening stock by warehouse. The product is created with no stock; this is
+   * filed as an `opening` stock adjustment that waits for approval. Ignored when editing.
+   */
+  openingStock?: Array<{ warehouseId: string; quantity: number }>
   minStock: number
   maxStock?: number
   description?: string
@@ -1278,6 +1397,8 @@ export type PurchaseInput = {
   currency: string
   /** The received date; defaults to now. */
   date?: string
+  /** The warehouses the quantity goes into; must add up to `quantity`. */
+  allocations: Array<{ warehouseId: string; quantity: number }>
 }
 
 export type OrderInput = {

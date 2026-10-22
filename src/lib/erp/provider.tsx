@@ -87,6 +87,11 @@ import type {
   DepotRecord,
   PortalTransactionKind,
   PurchaseRequestRecord,
+  StockAdjustmentInput,
+  StockAdjustmentRecord,
+  StockTransferInput,
+  StockTransferRecord,
+  OrderStockState,
   EmployeeAdvanceInput,
   EmployeeAdvanceRecord,
   CommissionAuthorizationInput,
@@ -143,6 +148,7 @@ import {
 import { auth, database } from '@/lib/firebase/config'
 import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId } from './ledger'
 import { BUSINESS_ENTRY_LABELS } from './business'
+import { planStockMoves, resolveWarehouseLines, STOCK_ADJUSTMENT_REASONS, stockInWarehouse, stockMove, warehouseStock, type StockMove } from './stock'
 import { resolveRoles } from './roles'
 import { accessScopeFor, customerInScope, customerZoneId, resolveCustomerZone, scopeDataToUserZones, subZoneKey } from './zones'
 
@@ -231,6 +237,12 @@ type ERPContextValue = {
   deleteWarehouse: (warehouseId: string) => Promise<void>
   recordPurchase: (input: PurchaseInput) => Promise<void>
   reviewPurchaseRequest: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
+  /** Moving stock between warehouses waits for the Authorizer and the Chairman; it moves on final approval. */
+  submitStockTransfer: (input: StockTransferInput) => Promise<void>
+  reviewStockTransfer: (transferId: string, decision: 'approve' | 'reject') => Promise<void>
+  /** A stock change by hand (or a new product's opening stock) waits for the Authorizer and the Chairman. */
+  submitStockAdjustment: (input: StockAdjustmentInput) => Promise<void>
+  reviewStockAdjustment: (adjustmentId: string, decision: 'approve' | 'reject') => Promise<void>
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
   setCustomerCreditLimit: (customerId: string, creditLimit: number) => Promise<void>
   saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
@@ -242,7 +254,7 @@ type ERPContextValue = {
   saveZonePriceExclusions: (zoneId: string, customerIds: string[]) => Promise<void>
   updateSettings: (input: Partial<SettingsRecord>) => Promise<void>
   /** Admin only: adds a status, or renames / recolours one when `statusId` is given. Returns its id. */
-  saveOrderStatus: (input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered'>, statusId?: string) => Promise<string>
+  saveOrderStatus: (input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered' | 'isCancelled'>, statusId?: string) => Promise<string>
   /** Admin only: saves the workflow order of every status, first to last. */
   reorderOrderStatuses: (statusIds: string[]) => Promise<void>
   /** Admin only: removes a status, moving every order on it to `replacementId` first. */
@@ -556,6 +568,8 @@ function normalizeERPData(data: ERPData | null): ERPData {
     orderRequests: source.orderRequests ?? {},
     changeRequests: source.changeRequests ?? {},
     purchaseRequests: source.purchaseRequests ?? {},
+    stockTransfers: source.stockTransfers ?? {},
+    stockAdjustments: source.stockAdjustments ?? {},
     auditLog: source.auditLog ?? {},
     attendance: source.attendance ?? {},
     couriers: source.couriers ?? {},
@@ -621,7 +635,6 @@ function normalizeProductInput(input: ProductInput) {
     purchasePrice: input.purchasePrice,
     sellingPrice: input.sellingPrice,
     wholesalePrice: input.wholesalePrice ?? input.sellingPrice,
-    stockQty: input.stockQty,
     minStock: input.minStock,
     maxStock: Math.max(input.maxStock ?? 0, 0),
     description: input.description?.trim() ?? '',
@@ -724,7 +737,16 @@ function normalizeSupplierInput(input: SupplierInput, existing?: SupplierRecord 
 }
 
 /** The database sections whose records wait for the Authorizer and then the final approval. */
-type ApprovalSection = 'deposits' | 'orderRequests' | 'ledgerEntryRequests' | 'supplierPayments' | 'expenses' | 'changeRequests' | 'purchaseRequests'
+type ApprovalSection =
+  | 'deposits'
+  | 'orderRequests'
+  | 'ledgerEntryRequests'
+  | 'supplierPayments'
+  | 'expenses'
+  | 'changeRequests'
+  | 'purchaseRequests'
+  | 'stockTransfers'
+  | 'stockAdjustments'
 
 const APPROVAL_SECTION_LABELS: Record<ApprovalSection, { action: string; module: string; title: string }> = {
   deposits: { action: 'deposit', module: 'customers', title: 'Deposit' },
@@ -734,6 +756,8 @@ const APPROVAL_SECTION_LABELS: Record<ApprovalSection, { action: string; module:
   expenses: { action: 'expense', module: 'finance', title: 'Expense' },
   changeRequests: { action: 'change', module: 'approvals', title: 'Change' },
   purchaseRequests: { action: 'purchase', module: 'inventory', title: 'Purchase' },
+  stockTransfers: { action: 'stock_transfer', module: 'inventory', title: 'Stock transfer' },
+  stockAdjustments: { action: 'stock_adjustment', module: 'inventory', title: 'Stock adjustment' },
 }
 
 /**
@@ -747,6 +771,19 @@ const REVIEW_LOCK_MS = 2 * 60 * 1000
 
 /** Expense records carry no `updatedAt`. */
 const SECTIONS_WITHOUT_UPDATED_AT: ApprovalSection[] = ['expenses']
+
+/** An order's stock movements of one kind, one per product (lines of the same product together). */
+function orderStockMoves(
+  order: Pick<OrderRecord, 'id' | 'billNumber' | 'items'>,
+  kind: 'reserve' | 'release' | 'delivery' | 'delivery_reversed',
+  date: string,
+  warehouseId?: string
+): StockMove[] {
+  const quantities = new Map<string, number>()
+  order.items.forEach((item) => quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity))
+  const moveRef = { kind: 'order' as const, id: order.id, label: order.billNumber }
+  return [...quantities].map(([productId, quantity]) => stockMove(kind, productId, quantity, { warehouseId, date, ref: moveRef }))
+}
 
 export function ERPProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<ERPData | null>(null)
@@ -1179,55 +1216,54 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const existingProduct = productId ? data.products[productId] : null
     const id = existingProduct?.id ?? createId('product')
     const now = new Date().toISOString()
-    const product = {
-      id,
-      ...normalized,
-      ...(existingProduct?.zonePrices ? { zonePrices: existingProduct.zonePrices } : {}),
-      status: getProductStatus(normalized.stockQty, normalized.minStock),
-      createdAt: existingProduct?.createdAt ?? now,
-      updatedAt: now,
-    }
+    // Checked before anything is saved, so a bad split does not leave a product behind.
+    const opening = !existingProduct && input.openingStock?.some((line) => line.quantity)
+      ? resolveWarehouseLines(input.openingStock.filter((line) => line.quantity), data.warehouses, { positive: true })
+      : []
 
-    await update(ref(db, 'erp/products'), { [id]: product })
+    if (existingProduct) {
+      // Stock is read-only here: it changes through Receive purchase, Transfer stock and Stock
+      // adjustment, each approved. Only the product's own fields are written.
+      const changes: Record<string, unknown> = { ...normalized, status: getProductStatus(existingProduct.stockQty, normalized.minStock), updatedAt: now }
+      if (!existingProduct.stockByWarehouse && normalized.warehouseId !== existingProduct.warehouseId) {
+        // Not migrated: its stock is counted in its main warehouse, so pin it there before that changes.
+        Object.entries(warehouseStock(existingProduct)).forEach(([warehouseId, qty]) => {
+          changes[`stockByWarehouse/${warehouseId}`] = qty
+        })
+      }
+      await update(ref(db, `erp/products/${id}`), changes)
+    } else {
+      const product: ProductRecord = {
+        id,
+        ...normalized,
+        stockQty: 0,
+        reservedQty: 0,
+        status: getProductStatus(0, normalized.minStock),
+        createdAt: now,
+        updatedAt: now,
+      }
+      await update(ref(db, 'erp/products'), { [id]: product })
+    }
+    const productName = normalized.name
     await writeActivity(
       existingProduct ? 'product_updated' : 'product_created',
       'inventory',
-      existingProduct
-        ? `Updated ${product.name} inventory details.`
-        : `Added ${product.name} with ${product.stockQty} units in stock.`
+      existingProduct ? `Updated ${productName} inventory details.` : `Added ${productName} to inventory.`
     )
 
-    if (!existingProduct) {
-      await writeNotification(
-        'Product added',
-        `${product.name} has been added to inventory by ${currentUser?.name ?? 'Admin'}.`,
-        'info',
-        ['admin', 'store_manager', 'sales_person']
-      )
-    } else {
-      if (existingProduct.stockQty !== product.stockQty) {
-        await writeNotification(
-          'Stock adjusted',
-          `${product.name} stock level was adjusted from ${existingProduct.stockQty} to ${product.stockQty} by ${currentUser?.name ?? 'Admin'}.`,
-          'warning',
-          ['admin', 'store_manager']
-        )
-      } else {
-        await writeNotification(
-          'Product details updated',
-          `${product.name} details were updated by ${currentUser?.name ?? 'Admin'}.`,
-          'info',
-          ['admin', 'store_manager']
-        )
-      }
-    }
+    await writeNotification(
+      existingProduct ? 'Product details updated' : 'Product added',
+      existingProduct
+        ? `${productName} details were updated by ${currentUser?.name ?? 'Admin'}.`
+        : `${productName} has been added to inventory by ${currentUser?.name ?? 'Admin'}.`,
+      'info',
+      existingProduct ? ['admin', 'store_manager'] : ['admin', 'store_manager', 'sales_person']
+    )
 
-    if (product.stockQty <= product.minStock) {
-      await writeNotification(
-        'Low stock alert',
-        `${product.name} is already at or below its minimum stock (${product.stockQty}/${product.minStock}).`,
-        'warning',
-        ['admin', 'store_manager']
+    if (opening.length) {
+      await fileStockAdjustment(
+        { productId: id, reason: 'opening', lines: opening, note: 'Opening stock' },
+        { id, name: productName }
       )
     }
 
@@ -1874,9 +1910,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Warehouse not found.')
     }
 
+    const stocked = Object.values(data.products).filter((product) => stockInWarehouse(product, warehouseId) !== 0)
+    if (stocked.length > 0) {
+      throw new Error(`Transfer the stock out of this warehouse first (${stocked.map((product) => product.name).join(', ')}).`)
+    }
     const assignedProducts = Object.values(data.products).filter((product) => product.warehouseId === warehouseId)
     if (assignedProducts.length > 0) {
-      throw new Error('Move or delete the products in this warehouse before removing it.')
+      throw new Error('Give the products whose main warehouse this is another main warehouse before removing it.')
     }
 
     const db = getDatabaseOrThrow()
@@ -1903,6 +1943,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (input.unitCost < 0) {
       throw new Error('Unit cost cannot be negative.')
     }
+    const allocations = resolveWarehouseLines(input.allocations, data.warehouses, { positive: true, total: input.quantity })
 
     const id = createId('purchase_request')
     const now = new Date().toISOString()
@@ -1917,6 +1958,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       currency: input.currency,
       total: input.quantity * input.unitCost,
       date: input.date?.trim() || now,
+      allocations,
       status: 'pending',
       submittedById: currentUser.id,
       submittedByName: currentUser.name,
@@ -1959,9 +2001,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       // The stock comes in, and the purchase lands on the supplier's sheet on its received date.
       post: async (approval) => {
         purchaseId = createId('purchase')
-        const nextStock = product.stockQty + request.quantity
+        // Requests from before stock was kept per warehouse go into the product's main warehouse.
+        const allocations = request.allocations?.length
+          ? request.allocations
+          : [{ warehouseId: product.warehouseId, warehouseName: data.warehouses[product.warehouseId]?.name ?? '', quantity: request.quantity }]
+        const missing = allocations.find((line) => !data.warehouses[line.warehouseId])
+        if (missing) {
+          throw new Error(`${missing.warehouseName || 'A warehouse of this purchase'} no longer exists. Reject the purchase instead.`)
+        }
+        const moveRef = { kind: 'purchase' as const, id: purchaseId, label: `${request.productName} from ${request.supplierName}` }
+        const { updates: stockUpdates, after } = planStockMoves(
+          data.products,
+          allocations.map((line) => stockMove('purchase', product.id, line.quantity, { warehouseId: line.warehouseId, date: request.date, ref: moveRef })),
+          { now: new Date().toISOString(), warehouses: data.warehouses }
+        )
         await update(ref(getDatabaseOrThrow(), 'erp'), {
           ...approval,
+          ...stockUpdates,
           [`purchases/${purchaseId}`]: {
             id: purchaseId,
             productId: request.productId,
@@ -1974,16 +2030,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
             total: request.total,
             status: 'received',
             stockBefore: product.stockQty,
-            stockAfter: nextStock,
+            stockAfter: after.get(product.id)?.stockQty ?? product.stockQty + request.quantity,
+            allocations,
             requestId,
             createdAt: request.date,
           },
           [`purchaseRequests/${requestId}/purchaseId`]: purchaseId,
-          // Counted on the server, so stock moved meanwhile is not overwritten.
-          [`products/${product.id}/stockQty`]: increment(request.quantity),
           [`products/${product.id}/purchasePrice`]: request.unitCost,
-          [`products/${product.id}/status`]: getProductStatus(nextStock, product.minStock),
-          [`products/${product.id}/updatedAt`]: new Date().toISOString(),
         })
       },
     })
@@ -2000,6 +2053,225 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       submittedByName: request.submittedByName,
       submittedByRole: roleNameOf(request.submittedById),
       submittedAt: request.createdAt,
+    })
+  }
+
+  function requireStockEdit() {
+    if (!hasPermissionCheck(data, currentUser, 'inventory.edit')) {
+      throw new Error('You do not have permission to move or adjust stock.')
+    }
+  }
+
+  /** Moving stock between warehouses waits for the Authorizer and the Chairman; nothing moves before the final approval. */
+  async function submitStockTransfer(input: StockTransferInput) {
+    if (!data || !currentUser) {
+      return
+    }
+    requireStockEdit()
+    const product = data.products[input.productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+    const from = data.warehouses[input.fromWarehouseId]
+    const to = data.warehouses[input.toWarehouseId]
+    if (!from || !to) {
+      throw new Error('Choose the warehouse to move from and the one to move to.')
+    }
+    if (from.id === to.id) {
+      throw new Error('Choose two different warehouses.')
+    }
+    if (!Number.isInteger(input.quantity) || input.quantity <= 0) {
+      throw new Error('Enter a whole quantity above zero.')
+    }
+    const available = stockInWarehouse(product, from.id)
+    if (available < input.quantity) {
+      throw new Error(`Only ${available} of ${product.name} in ${from.name}.`)
+    }
+
+    const id = createId('stock_transfer')
+    const now = new Date().toISOString()
+    const transfer: StockTransferRecord = {
+      id,
+      productId: product.id,
+      productName: product.name,
+      fromWarehouseId: from.id,
+      fromWarehouseName: from.name,
+      toWarehouseId: to.id,
+      toWarehouseName: to.name,
+      quantity: input.quantity,
+      date: input.date?.trim() || now,
+      note: input.note?.trim() ?? '',
+      status: 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/stockTransfers'), { [id]: transfer })
+    await writeActivity('stock_transfer_submitted', 'inventory', `Submitted a transfer of ${input.quantity} ${product.name} from ${from.name} to ${to.name} for approval.`)
+    await writeNotification(
+      'Stock transfer awaiting the Authorizer',
+      `${currentUser.name} asked to move ${input.quantity} ${product.name} from ${from.name} to ${to.name}.`,
+      'info',
+      [...stageRoles('authorizer'), 'store_manager']
+    )
+  }
+
+  async function reviewStockTransfer(transferId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    const transfer = data.stockTransfers[transferId]
+    if (!transfer) {
+      throw new Error('Transfer not found.')
+    }
+    const what = `the transfer of ${transfer.quantity} ${transfer.productName} from ${transfer.fromWarehouseName} to ${transfer.toWarehouseName}`
+    const outcome = await reviewAtStage({
+      section: 'stockTransfers',
+      id: transferId,
+      record: transfer,
+      noun: 'transfer',
+      what,
+      decision,
+      post: async (approval) => {
+        if (!data.products[transfer.productId] || !data.warehouses[transfer.fromWarehouseId] || !data.warehouses[transfer.toWarehouseId]) {
+          throw new Error('The product or one of the warehouses no longer exists. Reject the transfer instead.')
+        }
+        const moveRef = { kind: 'transfer' as const, id: transferId, label: `${transfer.fromWarehouseName} → ${transfer.toWarehouseName}` }
+        // Checked again here: the stock in the warehouse it leaves may have changed since it was entered.
+        const { updates } = planStockMoves(
+          data.products,
+          [
+            stockMove('transfer_out', transfer.productId, transfer.quantity, { warehouseId: transfer.fromWarehouseId, date: transfer.date, ref: moveRef }),
+            stockMove('transfer_in', transfer.productId, transfer.quantity, { warehouseId: transfer.toWarehouseId, date: transfer.date, ref: moveRef }),
+          ],
+          { now: new Date().toISOString(), warehouses: data.warehouses }
+        )
+        await update(ref(getDatabaseOrThrow(), 'erp'), { ...approval, ...updates })
+      },
+    })
+    if (outcome === 'authorized') return
+
+    await writeAuditEntry({
+      kind: 'stock_transfer',
+      refId: transferId,
+      decision: outcome,
+      party: `${transfer.fromWarehouseName} → ${transfer.toWarehouseName}`,
+      summary: [`${transfer.productName} × ${transfer.quantity}`, transfer.note, transfer.authorizedByName && `Authorized by ${transfer.authorizedByName}`].filter(Boolean).join(' · '),
+      amount: 0,
+      submittedByName: transfer.submittedByName,
+      submittedByRole: roleNameOf(transfer.submittedById),
+      submittedAt: transfer.createdAt,
+    })
+  }
+
+  /** Files a stock adjustment for approval; `product` names a product that may not be in `data` yet (a new product's opening stock). */
+  async function fileStockAdjustment(input: StockAdjustmentInput, product: { id: string; name: string }) {
+    if (!data || !currentUser) {
+      return
+    }
+    const opening = input.reason === 'opening'
+    const lines = resolveWarehouseLines(input.lines, data.warehouses, { positive: opening })
+    if (!opening && lines.length !== 1) {
+      throw new Error('An adjustment is for one warehouse.')
+    }
+    const existing = data.products[product.id]
+    lines.forEach((line) => {
+      const inWarehouse = existing ? stockInWarehouse(existing, line.warehouseId) : 0
+      if (line.quantity < 0 && inWarehouse + line.quantity < 0) {
+        throw new Error(`Only ${inWarehouse} of ${product.name} in ${line.warehouseName}.`)
+      }
+    })
+    if (!opening && !input.note?.trim()) {
+      throw new Error('Add a note saying why the stock is adjusted.')
+    }
+
+    const id = createId('stock_adjustment')
+    const now = new Date().toISOString()
+    const quantity = lines.reduce((sum, line) => sum + line.quantity, 0)
+    const adjustment: StockAdjustmentRecord = {
+      id,
+      productId: product.id,
+      productName: product.name,
+      reason: input.reason,
+      lines,
+      quantity,
+      note: input.note?.trim() ?? '',
+      date: input.date?.trim() || now,
+      status: 'pending',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/stockAdjustments'), { [id]: adjustment })
+    const change = `${quantity > 0 ? '+' : ''}${quantity} ${product.name}`
+    await writeActivity('stock_adjustment_submitted', 'inventory', `Submitted ${opening ? 'opening stock' : 'a stock adjustment'} of ${change} for approval.`)
+    await writeNotification(
+      opening ? 'Opening stock awaiting the Authorizer' : 'Stock adjustment awaiting the Authorizer',
+      `${currentUser.name} entered ${opening ? 'opening stock' : 'a stock adjustment'} of ${change} (${lines.map((line) => line.warehouseName).join(', ')}).`,
+      'info',
+      [...stageRoles('authorizer'), 'store_manager']
+    )
+  }
+
+  async function submitStockAdjustment(input: StockAdjustmentInput) {
+    requireStockEdit()
+    const product = data?.products[input.productId]
+    if (!product) {
+      throw new Error('Product not found.')
+    }
+    await fileStockAdjustment(input, product)
+  }
+
+  async function reviewStockAdjustment(adjustmentId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    const adjustment = data.stockAdjustments[adjustmentId]
+    if (!adjustment) {
+      throw new Error('Adjustment not found.')
+    }
+    const label = STOCK_ADJUSTMENT_REASONS[adjustment.reason] ?? 'Stock adjustment'
+    const outcome = await reviewAtStage({
+      section: 'stockAdjustments',
+      id: adjustmentId,
+      record: adjustment,
+      noun: 'adjustment',
+      what: `the ${label.toLowerCase()} of ${adjustment.quantity > 0 ? '+' : ''}${adjustment.quantity} ${adjustment.productName}`,
+      decision,
+      post: async (approval) => {
+        if (!data.products[adjustment.productId] || adjustment.lines.some((line) => !data.warehouses[line.warehouseId])) {
+          throw new Error('The product or its warehouse no longer exists. Reject the adjustment instead.')
+        }
+        const moveRef = { kind: 'adjustment' as const, id: adjustmentId, label }
+        const kind = adjustment.reason === 'opening' ? 'opening' : 'adjustment'
+        const { updates } = planStockMoves(
+          data.products,
+          adjustment.lines.map((line) => stockMove(kind, adjustment.productId, line.quantity, { warehouseId: line.warehouseId, date: adjustment.date, ref: moveRef })),
+          { now: new Date().toISOString(), warehouses: data.warehouses }
+        )
+        await update(ref(getDatabaseOrThrow(), 'erp'), { ...approval, ...updates })
+      },
+    })
+    if (outcome === 'authorized') return
+
+    await writeAuditEntry({
+      kind: 'stock_adjustment',
+      refId: adjustmentId,
+      decision: outcome,
+      party: adjustment.lines.map((line) => line.warehouseName).join(', '),
+      summary: [
+        `${label}: ${adjustment.productName} ${adjustment.quantity > 0 ? '+' : ''}${adjustment.quantity}`,
+        adjustment.note,
+        adjustment.authorizedByName && `Authorized by ${adjustment.authorizedByName}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      amount: 0,
+      submittedByName: adjustment.submittedByName,
+      submittedByRole: roleNameOf(adjustment.submittedById),
+      submittedAt: adjustment.createdAt,
     })
   }
 
@@ -2108,23 +2380,23 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         employeeName: employee?.name ?? '',
         courierName: input.courierName?.trim() ?? '',
         overCreditLimit,
+        // Held against the products' totals; it leaves a warehouse when the delivery is posted.
+        stockState: 'reserved',
         createdAt: orderDate,
         items: orderItems,
     }
+    // Counted on the server, so two orders approved at once both come off the stock.
+    const { updates: stockUpdates, after: stockAfter } = planStockMoves(
+      data.products,
+      orderStockMoves(order, 'reserve', orderDate),
+      { now, warehouses: data.warehouses }
+    )
     const updates: Record<string, unknown> = {
       ...alsoWrite?.(orderId),
       [`orders/${orderId}`]: order,
       ...ledgerChanged(customer.id),
+      ...stockUpdates,
     }
-
-    requestedByProduct.forEach((quantity, productId) => {
-      const product = data.products[productId]
-      const nextStock = product.stockQty - quantity
-      // Counted on the server, so two orders approved at once both come off the stock.
-      updates[`products/${product.id}/stockQty`] = increment(-quantity)
-      updates[`products/${product.id}/status`] = getProductStatus(nextStock, product.minStock)
-      updates[`products/${product.id}/updatedAt`] = now
-    })
 
     await update(ref(db, 'erp'), updates)
     await syncCustomerDue(customer.id)
@@ -2147,9 +2419,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       )
     }
 
-    for (const [productId, quantity] of requestedByProduct) {
+    for (const productId of requestedByProduct.keys()) {
       const product = data.products[productId]
-      const nextStock = product.stockQty - quantity
+      const nextStock = stockAfter.get(productId)?.stockQty ?? product.stockQty
       if (nextStock > product.minStock) continue
       await writeNotification(
         'Low stock alert',
@@ -2269,7 +2541,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return Object.keys(data?.settings.orderStatuses ?? {}).length === 0
   }
 
-  async function saveOrderStatus(input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered'>, statusId?: string) {
+  async function saveOrderStatus(input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered' | 'isCancelled'>, statusId?: string) {
     requireAdminUser('change order statuses')
     const label = input.label.trim()
     if (!label) {
@@ -2287,7 +2559,18 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const id = statusId ?? createId('status')
     const order = statusId ? statuses[statusId].order : Math.max(-1, ...Object.values(statuses).map((status) => status.order)) + 1
     const previous = statusId ? statuses[statusId] : null
-    statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal, isDelivered: input.isDelivered }
+    const isCancelled = Boolean(input.isCancelled)
+    if (isCancelled && input.isDelivered) {
+      throw new Error('A status cannot both cancel the order and count as delivered.')
+    }
+    if (previous && Boolean(previous.isCancelled) !== isCancelled) {
+      // Orders already on it hold (or gave back) their stock by the old setting.
+      const holding = toArray(data?.orders).filter((entry) => entry.status === previous.id && (entry.stockState === 'reserved' || entry.stockState === 'released'))
+      if (holding.length) {
+        throw new Error(`Move the ${holding.length} undelivered order${holding.length === 1 ? '' : 's'} off "${previous.label}" before changing whether it cancels the order.`)
+      }
+    }
+    statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal, isDelivered: input.isDelivered, isCancelled }
 
     // Only this status's path is written, so the rest of the saved list is left as it is.
     await update(ref(getDatabaseOrThrow(), 'erp/settings/orderStatuses'), orderStatusesUnsaved() ? statuses : { [id]: statuses[id] })
@@ -2343,10 +2626,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       }
     }
     const now = new Date().toISOString()
+    const stockMoves: StockMove[] = []
     for (const order of affected) {
       changes[`orders/${order.id}/status`] = replacementId
       changes[`orders/${order.id}/deliveredAt`] = nextDeliveredAt(data.settings, order, replacementId, now)
+      const stock = orderStatusStockMoves(order, replacementId, now)
+      stockMoves.push(...stock.moves)
+      if (stock.state) changes[`orders/${order.id}/stockState`] = stock.state
     }
+    Object.assign(changes, planStockMoves(data.products, stockMoves, { now, warehouses: data.warehouses }).updates)
 
     await update(ref(getDatabaseOrThrow(), 'erp'), changes)
     await writeActivity(
@@ -2356,6 +2644,46 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         ? `Deleted order status "${removed.label}" and moved ${affected.length} order${affected.length === 1 ? '' : 's'} to "${statuses[replacementId].label}".`
         : `Deleted order status "${removed.label}".`
     )
+  }
+
+  /**
+   * What an order's stock does when it moves to `nextStatus`. Only orders approved since stock was
+   * kept per warehouse (`stockState` set) move stock:
+   * - not yet posted, into a cancelling status: its held stock is given back;
+   * - given back, out of a cancelling status: it is held again (refused if it is no longer there);
+   * - not yet posted, into a status that counts as delivered: refused, since posting the delivery
+   *   is what takes the stock from a warehouse;
+   * - posted for delivery: the goods have left, so no status change moves stock.
+   */
+  function orderStatusStockMoves(order: OrderRecord, nextStatus: string, now: string): { moves: StockMove[]; state?: OrderStockState } {
+    const next = getOrderStatus(data?.settings, nextStatus)
+    // Posted already (even if its stock was not taken by this code, as after a rollback): the goods have left.
+    if (order.delivery) return { moves: [] }
+    if (order.stockState === 'reserved') {
+      if (next.isCancelled) return { moves: orderStockMoves(order, 'release', now), state: 'released' }
+      if (next.isDelivered) {
+        throw new Error(`Post ${order.billNumber} for delivery first, so its stock leaves the right warehouse.`)
+      }
+    }
+    if (order.stockState === 'released' && !next.isCancelled) {
+      if (next.isDelivered) {
+        throw new Error(`Post ${order.billNumber} for delivery first, so its stock leaves the right warehouse.`)
+      }
+      return { moves: orderStockMoves(order, 'reserve', now), state: 'reserved' }
+    }
+    return { moves: [] }
+  }
+
+  /** `orderStatusStockMoves` as database writes, ready to go with the status change. */
+  function orderStatusStock(order: OrderRecord, nextStatus: string, now: string) {
+    const { moves, state } = orderStatusStockMoves(order, nextStatus, now)
+    if (!data || !state) return { updates: {} }
+    return {
+      updates: {
+        ...planStockMoves(data.products, moves, { now, warehouses: data.warehouses }).updates,
+        [`orders/${order.id}/stockState`]: state,
+      },
+    }
   }
 
   async function updateOrderStatus(orderId: string, status: OrderRecord['status']) {
@@ -2381,9 +2709,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (order.status === status) {
       return
     }
-    await update(ref(db, `erp/orders/${orderId}`), {
-      status,
-      deliveredAt: nextDeliveredAt(data.settings, order, status, new Date().toISOString()),
+    const now = new Date().toISOString()
+    const stock = orderStatusStock(order, status, now)
+    await update(ref(db, 'erp'), {
+      [`orders/${orderId}/status`]: status,
+      [`orders/${orderId}/deliveredAt`]: nextDeliveredAt(data.settings, order, status, now),
+      ...stock.updates,
     })
     await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} from ${previousLabel} to ${label}.`)
     // Status changes need no approval, but each one is on the Daily Audit for the Chairman to see.
@@ -4316,9 +4647,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (order.delivery) {
       throw new Error('This order has already been posted for delivery.')
     }
+    if (order.stockState === 'released' || getOrderStatus(data?.settings, order.status).isCancelled) {
+      throw new Error(`${order.billNumber} is cancelled. Move it back to an open status before posting it.`)
+    }
     const { warehouse, deliveryMan } = resolveDeliveryParties(input, order)
 
     const now = new Date().toISOString()
+    // The goods leave the chosen warehouse now; refused if it does not have every line.
+    const stock =
+      order.stockState === 'reserved' && data
+        ? planStockMoves(data.products, orderStockMoves(order, 'delivery', now, warehouse.id), { now, warehouses: data.warehouses }).updates
+        : {}
     const delivery: OrderDelivery = {
       status: 'posted',
       warehouseId: warehouse.id,
@@ -4341,10 +4680,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
     }
     const db = getDatabaseOrThrow()
-    await update(ref(db, `erp/orders/${orderId}`), {
-      delivery,
-      status: 'shipped',
-      courierName: delivery.courierName || order.courierName || '',
+    await update(ref(db, 'erp'), {
+      [`orders/${orderId}/delivery`]: delivery,
+      [`orders/${orderId}/status`]: 'shipped',
+      [`orders/${orderId}/courierName`]: delivery.courierName || order.courierName || '',
+      ...(order.stockState === 'reserved' ? { ...stock, [`orders/${orderId}/stockState`]: 'delivered' } : {}),
     })
     await writeActivity(
       'delivery_posted',
@@ -4372,18 +4712,31 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const db = getDatabaseOrThrow()
     const courierName = input.courierName.trim()
-    await update(ref(db, `erp/orders/${orderId}`), {
-      'delivery/warehouseId': warehouse.id,
-      'delivery/warehouseName': warehouse.name,
-      'delivery/deliveryManId': deliveryMan.id,
-      'delivery/deliveryManName': deliveryMan.name,
-      'delivery/courierName': courierName,
-      'delivery/trackingNumber': input.trackingNumber.trim(),
-      'delivery/vehicle': input.vehicle.trim(),
-      'delivery/deliveryCharge': input.deliveryCharge,
-      'delivery/note': input.note.trim(),
-      'delivery/updatedAt': new Date().toISOString(),
-      courierName: courierName || order.courierName || '',
+    const now = new Date().toISOString()
+    // Another warehouse: the goods go back into the old one and leave the new one, which must have every line.
+    const previousWarehouseId = order.delivery.warehouseId
+    const stock =
+      order.stockState === 'delivered' && warehouse.id !== previousWarehouseId && data
+        ? planStockMoves(
+            data.products,
+            [...orderStockMoves(order, 'delivery_reversed', now, previousWarehouseId), ...orderStockMoves(order, 'delivery', now, warehouse.id)],
+            { now, warehouses: data.warehouses }
+          ).updates
+        : {}
+    const field = (name: string) => `orders/${orderId}/${name}`
+    await update(ref(db, 'erp'), {
+      [field('delivery/warehouseId')]: warehouse.id,
+      [field('delivery/warehouseName')]: warehouse.name,
+      [field('delivery/deliveryManId')]: deliveryMan.id,
+      [field('delivery/deliveryManName')]: deliveryMan.name,
+      [field('delivery/courierName')]: courierName,
+      [field('delivery/trackingNumber')]: input.trackingNumber.trim(),
+      [field('delivery/vehicle')]: input.vehicle.trim(),
+      [field('delivery/deliveryCharge')]: input.deliveryCharge,
+      [field('delivery/note')]: input.note.trim(),
+      [field('delivery/updatedAt')]: now,
+      [field('courierName')]: courierName || order.courierName || '',
+      ...stock,
     })
     await writeActivity('delivery_updated', 'sales', `Updated the delivery details of ${order.billNumber} (${order.customerName}).`)
   }
@@ -5819,6 +6172,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteWarehouse,
       recordPurchase,
       reviewPurchaseRequest,
+      submitStockTransfer,
+      reviewStockTransfer,
+      submitStockAdjustment,
+      reviewStockAdjustment,
       updateOrderStatus: viewOnlyForZone(updateOrderStatus),
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),

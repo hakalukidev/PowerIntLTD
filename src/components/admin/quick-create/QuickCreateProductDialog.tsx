@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { useERP } from '@/lib/erp/provider'
 import { toArray } from '@/lib/erp/utils'
 
+import { allocationLines, newAllocationRow, WarehouseAllocationRows, type AllocationRow } from '../inventory/WarehouseAllocationRows'
 import { QuickCreateSupplierDialog } from './QuickCreateSupplierDialog'
 import { QuickCreateWarehouseDialog } from './QuickCreateWarehouseDialog'
 
@@ -44,7 +45,7 @@ export function QuickCreateProductDialog({
   const [supplierId, setSupplierId] = useState(SUPPLIER_NONE)
   const [purchasePrice, setPurchasePrice] = useState('0')
   const [sellingPrice, setSellingPrice] = useState('')
-  const [stockQty, setStockQty] = useState('0')
+  const [openingRows, setOpeningRows] = useState<AllocationRow[]>(() => [newAllocationRow()])
   const [minStock, setMinStock] = useState('0')
   const [feedback, setFeedback] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -61,7 +62,7 @@ export function QuickCreateProductDialog({
       setSupplierId(SUPPLIER_NONE)
       setPurchasePrice('0')
       setSellingPrice('')
-      setStockQty('0')
+      setOpeningRows([newAllocationRow()])
       setMinStock('0')
       setFeedback(null)
     }
@@ -100,7 +101,7 @@ export function QuickCreateProductDialog({
         supplierId: supplierId === SUPPLIER_NONE ? undefined : supplierId,
         purchasePrice: Number(purchasePrice || 0),
         sellingPrice: Number(sellingPrice || 0),
-        stockQty: Number(stockQty || 0),
+        openingStock: allocationLines(openingRows),
         minStock: Number(minStock || 0),
       })
       onCreated(productId)
@@ -140,12 +141,15 @@ export function QuickCreateProductDialog({
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">
-                  Warehouse<span className="ml-0.5 text-rose-500">*</span>
+                  Main warehouse<span className="ml-0.5 text-rose-500">*</span>
                 </p>
                 <Combobox
                   options={warehouseOptions}
                   value={warehouseId}
-                  onChange={setWarehouseId}
+                  onChange={(value) => {
+                    setWarehouseId(value)
+                    setOpeningRows((rows) => (rows.length === 1 && !rows[0].quantity ? [{ ...rows[0], warehouseId: value }] : rows))
+                  }}
                   placeholder="Select warehouse"
                   searchPlaceholder="Search warehouses..."
                   onCreateNew={(typedText) => {
@@ -183,11 +187,11 @@ export function QuickCreateProductDialog({
                 <Input inputMode="numeric" value={sellingPrice} onChange={(event) => setSellingPrice(event.target.value)} placeholder="350000" required />
               </div>
             </div>
+            <div className="space-y-1">
+              <WarehouseAllocationRows label="Opening stock" warehouses={warehouses} rows={openingRows} onChange={setOpeningRows} />
+              <p className="text-xs text-muted-foreground">Added once the Authorizer and the Chairman approve it.</p>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-foreground">Opening stock</p>
-                <Input type="number" min="0" value={stockQty} onChange={(event) => setStockQty(event.target.value)} required />
-              </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Minimum stock</p>
                 <Input type="number" min="0" value={minStock} onChange={(event) => setMinStock(event.target.value)} required />

@@ -19,6 +19,7 @@ import { useERP } from '@/lib/erp/provider'
 import type { CustomerRecord, OrderRecord, ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatCurrency, formatDealerBalance, partyCode, receivableOf, shortRecordId, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatWarehouseSplit } from '@/lib/erp/stock'
 import { customerZoneId, customerZoneName, UNASSIGNED_ZONE_ID } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
@@ -391,7 +392,12 @@ export default function OrderFormPage() {
                     </Button>
                   </div>
                   {line.product && line.quantity > line.product.stockQty ? (
-                    <p className="text-xs text-rose-600 sm:col-span-4">Only {line.product.stockQty} in stock.</p>
+                    <p className="text-xs text-rose-600 sm:col-span-4">
+                      Only {line.product.stockQty} in stock.
+                      {formatWarehouseSplit(line.product, data?.warehouses) ? (
+                        <span className="text-muted-foreground"> On the shelves: {formatWarehouseSplit(line.product, data?.warehouses)}{line.product.reservedQty ? `, ${line.product.reservedQty} of it held for other orders` : ''}.</span>
+                      ) : null}
+                    </p>
                   ) : null}
                 </div>
               ))}

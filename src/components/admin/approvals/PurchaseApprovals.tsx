@@ -90,6 +90,14 @@ export function PurchaseRequestCard({
                 {request.quantity} × {formatCurrency(request.unitCost, request.currency)}
               </dd>
             </div>
+            {request.allocations?.length ? (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted-foreground">Into:</dt>
+                <dd className="min-w-0 break-words tabular-nums" data-purchase-allocations>
+                  {request.allocations.map((line) => `${line.warehouseName} ${line.quantity}`).join(' · ')}
+                </dd>
+              </div>
+            ) : null}
             {product ? (
               <div className="flex gap-2">
                 <dt className="shrink-0 text-muted-foreground">Stock now:</dt>

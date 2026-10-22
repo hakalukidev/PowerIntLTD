@@ -182,26 +182,52 @@ walk(erp, 'erp')
 walk(portal, 'portal')
 if (strays.length) fail(`other records point at these dealers:\n  ${strays.join('\n  ')}`)
 
-// 4. Stock the demo orders took goes back.
+// 4. Stock the demo orders took goes back, where it was taken from (see planStockMoves in
+// src/lib/erp/stock.ts): an order held since approval (`reserved`) stops holding it, one posted
+// for delivery (`delivered`) puts it back on that warehouse's shelf, one cancelled (`released`)
+// already gave it back. An order from before per-warehouse stock took it off the single count,
+// so it goes back there (and into the main warehouse once the product is split).
 const stockBack = new Map()
+const back = (productId) => {
+  if (!stockBack.has(productId)) stockBack.set(productId, { available: 0, reserved: 0, shelves: new Map() })
+  return stockBack.get(productId)
+}
 for (const id of orderIds) {
-  for (const item of erp.orders[id].items ?? []) stockBack.set(item.productId, (stockBack.get(item.productId) ?? 0) + Number(item.quantity))
+  const order = erp.orders[id]
+  if (order.stockState === 'released') continue
+  for (const item of order.items ?? []) {
+    const quantity = Number(item.quantity)
+    const entry = back(item.productId)
+    entry.available += quantity
+    if (order.stockState === 'reserved') entry.reserved -= quantity
+    else {
+      const warehouseId = order.stockState === 'delivered' ? order.delivery?.warehouseId : erp.products?.[item.productId]?.warehouseId
+      if (warehouseId) entry.shelves.set(warehouseId, (entry.shelves.get(warehouseId) ?? 0) + quantity)
+    }
+  }
 }
 const now = new Date().toISOString()
 const stockLines = []
-for (const [productId, quantity] of stockBack) {
+for (const [productId, { available, reserved, shelves }] of stockBack) {
   const product = erp.products?.[productId]
   if (!product) {
-    stockLines.push(`  ${productId}: product no longer exists, ${quantity} not returned`)
+    stockLines.push(`  ${productId}: product no longer exists, ${available} not returned`)
     continue
   }
-  const stockQty = Number(product.stockQty) + quantity
+  const stockQty = Number(product.stockQty) + available
   // Same rule as getProductStatus in src/lib/erp/utils.ts.
   const status = stockQty <= 0 ? 'out-of-stock' : stockQty <= Number(product.minStock) ? 'low-stock' : 'active'
   updates[`erp/products/${productId}/stockQty`] = stockQty
+  if (reserved) updates[`erp/products/${productId}/reservedQty`] = Math.max(Number(product.reservedQty ?? 0) + reserved, 0)
+  // A product not split yet keeps all its stock in the single count.
+  if (product.stockByWarehouse) {
+    for (const [warehouseId, quantity] of shelves) {
+      updates[`erp/products/${productId}/stockByWarehouse/${warehouseId}`] = Number(product.stockByWarehouse[warehouseId] ?? 0) + quantity
+    }
+  }
   updates[`erp/products/${productId}/status`] = status
   updates[`erp/products/${productId}/updatedAt`] = now
-  stockLines.push(`  ${product.name} (${productId}): ${product.stockQty} + ${quantity} = ${stockQty} (${status})`)
+  stockLines.push(`  ${product.name} (${productId}): ${product.stockQty} + ${available} = ${stockQty} (${status})`)
 }
 
 // Report.

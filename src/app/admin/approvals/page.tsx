@@ -9,6 +9,7 @@ import { DailyClosingReport, DeliveryReport, StockReport } from '@/components/ad
 import { LedgerEntryApprovals } from '@/components/admin/approvals/LedgerEntryApprovals'
 import { OrderApprovals } from '@/components/admin/approvals/OrderApprovals'
 import { PurchaseApprovals } from '@/components/admin/approvals/PurchaseApprovals'
+import { StockAdjustmentApprovals, StockTransferApprovals } from '@/components/admin/approvals/StockApprovals'
 import { SubmissionApprovals } from '@/components/admin/approvals/SubmissionApprovals'
 import { todayInput } from '@/components/admin/approvals/shared'
 import { DateInput } from '@/components/ui/date-input'
@@ -16,7 +17,7 @@ import { useERP } from '@/lib/erp/provider'
 import { APPROVAL_PERMISSIONS, toArray, userRoleIds } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-type Tab = 'all' | 'orders' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'purchases' | 'changes' | 'stock' | 'closing' | 'delivery'
+type Tab = 'all' | 'orders' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'purchases' | 'transfers' | 'adjustments' | 'changes' | 'stock' | 'closing' | 'delivery'
 
 const REPORT_TABS: Tab[] = ['stock', 'closing', 'delivery']
 
@@ -38,6 +39,8 @@ export default function ApprovalsPage() {
     { id: 'payments', label: 'Payments', count: pendingCount(toArray(data?.supplierPayments)) },
     { id: 'expenses', label: 'Expenses', count: pendingCount(toArray(data?.expenses)) },
     { id: 'purchases', label: 'Purchases', count: pendingCount(toArray(data?.purchaseRequests)) },
+    { id: 'transfers', label: 'Transfers', count: pendingCount(toArray(data?.stockTransfers)) },
+    { id: 'adjustments', label: 'Adjustments', count: pendingCount(toArray(data?.stockAdjustments)) },
     { id: 'changes', label: 'Record changes', count: pendingCount(toArray(data?.changeRequests)) },
   ]
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
@@ -95,6 +98,8 @@ export default function ApprovalsPage() {
         {tab === 'payments' ? <SubmissionApprovals kind="supplierPayments" isAdmin={isAdmin} /> : null}
         {tab === 'expenses' ? <SubmissionApprovals kind="expenses" isAdmin={isAdmin} /> : null}
         {tab === 'purchases' ? <PurchaseApprovals /> : null}
+        {tab === 'transfers' ? <StockTransferApprovals /> : null}
+        {tab === 'adjustments' ? <StockAdjustmentApprovals /> : null}
         {tab === 'changes' ? <ChangeApprovals /> : null}
         {tab === 'stock' ? <StockReport day={day} /> : null}
         {tab === 'closing' ? <DailyClosingReport day={day} /> : null}

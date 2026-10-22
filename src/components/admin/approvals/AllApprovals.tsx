@@ -3,7 +3,15 @@
 import { useMemo, useState } from 'react'
 
 import { useERP } from '@/lib/erp/provider'
-import type { ChangeRequestRecord, EditableSubmissionKind, LedgerEntryRequestRecord, OrderRequestRecord, PurchaseRequestRecord } from '@/lib/erp/types'
+import type {
+  ChangeRequestRecord,
+  EditableSubmissionKind,
+  LedgerEntryRequestRecord,
+  OrderRequestRecord,
+  PurchaseRequestRecord,
+  StockAdjustmentRecord,
+  StockTransferRecord,
+} from '@/lib/erp/types'
 import { toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -11,6 +19,7 @@ import { ChangeRequestCard, useChangeReview } from './ChangeApprovals'
 import { LedgerEntryCard, useLedgerEntryReview } from './LedgerEntryApprovals'
 import { EditOrderDialog, OrderRequestCard, useOrderReview } from './OrderApprovals'
 import { PurchaseRequestCard, usePurchaseReview } from './PurchaseApprovals'
+import { StockAdjustmentCard, StockTransferCard, useStockAdjustmentReview, useStockTransferReview } from './StockApprovals'
 import { EditSubmissionDialog, SubmissionCard, buildSubmissionRows, useSubmissionReview, type SubmissionRow } from './SubmissionApprovals'
 import { EmptyState, FeedbackBanner, type Feedback } from './shared'
 
@@ -20,6 +29,8 @@ type Item =
   | { type: 'ledger'; id: string; at: string; request: LedgerEntryRequestRecord }
   | { type: 'change'; id: string; at: string; request: ChangeRequestRecord }
   | { type: 'purchase'; id: string; at: string; request: PurchaseRequestRecord }
+  | { type: 'transfer'; id: string; at: string; transfer: StockTransferRecord }
+  | { type: 'adjustment'; id: string; at: string; adjustment: StockAdjustmentRecord }
 
 const TYPE_BADGES: Record<Item['type'], { label: string; className: string }> = {
   order: { label: 'Order', className: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300' },
@@ -29,6 +40,8 @@ const TYPE_BADGES: Record<Item['type'], { label: string; className: string }> = 
   expenses: { label: 'Expense', className: 'bg-orange-500/15 text-orange-700 dark:text-orange-300' },
   change: { label: 'Record change', className: 'bg-slate-500/15 text-slate-700 dark:text-slate-300' },
   purchase: { label: 'Purchase', className: 'bg-teal-500/15 text-teal-700 dark:text-teal-300' },
+  transfer: { label: 'Stock transfer', className: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300' },
+  adjustment: { label: 'Stock adjustment', className: 'bg-amber-500/15 text-amber-700 dark:text-amber-300' },
 }
 
 function TypeBadge({ type }: { type: Item['type'] }) {
@@ -39,7 +52,7 @@ function TypeBadge({ type }: { type: Item['type'] }) {
   )
 }
 
-/** Every pending order, deposit, ledger entry, payment, expense, purchase and record change in one list, newest first. */
+/** Every pending order, deposit, ledger entry, payment, expense, purchase, stock transfer and adjustment, and record change in one list, newest first. */
 export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
   const { data } = useERP()
   const [feedback, setFeedback] = useState<Feedback>(null)
@@ -48,6 +61,8 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
   const ledger = useLedgerEntryReview(setFeedback)
   const changes = useChangeReview(setFeedback)
   const purchases = usePurchaseReview(setFeedback)
+  const transfers = useStockTransferReview(setFeedback)
+  const adjustments = useStockAdjustmentReview(setFeedback)
   const [editingOrder, setEditingOrder] = useState<OrderRequestRecord | null>(null)
   const [editingSubmission, setEditingSubmission] = useState<{ kind: EditableSubmissionKind; row: SubmissionRow } | null>(null)
 
@@ -63,6 +78,8 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
       ...pending(toArray(data.ledgerEntryRequests)).map((request): Item => ({ type: 'ledger', id: request.id, at: request.createdAt, request })),
       ...pending(toArray(data.changeRequests)).map((request): Item => ({ type: 'change', id: request.id, at: request.createdAt, request })),
       ...pending(toArray(data.purchaseRequests)).map((request): Item => ({ type: 'purchase', id: request.id, at: request.createdAt, request })),
+      ...pending(toArray(data.stockTransfers)).map((transfer): Item => ({ type: 'transfer', id: transfer.id, at: transfer.createdAt, transfer })),
+      ...pending(toArray(data.stockAdjustments)).map((adjustment): Item => ({ type: 'adjustment', id: adjustment.id, at: adjustment.createdAt, adjustment })),
     ].sort((left, right) => (right.at ?? '').localeCompare(left.at ?? ''))
   }, [data])
 
@@ -104,6 +121,28 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
               badge={badge}
               busy={purchases.busyId === item.id}
               onReview={(decision) => void purchases.review(item.request, decision)}
+            />
+          )
+        }
+        if (item.type === 'transfer') {
+          return (
+            <StockTransferCard
+              key={`transfer-${item.id}`}
+              transfer={item.transfer}
+              badge={badge}
+              busy={transfers.busyId === item.id}
+              onReview={(decision) => void transfers.review(item.transfer, decision)}
+            />
+          )
+        }
+        if (item.type === 'adjustment') {
+          return (
+            <StockAdjustmentCard
+              key={`adjustment-${item.id}`}
+              adjustment={item.adjustment}
+              badge={badge}
+              busy={adjustments.busyId === item.id}
+              onReview={(decision) => void adjustments.review(item.adjustment, decision)}
             />
           )
         }

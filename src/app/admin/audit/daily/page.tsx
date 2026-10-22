@@ -18,6 +18,8 @@ const KIND_LABELS: Record<AuditKind, string> = {
   supplier_payment: 'Supplier payment',
   expense: 'Expense',
   purchase: 'Purchase',
+  stock_transfer: 'Stock transfer',
+  stock_adjustment: 'Stock adjustment',
   delivery: 'Delivery',
   change: 'Record change',
   order_status: 'Order status',
@@ -32,6 +34,8 @@ const PLURAL_LABELS: Record<AuditKind, string> = {
   supplier_payment: 'Supplier payments',
   expense: 'Expenses',
   purchase: 'Purchases',
+  stock_transfer: 'Stock transfers',
+  stock_adjustment: 'Stock adjustments',
   delivery: 'Deliveries',
   change: 'Record changes',
   order_status: 'Order status changes',
@@ -39,6 +43,8 @@ const PLURAL_LABELS: Record<AuditKind, string> = {
   advance: 'Emergency advances',
   business: 'Sub business entries',
 }
+
+const COUNT_ONLY_KINDS: AuditKind[] = ['order_status', 'stock_transfer', 'stock_adjustment']
 
 export default function DailyAuditPage() {
   const { data } = useERP()
@@ -82,8 +88,8 @@ export default function DailyAuditPage() {
               <p className="text-xs text-muted-foreground">
                 {PLURAL_LABELS[total.kind]} {total.kind === 'delivery' ? 'submitted' : total.kind === 'order_status' ? 'today' : 'approved'}
               </p>
-              {/* A status change moves no money, so its tile only counts them. */}
-              <p className="mt-1 text-lg font-semibold tabular-nums">{total.kind === 'order_status' ? total.count : formatCurrency(total.amount)}</p>
+              {/* Status changes and stock moves carry no money, so their tiles only count them. */}
+              <p className="mt-1 text-lg font-semibold tabular-nums">{COUNT_ONLY_KINDS.includes(total.kind) ? total.count : formatCurrency(total.amount)}</p>
               <p className="text-xs text-muted-foreground">{total.count} entr{total.count === 1 ? 'y' : 'ies'}</p>
             </button>
           ))}
@@ -130,7 +136,7 @@ export default function DailyAuditPage() {
                           </span>
                         ))}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(entry.amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{entry.kind === 'stock_transfer' || entry.kind === 'stock_adjustment' ? '—' : formatCurrency(entry.amount)}</TableCell>
                       <TableCell>
                         <span className="block">{entry.submittedByName}</span>
                         <span className="block text-xs text-muted-foreground">

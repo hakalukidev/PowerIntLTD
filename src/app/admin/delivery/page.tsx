@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { DOCUMENT_ACCEPT, documentFileProblem, uploadDocumentToCloudinary, type UploadProgress } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRecord, OrderRequestRecord } from '@/lib/erp/types'
+import { stockInWarehouse } from '@/lib/erp/stock'
 import { formatCurrency, formatDate, formatDateTime, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -77,6 +78,28 @@ function WarehouseSelect({ options, value, onChange, disabled }: { options: Comb
   )
 }
 
+/**
+ * What the chosen warehouse has of each line. Shown while the goods are still to leave it: before
+ * posting, or when a posted delivery is moved to another warehouse.
+ */
+function WarehouseStockNote({ order, warehouseId }: { order: OrderRecord; warehouseId: string }) {
+  const { data } = useERP()
+  if (!warehouseId || !data) return null
+  const quantities = new Map<string, number>()
+  order.items.forEach((item) => quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity))
+  const lines = [...quantities].map(([productId, quantity]) => {
+    const product = data.products[productId]
+    return { productId, name: product?.name ?? productId, quantity, available: product ? stockInWarehouse(product, warehouseId) : 0 }
+  })
+  const short = lines.filter((line) => line.available < line.quantity)
+  return (
+    <p data-warehouse-stock={short.length ? 'short' : 'ok'} className={cn('text-xs', short.length ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground')}>
+      {short.length ? 'Not enough here: ' : 'In this warehouse: '}
+      {(short.length ? short : lines).map((line) => `${line.name} ${line.available}/${line.quantity}`).join(', ')}
+    </p>
+  )
+}
+
 function ViewOnlyNote() {
   return <p className="text-xs text-muted-foreground">View only: posting and submitting deliveries needs the &quot;Sales — edit&quot; permission.</p>
 }
@@ -116,6 +139,7 @@ function PostCard({ row, options, canEdit, onFeedback }: { row: DeliveryRow; opt
           <form onSubmit={handleSubmit} className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
             <Field label="Warehouse" required>
               <WarehouseSelect options={options.warehouses} value={warehouseId} onChange={setWarehouseId} />
+              {row.order.stockState === 'reserved' ? <WarehouseStockNote order={row.order} warehouseId={warehouseId} /> : null}
               {depotWarehouseId ? <p className="text-xs text-muted-foreground">Depot dealer — delivered from the depot.</p> : null}
             </Field>
             <Field label="Delivery man" required>
@@ -206,6 +230,9 @@ function PostedCard({ row, options, canEdit, onFeedback }: { row: DeliveryRow; o
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Warehouse" required>
             <WarehouseSelect options={options.warehouses} value={form.warehouseId} onChange={set('warehouseId')} disabled={readOnly} />
+            {row.order.stockState === 'delivered' && form.warehouseId !== delivery.warehouseId ? (
+              <WarehouseStockNote order={row.order} warehouseId={form.warehouseId} />
+            ) : null}
           </Field>
           <Field label="Delivery man" required>
             <Combobox options={options.deliveryMen} value={form.deliveryManId} onChange={set('deliveryManId')} placeholder="Choose an employee" searchPlaceholder="Search name..." disabled={readOnly} />
@@ -354,7 +381,8 @@ export default function DeliveryPage() {
   const matches = (row: DeliveryRow) =>
     !query || [row.order.customerName, row.order.billNumber, row.order.delivery?.deliveryManName ?? ''].some((value) => value.toLowerCase().includes(query))
   const groups: Record<Tab, DeliveryRow[]> = {
-    'to-post': rows.filter((row) => !row.order.delivery),
+    // A cancelled order gave its stock back and is not delivered.
+    'to-post': rows.filter((row) => !row.order.delivery && row.order.stockState !== 'released'),
     posted: rows.filter((row) => row.order.delivery?.status === 'posted'),
     submitted: rows.filter((row) => row.order.delivery?.status === 'submitted'),
   }

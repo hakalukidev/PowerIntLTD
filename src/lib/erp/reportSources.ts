@@ -1,5 +1,6 @@
 import type { ERPData } from '@/lib/erp/types'
 import { formatCurrency, formatDate, formatDealerBalance, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
+import { formatWarehouseSplit } from './stock'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
 
@@ -94,6 +95,7 @@ export const REPORT_SOURCES: ReportSource[] = [
         sellingPrice: product.sellingPrice,
         wholesalePrice: product.wholesalePrice,
         stockQty: product.stockQty,
+        stockByWarehouse: formatWarehouseSplit(product, warehouses),
         minStock: product.minStock,
         maxStock: product.maxStock,
         status: product.status,
@@ -112,6 +114,7 @@ export const REPORT_SOURCES: ReportSource[] = [
       col('sellingPrice', 'Selling Price', 'currency'),
       col('wholesalePrice', 'Wholesale Price', 'currency'),
       col('stockQty', 'Stock Qty', 'number'),
+      col('stockByWarehouse', 'Stock by Warehouse', 'string'),
       col('minStock', 'Min Stock', 'number'),
       col('maxStock', 'Max Stock', 'number'),
       col('status', 'Status', 'string', { filterable: true }),

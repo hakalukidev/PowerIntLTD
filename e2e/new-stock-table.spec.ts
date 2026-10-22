@@ -91,7 +91,7 @@ test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 
     const table = page.locator('table[data-report="new-stock"]')
     await expect(table).toBeVisible()
     await expect(table.locator('thead th')).toHaveText([
-      'Product', 'Supplier', 'Previous stock qty', 'New stock qty', 'Unit cost (new stock)', 'Total qty', 'Total value',
+      'Product', 'Supplier', 'Previous stock qty', 'New stock qty', 'Unit cost (new stock)', 'Total qty', 'Total value', 'Warehouses',
     ])
 
     const cells = table.locator(`tr[data-purchase-id="${purchaseId}"] td`)
@@ -102,6 +102,8 @@ test('TC-08.1 receiving 15 units of a product that had 27 shows 27 | 15 | … | 
     expect(amount(await cells.nth(4).innerText())).toBe(unitCost)
     expect(amount(await cells.nth(5).innerText())).toBe(42)
     expect(amount(await cells.nth(6).innerText())).toBe(42 * unitCost)
+    // All 15 went to the product's main warehouse, the one the dialog suggests.
+    await expect(cells.nth(7)).toContainText('15')
     note(testInfo, `Row: 27 | 15 | ${unitCost} | 42 | ${42 * unitCost}.`)
 
     await table.scrollIntoViewIfNeeded()

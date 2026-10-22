@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
-import type { CourierStatus } from '@/lib/erp/types'
+import { formatWarehouseSplit, warehouseStock } from '@/lib/erp/stock'
+import type { CourierStatus, ProductRecord } from '@/lib/erp/types'
 import { formatCurrency, formatDate, getOrderStatus, getOrderStatuses, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -70,24 +71,37 @@ export function StockReport({ day }: { day: string }) {
     return [...sold.values()].sort((left, right) => right.quantity - left.quantity)
   }, [data?.orders, day])
 
-  // One block per warehouse, its products sorted by name, with the warehouse subtotal.
+  // One block per warehouse with the units on its shelves, products sorted by name, and the
+  // warehouse subtotal. A product kept in two warehouses is in both blocks; one with no stock
+  // anywhere is listed under its main warehouse at 0, so it still shows as out of stock.
   const warehouses = useMemo(() => {
+    const known = (id: string) => (data?.warehouses[id] ? id : '')
+    const lines: Array<{ warehouseId: string; product: ProductRecord; quantity: number }> = []
+    products.forEach((product) => {
+      const stocked = Object.entries(warehouseStock(product)).filter(([, quantity]) => quantity !== 0)
+      if (!stocked.length) lines.push({ warehouseId: known(product.warehouseId), product, quantity: 0 })
+      // Stock left under a deleted warehouse adds up under "No warehouse".
+      const merged = new Map<string, number>()
+      stocked.forEach(([id, quantity]) => merged.set(known(id), (merged.get(known(id)) ?? 0) + quantity))
+      merged.forEach((quantity, warehouseId) => lines.push({ warehouseId, product, quantity }))
+    })
     const rows = toArray(data?.warehouses).map((warehouse) => ({ id: warehouse.id, name: warehouse.name, location: warehouse.location }))
     const unassigned = { id: '', name: 'No warehouse', location: '' }
     return [...rows, unassigned]
       .map((warehouse) => {
-        const items = products
-          .filter((product) => (data?.warehouses[product.warehouseId] ? product.warehouseId : '') === warehouse.id)
-          .sort((left, right) => left.name.localeCompare(right.name))
+        const items = lines
+          .filter((line) => line.warehouseId === warehouse.id)
+          .sort((left, right) => left.product.name.localeCompare(right.product.name))
         return {
           ...warehouse,
           items,
-          units: items.reduce((sum, product) => sum + product.stockQty, 0),
-          value: items.reduce((sum, product) => sum + product.stockQty * product.purchasePrice, 0),
+          units: items.reduce((sum, line) => sum + line.quantity, 0),
+          value: items.reduce((sum, line) => sum + line.quantity * line.product.purchasePrice, 0),
         }
       })
       .filter((warehouse) => warehouse.id || warehouse.items.length)
   }, [data?.warehouses, products])
+  const heldForOrders = products.reduce((sum, product) => sum + (product.reservedQty ?? 0), 0)
 
   const lowStock = products
     .filter((product) => product.status !== 'active')
@@ -119,6 +133,7 @@ export function StockReport({ day }: { day: string }) {
                   <TableHead className="whitespace-normal text-right">Unit cost (new stock)</TableHead>
                   <TableHead className="whitespace-normal text-right">Total qty</TableHead>
                   <TableHead className="whitespace-normal text-right">Total value</TableHead>
+                  <TableHead>Warehouses</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -136,6 +151,9 @@ export function StockReport({ day }: { day: string }) {
                       <TableCell className="text-right tabular-nums">
                         {totalQty === null ? '—' : `${(totalQty * purchase.unitCost).toLocaleString()} ${purchase.currency}`}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap text-sm" data-cell="warehouses">
+                        {purchase.allocations?.length ? purchase.allocations.map((line) => `${line.warehouseName} ${line.quantity}`).join(' · ') : '—'}
+                      </TableCell>
                     </TableRow>
                   )
                 })}
@@ -150,7 +168,10 @@ export function StockReport({ day }: { day: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Warehouse report</CardTitle>
-          <CardDescription>Current stock in each warehouse, valued at purchase price.</CardDescription>
+          <CardDescription>
+            Units on the shelves of each warehouse, valued at purchase price. Low and out of stock go by each product&apos;s total available.
+            {heldForOrders ? ` ${heldForOrders} unit(s) are held for approved orders not yet posted for delivery; they are still counted in their warehouse.` : ''}
+          </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <Table className="md:min-w-[640px]" data-report="warehouse">
@@ -190,7 +211,7 @@ export function StockReport({ day }: { day: string }) {
                 }
                 return (
                   <Fragment key={warehouse.id || 'none'}>
-                    {warehouse.items.map((product, index) => {
+                    {warehouse.items.map(({ product, quantity }, index) => {
                       const stockState = product.stockQty <= 0 ? 'out' : product.stockQty <= product.minStock ? 'low' : 'ok'
                       // On the product cells, not the row, so the merged warehouse cell keeps its own look.
                       const tone = cn(
@@ -198,12 +219,12 @@ export function StockReport({ day }: { day: string }) {
                         stockState === 'low' && 'bg-amber-500/10 text-amber-800 dark:text-amber-200'
                       )
                       return (
-                        <TableRow key={product.id} data-product-id={product.id} data-stock-state={stockState}>
+                        <TableRow key={product.id} data-product-id={product.id} data-row-warehouse={warehouse.id || 'none'} data-stock-state={stockState}>
                           {index === 0 ? warehouseCell : null}
                           <TableCell className={cn('font-medium', tone)}>{product.name}</TableCell>
-                          <TableCell className={cn('text-right tabular-nums', tone)}>{product.stockQty}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{quantity}</TableCell>
                           <TableCell className={cn('text-right tabular-nums', tone)}>{formatCurrency(product.purchasePrice)}</TableCell>
-                          <TableCell className={cn('text-right tabular-nums', tone)}>{formatCurrency(product.stockQty * product.purchasePrice)}</TableCell>
+                          <TableCell className={cn('text-right tabular-nums', tone)}>{formatCurrency(quantity * product.purchasePrice)}</TableCell>
                           <TableCell className={cn('text-right tabular-nums', tone)}>{product.minStock}</TableCell>
                         </TableRow>
                       )
@@ -243,7 +264,7 @@ export function StockReport({ day }: { day: string }) {
                 {lowStock.map((product) => (
                   <SummaryRow
                     key={product.id}
-                    label={`${product.name} · ${data?.warehouses[product.warehouseId]?.name ?? 'No warehouse'}`}
+                    label={`${product.name} · ${formatWarehouseSplit(product, data?.warehouses) || data?.warehouses[product.warehouseId]?.name || 'No warehouse'}`}
                     value={`${product.stockQty} / min ${product.minStock}`}
                     tone={product.stockQty <= 0 ? 'danger' : undefined}
                   />
@@ -292,6 +313,8 @@ export function DailyClosingReport({ day }: { day: string }) {
       data?.supplierPayments,
       data?.expenses,
       data?.purchaseRequests,
+      data?.stockTransfers,
+      data?.stockAdjustments,
       data?.ledgerEntryRequests,
       data?.changeRequests,
     ]

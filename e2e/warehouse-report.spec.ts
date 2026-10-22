@@ -36,7 +36,7 @@ test('TC-07.1 warehouse report: one row per product, merged warehouse cell, subt
   await page.getByRole('button', { name: /Stock & warehouse/ }).click()
   const table = page.locator('table[data-report="warehouse"]')
   await expect(table).toBeVisible()
-  await expect(table.locator('thead th')).toHaveText(['Warehouse', 'Product name', 'Quantity', 'Purchase price', 'Stock value', 'Low-stock qty'])
+  await expect(table.locator('thead th')).toHaveText(['Warehouse', 'Product name', 'Quantity', 'Purchase price', 'Stock value (purchase cost)', 'Low-stock qty'])
 
   for (const [warehouseId, items] of groups) {
     if (warehouseId === 'none' && !items.length) continue

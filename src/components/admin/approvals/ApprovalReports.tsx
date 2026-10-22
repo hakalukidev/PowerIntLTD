@@ -160,7 +160,7 @@ export function StockReport({ day }: { day: string }) {
                 <TableHead>Product name</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
                 <TableHead className="text-right">Purchase price</TableHead>
-                <TableHead className="text-right">Stock value</TableHead>
+                <TableHead className="text-right">Stock value (purchase cost)</TableHead>
                 <TableHead className="text-right">Low-stock qty</TableHead>
               </TableRow>
             </TableHeader>

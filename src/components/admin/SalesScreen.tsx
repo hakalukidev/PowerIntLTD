@@ -40,7 +40,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import type { OrderRecord } from '@/lib/erp/types'
+import type { CustomerRecord, OrderRecord, ZoneRecord } from '@/lib/erp/types'
 import { cn } from '@/lib/utils'
 import {
   exportXlsx,
@@ -53,6 +53,7 @@ import {
   toArray,
   userRoleIds,
 } from '@/lib/erp/utils'
+import { resolveCustomerZone, subZoneKey, UNASSIGNED_ZONE_ID, UNASSIGNED_ZONE_NAME } from '@/lib/erp/zones'
 import { brandedDocument, downloadDocumentJpg, downloadDocumentPdf } from './credit-sheet/printSheet'
 
 type PaymentFilter = 'all' | 'paid' | 'partial' | 'unpaid'
@@ -62,6 +63,8 @@ const SALES_COLUMNS = [
   { key: 'customer', label: 'Customer' },
   { key: 'product', label: 'Product' },
   { key: 'salesPerson', label: 'Sales person' },
+  { key: 'zone', label: 'Zone' },
+  { key: 'subZone', label: 'Sub-zone' },
   { key: 'total', label: 'Total' },
   { key: 'paid', label: 'Paid' },
   { key: 'due', label: 'Total due' },
@@ -72,8 +75,60 @@ const SALES_COLUMNS = [
 
 type SalesColumnKey = (typeof SALES_COLUMNS)[number]['key']
 
+// More columns than this turn the Full PDF to landscape.
+const PORTRAIT_PDF_MAX_COLUMNS = 8
+
+/** Shown only once the user turns them on. */
+const DEFAULT_HIDDEN_COLUMNS: SalesColumnKey[] = ['zone', 'subZone']
+
 function hiddenColumnsStorageKey(userId: string) {
   return `sales-table-hidden-columns:${userId}`
+}
+
+/**
+ * The saved column choice: `{ hidden, seen }`, where `seen` lists the columns that existed when it
+ * was saved, so a column added later starts at its default. Older saves are just the hidden list,
+ * from before any column was hidden by default.
+ */
+function loadHiddenColumns(raw: string | null): Set<SalesColumnKey> {
+  const saved: unknown = raw ? JSON.parse(raw) : null
+  const { hidden, seen } = Array.isArray(saved)
+    ? { hidden: saved as unknown[], seen: SALES_COLUMNS.map((column) => column.key).filter((key) => !DEFAULT_HIDDEN_COLUMNS.includes(key)) }
+    : { hidden: (saved as { hidden?: unknown } | null)?.hidden, seen: (saved as { seen?: unknown } | null)?.seen }
+  const hiddenKeys = new Set(Array.isArray(hidden) ? hidden : [])
+  const seenKeys = new Set(Array.isArray(seen) ? seen : [])
+  const keys = SALES_COLUMNS.map((column) => column.key).filter((key) =>
+    seenKeys.has(key) ? hiddenKeys.has(key) : DEFAULT_HIDDEN_COLUMNS.includes(key)
+  )
+  // At least one column stays on.
+  return new Set(keys.length < SALES_COLUMNS.length ? keys : DEFAULT_HIDDEN_COLUMNS)
+}
+
+type OrderZone = { zoneId: string; zoneName: string; subZoneKey: string; subZoneName: string }
+
+const NO_SUB_ZONE_FILTER = 'none'
+
+/**
+ * The zone an order counts under: the one stored on it when it was approved, otherwise (older
+ * orders, dealers without a zone then) its dealer's current zone.
+ */
+function orderZoneOf(order: OrderRecord, customer: CustomerRecord | undefined, zones: ZoneRecord[]): OrderZone {
+  if (order.zoneId) {
+    return {
+      zoneId: order.zoneId,
+      // A renamed zone shows its current name; a deleted one the name it had.
+      zoneName: zones.find((zone) => zone.id === order.zoneId)?.name ?? order.zoneName ?? UNASSIGNED_ZONE_NAME,
+      subZoneKey: order.subZoneKey ?? '',
+      subZoneName: order.subZoneName ?? '',
+    }
+  }
+  const zone = customer ? resolveCustomerZone(customer, zones) : null
+  return {
+    zoneId: zone?.id ?? UNASSIGNED_ZONE_ID,
+    zoneName: zone?.name ?? UNASSIGNED_ZONE_NAME,
+    subZoneKey: customer ? subZoneKey(customer, zones) : '',
+    subZoneName: customer?.thana?.trim() ?? '',
+  }
 }
 
 /** The dealer's total due as it stood when the order was approved; older orders only have their own due. */
@@ -93,7 +148,12 @@ export function SalesScreen() {
     () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [data?.orders]
   )
-  const { customers } = useZoneAccess()
+  const { customers, zones, zoneOptions, visibleZoneIds } = useZoneAccess()
+  const orderZones = useMemo(
+    () => new Map(orders.map((order) => [order.id, orderZoneOf(order, data?.customers?.[order.customerId], zones)])),
+    [orders, data?.customers, zones]
+  )
+  const zoneOf = (order: OrderRecord) => orderZones.get(order.id) ?? orderZoneOf(order, undefined, zones)
   const salesPeople = useMemo(() => {
     const map = new Map<string, string>()
     orders.forEach((order) => {
@@ -124,22 +184,21 @@ export function SalesScreen() {
   const statusFilter = orderStatuses.some((status) => status.id === statusFilterChoice) ? statusFilterChoice : 'all'
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all')
   const [salesPersonFilter, setSalesPersonFilter] = useState<string>('all')
+  const [zoneFilter, setZoneFilter] = useState('all')
+  const [subZoneFilter, setSubZoneFilter] = useState('all')
   const [dueOnly, setDueOnly] = useState(false)
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
-  const [hiddenColumns, setHiddenColumns] = useState<Set<SalesColumnKey>>(new Set())
+  const [hiddenColumns, setHiddenColumns] = useState<Set<SalesColumnKey>>(() => new Set(DEFAULT_HIDDEN_COLUMNS))
   const userId = currentUser?.id ?? null
 
   // Each user keeps their own column choice on this device.
   useEffect(() => {
     if (!userId) return
     try {
-      const saved: unknown = JSON.parse(window.localStorage.getItem(hiddenColumnsStorageKey(userId)) ?? '[]')
-      const known = new Set<string>(SALES_COLUMNS.map((column) => column.key))
-      const keys = Array.isArray(saved) ? saved.filter((key): key is SalesColumnKey => known.has(key)) : []
-      setHiddenColumns(keys.length < SALES_COLUMNS.length ? new Set(keys) : new Set())
+      setHiddenColumns(loadHiddenColumns(window.localStorage.getItem(hiddenColumnsStorageKey(userId))))
     } catch {
-      setHiddenColumns(new Set())
+      setHiddenColumns(new Set(DEFAULT_HIDDEN_COLUMNS))
     }
   }, [userId])
 
@@ -154,7 +213,10 @@ export function SalesScreen() {
     setHiddenColumns(next)
     if (!userId) return
     try {
-      window.localStorage.setItem(hiddenColumnsStorageKey(userId), JSON.stringify([...next]))
+      window.localStorage.setItem(
+        hiddenColumnsStorageKey(userId),
+        JSON.stringify({ hidden: [...next], seen: SALES_COLUMNS.map((column) => column.key) })
+      )
     } catch {
       // the choice just isn't remembered after a reload
     }
@@ -184,12 +246,23 @@ export function SalesScreen() {
     if (to) to.setHours(23, 59, 59, 999)
 
     return orders.filter((order) => {
+      const zone = orderZones.get(order.id)
       const matchesSearch =
         !normalizedQuery ||
-        [order.billNumber, order.customerName, order.salesPersonName, ...order.items.map((item) => item.productName)]
+        [
+          order.billNumber,
+          order.customerName,
+          order.salesPersonName,
+          zone?.zoneName,
+          zone?.subZoneName,
+          ...order.items.map((item) => item.productName),
+        ]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery)
+      const matchesZone = zoneFilter === 'all' || zone?.zoneId === zoneFilter
+      const matchesSubZone =
+        subZoneFilter === 'all' || (zone?.subZoneKey ?? '') === (subZoneFilter === NO_SUB_ZONE_FILTER ? '' : subZoneFilter)
       const matchesStatus = statusFilter === 'all' || order.status === statusFilter
       const matchesPayment = paymentFilter === 'all' || paymentStatusOf(order) === paymentFilter
       const matchesSalesPerson = salesPersonFilter === 'all' || order.salesPersonId === salesPersonFilter
@@ -198,9 +271,41 @@ export function SalesScreen() {
       const matchesFrom = !from || orderDate >= from
       const matchesTo = !to || orderDate <= to
 
-      return matchesSearch && matchesStatus && matchesPayment && matchesSalesPerson && matchesDue && matchesFrom && matchesTo
+      return (
+        matchesSearch &&
+        matchesZone &&
+        matchesSubZone &&
+        matchesStatus &&
+        matchesPayment &&
+        matchesSalesPerson &&
+        matchesDue &&
+        matchesFrom &&
+        matchesTo
+      )
     })
-  }, [orders, query, statusFilter, paymentFilter, salesPersonFilter, dueOnly, fromDate, toDate])
+  }, [orders, orderZones, query, zoneFilter, subZoneFilter, statusFilter, paymentFilter, salesPersonFilter, dueOnly, fromDate, toDate])
+
+  // Sub-zones that have orders in the chosen zone (or in any zone the user sees).
+  const subZoneOptions = useMemo(() => {
+    const options = new Map<string, string>()
+    let hasNone = false
+    for (const zone of orderZones.values()) {
+      if (zoneFilter === 'all' ? visibleZoneIds && !visibleZoneIds.has(zone.zoneId) : zone.zoneId !== zoneFilter) continue
+      if (zone.subZoneKey) options.set(zone.subZoneKey, zoneFilter === 'all' ? `${zone.subZoneName} (${zone.zoneName})` : zone.subZoneName)
+      else hasNone = true
+    }
+    const sorted = Array.from(options.entries()).sort((left, right) => left[1].localeCompare(right[1]))
+    return { options: sorted, hasNone }
+  }, [orderZones, zoneFilter, visibleZoneIds])
+
+  const zoneFilterName =
+    zoneFilter === 'all' ? '' : zoneFilter === UNASSIGNED_ZONE_ID ? UNASSIGNED_ZONE_NAME : zones.find((zone) => zone.id === zoneFilter)?.name ?? ''
+  const subZoneFilterName =
+    subZoneFilter === 'all'
+      ? ''
+      : subZoneFilter === NO_SUB_ZONE_FILTER
+        ? 'No sub-zone'
+        : subZoneOptions.options.find(([key]) => key === subZoneFilter)?.[1] ?? ''
 
   const dueReminderRows = orders
     .filter((order) => order.due > 0)
@@ -244,6 +349,8 @@ export function SalesScreen() {
     setStatusFilter('all')
     setPaymentFilter('all')
     setSalesPersonFilter('all')
+    setZoneFilter('all')
+    setSubZoneFilter('all')
     setDueOnly(false)
     setFromDate('')
     setToDate('')
@@ -257,6 +364,8 @@ export function SalesScreen() {
         case 'customer': return order.customerName
         case 'product': return order.items.map((item) => `${item.productName} x${item.quantity}`).join('; ')
         case 'salesPerson': return order.salesPersonName
+        case 'zone': return zoneOf(order).zoneName
+        case 'subZone': return zoneOf(order).subZoneName || '-'
         case 'total': return formatCurrency(order.total, currency)
         case 'paid': return formatCurrency(order.paid, currency)
         case 'due': return formatDealerBalance(totalDueOf(order), currency)
@@ -288,6 +397,8 @@ export function SalesScreen() {
       statusFilter !== 'all' ? `Status: ${getOrderStatus(data?.settings, statusFilter).label}` : '',
       paymentFilter !== 'all' ? `Payment: ${paymentFilter}` : '',
       salesPersonName ? `Sales person: ${salesPersonName}` : '',
+      zoneFilterName ? `Zone: ${zoneFilterName}` : '',
+      subZoneFilterName ? `Sub-zone: ${subZoneFilterName}` : '',
       dueOnly ? 'Due only' : '',
     ].filter(Boolean)
     const period = fromDate || toDate ? `${fromDate ? formatDate(fromDate) : 'Start'} – ${toDate ? formatDate(toDate) : 'Today'}` : 'All dates'
@@ -302,12 +413,14 @@ export function SalesScreen() {
             .map((item) => `${escapeHtml(item.productName)} × ${item.quantity} @ ${money(item.unitPrice)}`)
             .join('<br />')}</td>`
         case 'salesPerson': return `<td>${escapeHtml(order.salesPersonName)}</td>`
+        case 'zone': return `<td>${escapeHtml(zoneOf(order).zoneName)}</td>`
+        case 'subZone': return `<td>${escapeHtml(zoneOf(order).subZoneName || '-')}</td>`
         case 'total': return `<td class="numeric">${money(order.total)}</td>`
         case 'paid': return `<td class="numeric">${money(order.paid)}</td>`
         case 'due': return `<td class="numeric">${formatDealerBalance(totalDueOf(order), currency, money)}</td>`
-        case 'status': return `<td>${escapeHtml(getReadableOrderState(order, data?.settings))}</td>`
-        case 'saleDate': return `<td>${formatDate(order.createdAt)}</td>`
-        case 'delivery': return `<td>${formatDate(order.deliveryDate)}</td>`
+        case 'status': return `<td class="nowrap">${escapeHtml(getReadableOrderState(order, data?.settings))}</td>`
+        case 'saleDate': return `<td class="nowrap">${formatDate(order.createdAt)}</td>`
+        case 'delivery': return `<td class="nowrap">${formatDate(order.deliveryDate)}</td>`
       }
     }
     const headCells = visibleColumns
@@ -350,7 +463,13 @@ export function SalesScreen() {
             <td class="label">Due</td><td class="numeric">${money(totals.due)}</td>
           </tr>
         </table>
-        <table>
+        <style>
+          /* Long names and bill numbers wrap inside their cell so the table keeps to the page width; status and dates stay whole. */
+          table.sales td { overflow-wrap: anywhere; }
+          table.sales td.nowrap { white-space: nowrap; }
+          ${visibleColumns.length > 10 ? 'table.sales td, table.sales th { font-size: 10px; padding: 3px 5px; }' : ''}
+        </style>
+        <table class="sales">
           <thead>
             <tr>
               <th>#</th>
@@ -373,7 +492,11 @@ export function SalesScreen() {
     setFeedback(null)
     setIsExportingPdf(true)
     try {
-      await downloadDocumentPdf(buildSalesReportHtml(), `sales-report-${new Date().toISOString().slice(0, 10)}.pdf`)
+      await downloadDocumentPdf(
+        buildSalesReportHtml(),
+        `sales-report-${new Date().toISOString().slice(0, 10)}.pdf`,
+        visibleColumns.length > PORTRAIT_PDF_MAX_COLUMNS ? 'landscape' : 'portrait'
+      )
     } catch (reason) {
       setFeedback(reason instanceof Error ? reason.message : 'Unable to create the PDF.')
     } finally {
@@ -472,7 +595,7 @@ export function SalesScreen() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className="pl-9"
-                  placeholder="Search bill, customer, product, sales person"
+                  placeholder="Search bill, customer, product, sales person, zone"
                 />
               </div>
               <div className="flex min-w-0 gap-2">
@@ -536,6 +659,46 @@ export function SalesScreen() {
               </Button>
             </div>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Zone</p>
+                <Select
+                  value={zoneFilter}
+                  onValueChange={(value) => {
+                    setZoneFilter(value)
+                    setSubZoneFilter('all')
+                  }}
+                >
+                  <SelectTrigger aria-label="Zone filter">
+                    <SelectValue placeholder="All zones" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{visibleZoneIds ? 'All my zones' : 'All zones'}</SelectItem>
+                    {zoneOptions.map((zone) => (
+                      <SelectItem key={zone.id} value={zone.id}>
+                        {zone.name}
+                      </SelectItem>
+                    ))}
+                    {visibleZoneIds ? null : <SelectItem value={UNASSIGNED_ZONE_ID}>{UNASSIGNED_ZONE_NAME}</SelectItem>}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Sub-zone</p>
+                <Select value={subZoneFilter} onValueChange={setSubZoneFilter}>
+                  <SelectTrigger aria-label="Sub-zone filter">
+                    <SelectValue placeholder="All sub-zones" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sub-zones</SelectItem>
+                    {subZoneOptions.options.map(([key, label]) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                    {subZoneOptions.hasNone ? <SelectItem value={NO_SUB_ZONE_FILTER}>No sub-zone</SelectItem> : null}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
                 <DateInput value={fromDate} onChange={(value) => setFromDate(value)} />
@@ -559,6 +722,8 @@ export function SalesScreen() {
                     {isVisible('customer') ? <TableHead sticky>Customer</TableHead> : null}
                     {isVisible('product') ? <TableHead>Product</TableHead> : null}
                     {isVisible('salesPerson') ? <TableHead>Sales person</TableHead> : null}
+                    {isVisible('zone') ? <TableHead>Zone</TableHead> : null}
+                    {isVisible('subZone') ? <TableHead>Sub-zone</TableHead> : null}
                     {isVisible('total') ? <TableHead>Total</TableHead> : null}
                     {isVisible('paid') ? <TableHead>Paid</TableHead> : null}
                     {isVisible('due') ? <TableHead>Total due</TableHead> : null}
@@ -611,6 +776,8 @@ export function SalesScreen() {
                         </TableCell>
                       ) : null}
                       {isVisible('salesPerson') ? <TableCell className="text-sm text-muted-foreground">{order.salesPersonName}</TableCell> : null}
+                      {isVisible('zone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).zoneName}</TableCell> : null}
+                      {isVisible('subZone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).subZoneName || '-'}</TableCell> : null}
                       {isVisible('total') ? <TableCell>{formatCurrency(order.total, data?.settings.currency)}</TableCell> : null}
                       {isVisible('paid') ? <TableCell>{formatCurrency(order.paid, data?.settings.currency)}</TableCell> : null}
                       {isVisible('due') ? (

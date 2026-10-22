@@ -97,6 +97,10 @@ const A4_HEIGHT_PX = 1123
 // Matches the 12mm top and 16mm bottom padding of the printed page.
 const PAGE_TOP_PX = 45
 const PAGE_BOTTOM_PX = 60
+// Matches the 12mm side padding; kept to the right of content that is wider than the page.
+const PAGE_SIDE_PX = 45
+
+export type PdfOrientation = 'portrait' | 'landscape'
 
 // Bangla font for the hidden text layer. It has no Latin letters, so English words use Helvetica.
 const BANGLA_FONT_URL = '/fonts/NotoSansBengali-Regular.ttf'
@@ -217,12 +221,15 @@ export async function documentJpgFile(html: string, filename: string) {
  * page: it is rendered off-screen, captured as an image, and split into pages
  * between table rows so no row is cut in half. An invisible text layer is laid
  * over each page image, like a scanned PDF, so its text (Bangla included) can
- * be searched, selected and copied.
+ * be searched, selected and copied. Content wider than the page (a table with
+ * many columns) is laid out at its full width and shrunk to fit, never cut off.
  */
-export async function downloadDocumentPdf(html: string, filename: string) {
+export async function downloadDocumentPdf(html: string, filename: string, orientation: PdfOrientation = 'portrait') {
+  const pageWidthPx = orientation === 'landscape' ? A4_HEIGHT_PX : A4_WIDTH_PX
+  const pageHeightPx = orientation === 'landscape' ? A4_WIDTH_PX : A4_HEIGHT_PX
   const iframe = document.createElement('iframe')
   iframe.setAttribute('aria-hidden', 'true')
-  iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${A4_WIDTH_PX}px;height:${A4_HEIGHT_PX}px;border:0;`
+  iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${pageWidthPx}px;height:${pageHeightPx}px;border:0;`
   document.body.appendChild(iframe)
 
   try {
@@ -247,6 +254,11 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     )
 
     const body = frameDocument.body
+    const overflowWidth = Math.max(body.scrollWidth, frameDocument.documentElement.scrollWidth)
+    // Wider than the page: give it the room it needs (plus the right margin), then scale the whole page down.
+    const contentWidth = overflowWidth > pageWidthPx ? Math.ceil(overflowWidth) + PAGE_SIDE_PX : pageWidthPx
+    const fit = pageWidthPx / contentWidth
+    iframe.style.width = `${contentWidth}px`
     const height = body.scrollHeight
     iframe.style.height = `${height}px`
 
@@ -266,12 +278,14 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     const canvas = await toCanvas(body, {
       pixelRatio: scale,
       backgroundColor: '#ffffff',
-      width: A4_WIDTH_PX,
+      width: contentWidth,
       height,
     })
 
-    const pdf = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-    const mmPerPx = 210 / A4_WIDTH_PX
+    const pdf = new JsPDF({ orientation, unit: 'mm', format: 'a4' })
+    // Positions below are in content pixels; `fit` turns them into page pixels.
+    const mmPerPx = pdf.internal.pageSize.getWidth() / contentWidth
+    const pageContentHeight = pageHeightPx / fit
     const banglaFont = runs.some((run) => !run.latin) ? await loadBanglaFont() : null
     if (banglaFont) {
       pdf.addFileToVFS(`${BANGLA_FONT}.ttf`, banglaFont)
@@ -279,8 +293,8 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     }
 
     const page = document.createElement('canvas')
-    page.width = A4_WIDTH_PX * scale
-    page.height = A4_HEIGHT_PX * scale
+    page.width = pageWidthPx * scale
+    page.height = pageHeightPx * scale
     const context = page.getContext('2d')
     if (!context) throw new Error('Unable to prepare the PDF.')
 
@@ -288,8 +302,8 @@ export async function downloadDocumentPdf(html: string, filename: string) {
     let first = true
     while (start < height - 1) {
       // The first page already has its top padding in the rendered content.
-      const offset = first || sheetTops.length ? 0 : PAGE_TOP_PX
-      const limit = sheetTops.length ? start + A4_HEIGHT_PX : start + A4_HEIGHT_PX - offset - PAGE_BOTTOM_PX
+      const offset = first || sheetTops.length ? 0 : PAGE_TOP_PX / fit
+      const limit = sheetTops.length ? start + pageContentHeight : start + pageContentHeight - offset - PAGE_BOTTOM_PX / fit
       let end = height
       if (limit < height) {
         const fitting = (sheetTops.length ? sheetTops : breaks).filter((point) => point > start + 1 && point <= limit)
@@ -298,17 +312,18 @@ export async function downloadDocumentPdf(html: string, filename: string) {
 
       context.fillStyle = '#ffffff'
       context.fillRect(0, 0, page.width, page.height)
-      context.drawImage(canvas, 0, start * scale, canvas.width, (end - start) * scale, 0, offset * scale, page.width, (end - start) * scale)
+      const drawScale = scale * fit
+      context.drawImage(canvas, 0, start * scale, canvas.width, (end - start) * scale, 0, offset * drawScale, page.width, (end - start) * drawScale)
 
       if (!first) pdf.addPage()
-      pdf.addImage(page.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, A4_WIDTH_PX * mmPerPx, A4_HEIGHT_PX * mmPerPx)
+      pdf.addImage(page.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, pdf.internal.pageSize.getWidth(), pdf.internal.pageSize.getHeight())
 
       for (const run of runs) {
         const middle = run.top + run.height / 2
         if (middle < start || middle >= end || (!run.latin && !banglaFont)) continue
         pdf.setFont(run.latin ? 'helvetica' : BANGLA_FONT, 'normal')
         // 1px on the page is 0.75pt; stretch each word to the width it has in the image.
-        pdf.setFontSize(run.fontPx * 0.75)
+        pdf.setFontSize(run.fontPx * 0.75 * fit)
         const naturalWidth = pdf.getTextWidth(run.text)
         pdf.text(run.text, run.left * mmPerPx, (run.top - start + offset + (run.height - run.fontPx) / 2) * mmPerPx, {
           baseline: 'top',

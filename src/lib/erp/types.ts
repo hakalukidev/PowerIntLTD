@@ -357,6 +357,15 @@ export type OrderRecord = {
    */
   previousDue?: number
   totalDueAfter?: number
+  /**
+   * The dealer's zone and sub-zone when the order was approved, so the order stays in that zone
+   * if the dealer moves later. Missing on older orders and for dealers without a zone; those
+   * follow the dealer's current zone. `subZoneKey` is a `subZoneKeyFor` key, empty without a sub-zone.
+   */
+  zoneId?: string
+  zoneName?: string
+  subZoneKey?: string
+  subZoneName?: string
   deliveryDate: string
   paymentDueDate: string
   dueReference: 'owner' | 'courier' | 'bank' | 'bkash' | 'nagad' | 'dbbl' | ''

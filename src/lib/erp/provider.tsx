@@ -143,7 +143,7 @@ import { auth, database } from '@/lib/firebase/config'
 import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId } from './ledger'
 import { BUSINESS_ENTRY_LABELS } from './business'
 import { resolveRoles } from './roles'
-import { accessScopeFor, customerInScope, customerZoneId, scopeDataToUserZones } from './zones'
+import { accessScopeFor, customerInScope, customerZoneId, resolveCustomerZone, scopeDataToUserZones, subZoneKey } from './zones'
 
 const DEFAULT_ERP_DATA = createDefaultERPData()
 
@@ -2075,6 +2075,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     defaultDueDate.setDate(defaultDueDate.getDate() + 15)
     // Printed on the invoice as Previous due / Total due; stored once, so it never moves afterwards.
     const previousDue = customerBalanceBefore(customer.id, orderDate, orderId, toArray(data.orders), toArray(data.creditLedgerEntries))
+    // The order keeps the dealer's zone as it is now; a dealer without a zone leaves it unset.
+    const zones = toArray(data.zones)
+    const zone = resolveCustomerZone(customer, zones)
+    const orderZone = zone
+      ? { zoneId: zone.id, zoneName: zone.name, subZoneKey: subZoneKey(customer, zones), subZoneName: customer.thana?.trim() ?? '' }
+      : {}
 
     const order: OrderRecord = {
         id: orderId,
@@ -2092,6 +2098,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         due,
         previousDue,
         totalDueAfter: previousDue + due,
+        ...orderZone,
         deliveryDate: input.deliveryDate,
         paymentDueDate: input.paymentDueDate?.trim() || defaultDueDate.toISOString(),
         dueReference: due > 0 ? input.dueReference || 'owner' : '',

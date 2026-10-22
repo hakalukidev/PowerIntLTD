@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState, type FormEvent } from 'react'
-import { FileText, PackageCheck, Save, Send, Upload } from 'lucide-react'
+import { AlertTriangle, FileText, PackageCheck, Save, Send, Upload } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { EmptyState, FeedbackBanner, type Feedback } from '@/components/admin/approvals/shared'
@@ -9,9 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { uploadImageToCloudinary } from '@/lib/cloudinary'
+import { DOCUMENT_ACCEPT, documentFileProblem, uploadDocumentToCloudinary, type UploadProgress } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRecord, OrderRequestRecord } from '@/lib/erp/types'
 import { formatCurrency, formatDate, formatDateTime, toArray } from '@/lib/erp/utils'
@@ -59,9 +60,9 @@ function OrderSummary({ row }: { row: DeliveryRow }) {
   )
 }
 
-function WarehouseSelect({ options, value, onChange }: { options: ComboboxOption[]; value: string; onChange: (value: string) => void }) {
+function WarehouseSelect({ options, value, onChange, disabled }: { options: ComboboxOption[]; value: string; onChange: (value: string) => void; disabled?: boolean }) {
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger>
         <SelectValue placeholder="Choose a warehouse" />
       </SelectTrigger>
@@ -76,8 +77,12 @@ function WarehouseSelect({ options, value, onChange }: { options: ComboboxOption
   )
 }
 
+function ViewOnlyNote() {
+  return <p className="text-xs text-muted-foreground">View only: posting and submitting deliveries needs the &quot;Sales — edit&quot; permission.</p>
+}
+
 /** Step 1: choose where it leaves from, who takes it and the courier, then post. */
-function PostCard({ row, options, onFeedback }: { row: DeliveryRow; options: Options; onFeedback: (feedback: Feedback) => void }) {
+function PostCard({ row, options, canEdit, onFeedback }: { row: DeliveryRow; options: Options; canEdit: boolean; onFeedback: (feedback: Feedback) => void }) {
   const { data, postDelivery } = useERP()
   // A depot's dealers are delivered from the depot's warehouse.
   const depotId = data?.customers[row.order.customerId]?.depotId
@@ -107,29 +112,33 @@ function PostCard({ row, options, onFeedback }: { row: DeliveryRow; options: Opt
     <Card>
       <CardContent className="space-y-4 pt-6">
         <OrderSummary row={row} />
-        <form onSubmit={handleSubmit} className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
-          <Field label="Warehouse" required>
-            <WarehouseSelect options={options.warehouses} value={warehouseId} onChange={setWarehouseId} />
-            {depotWarehouseId ? <p className="text-xs text-muted-foreground">Depot dealer — delivered from the depot.</p> : null}
-          </Field>
-          <Field label="Delivery man" required>
-            <Combobox options={options.deliveryMen} value={deliveryManId} onChange={setDeliveryManId} placeholder="Choose an employee" searchPlaceholder="Search name..." />
-          </Field>
-          <Field label="Courier" required>
-            <Combobox options={options.couriers} value={courierName} onChange={setCourierName} placeholder="Choose a courier" searchPlaceholder="Search courier..." />
-          </Field>
-          <Button type="submit" disabled={busy} className="gap-1.5">
-            <Send className="h-4 w-4" />
-            {busy ? 'Posting…' : 'Post'}
-          </Button>
-        </form>
+        {canEdit ? (
+          <form onSubmit={handleSubmit} className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+            <Field label="Warehouse" required>
+              <WarehouseSelect options={options.warehouses} value={warehouseId} onChange={setWarehouseId} />
+              {depotWarehouseId ? <p className="text-xs text-muted-foreground">Depot dealer — delivered from the depot.</p> : null}
+            </Field>
+            <Field label="Delivery man" required>
+              <Combobox options={options.deliveryMen} value={deliveryManId} onChange={setDeliveryManId} placeholder="Choose an employee" searchPlaceholder="Search name..." />
+            </Field>
+            <Field label="Courier" required>
+              <Combobox options={options.couriers} value={courierName} onChange={setCourierName} placeholder="Choose a courier" searchPlaceholder="Search courier..." />
+            </Field>
+            <Button type="submit" disabled={busy} className="gap-1.5">
+              <Send className="h-4 w-4" />
+              {busy ? 'Posting…' : 'Post'}
+            </Button>
+          </form>
+        ) : (
+          <ViewOnlyNote />
+        )}
       </CardContent>
     </Card>
   )
 }
 
 /** Step 2: fill in the rest of the delivery, then add the delivery document and submit it to the audit. */
-function PostedCard({ row, options, onFeedback }: { row: DeliveryRow; options: Options; onFeedback: (feedback: Feedback) => void }) {
+function PostedCard({ row, options, canEdit, onFeedback }: { row: DeliveryRow; options: Options; canEdit: boolean; onFeedback: (feedback: Feedback) => void }) {
   const { updateDeliveryDetails, submitDelivery } = useERP()
   const delivery = row.order.delivery!
   const [form, setForm] = useState({
@@ -143,6 +152,11 @@ function PostedCard({ row, options, onFeedback }: { row: DeliveryRow; options: O
   })
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState<'save' | 'submit' | null>(null)
+  const [progress, setProgress] = useState<UploadProgress | null>(null)
+  // Shown in the card itself: the page banner is out of sight when this card is further down.
+  const [uploadError, setUploadError] = useState('')
+  // Without "Sales — edit" the details are shown but cannot be changed.
+  const readOnly = !canEdit
   const set = (key: keyof typeof form) => (value: string) => setForm((current) => ({ ...current, [key]: value }))
 
   async function handleSave() {
@@ -157,17 +171,25 @@ function PostedCard({ row, options, onFeedback }: { row: DeliveryRow; options: O
     }
   }
 
+  function chooseFile(next: File | null) {
+    const problem = next ? documentFileProblem(next) : null
+    setUploadError(problem ?? '')
+    setFile(problem ? null : next)
+  }
+
   async function handleSubmit() {
-    if (!file) return onFeedback({ tone: 'error', text: 'Add the delivery document first.' })
+    if (!file) return setUploadError('Add the delivery document first.')
     setBusy('submit')
+    setUploadError('')
     try {
-      const uploaded = await uploadImageToCloudinary(file, DELIVERY_DOCUMENT_FOLDER)
+      const uploaded = await uploadDocumentToCloudinary(file, DELIVERY_DOCUMENT_FOLDER, setProgress)
       await submitDelivery(row.order.id, { url: uploaded.imageUrl, publicId: uploaded.imagePublicId })
       onFeedback({ tone: 'success', text: `${row.order.billNumber} submitted to the audit. The document is on ${row.order.customerName}'s credit sheet.` })
     } catch (error) {
-      onFeedback({ tone: 'error', text: error instanceof Error ? error.message : 'Could not submit the delivery.' })
+      setUploadError(error instanceof Error ? error.message : 'Could not submit the delivery.')
     } finally {
       setBusy(null)
+      setProgress(null)
     }
   }
 
@@ -183,48 +205,78 @@ function PostedCard({ row, options, onFeedback }: { row: DeliveryRow; options: O
 
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Warehouse" required>
-            <WarehouseSelect options={options.warehouses} value={form.warehouseId} onChange={set('warehouseId')} />
+            <WarehouseSelect options={options.warehouses} value={form.warehouseId} onChange={set('warehouseId')} disabled={readOnly} />
           </Field>
           <Field label="Delivery man" required>
-            <Combobox options={options.deliveryMen} value={form.deliveryManId} onChange={set('deliveryManId')} placeholder="Choose an employee" searchPlaceholder="Search name..." />
+            <Combobox options={options.deliveryMen} value={form.deliveryManId} onChange={set('deliveryManId')} placeholder="Choose an employee" searchPlaceholder="Search name..." disabled={readOnly} />
           </Field>
           <Field label="Courier">
-            <Combobox options={options.couriers} value={form.courierName} onChange={set('courierName')} placeholder="Choose a courier" searchPlaceholder="Search courier..." />
+            <Combobox options={options.couriers} value={form.courierName} onChange={set('courierName')} placeholder="Choose a courier" searchPlaceholder="Search courier..." disabled={readOnly} />
           </Field>
           <Field label="Tracking / CN number">
-            <Input value={form.trackingNumber} onChange={(event) => set('trackingNumber')(event.target.value)} />
+            <Input value={form.trackingNumber} disabled={readOnly} onChange={(event) => set('trackingNumber')(event.target.value)} />
           </Field>
           <Field label="Vehicle">
-            <Input value={form.vehicle} placeholder="Van, bike, pickup…" onChange={(event) => set('vehicle')(event.target.value)} />
+            <Input value={form.vehicle} placeholder="Van, bike, pickup…" disabled={readOnly} onChange={(event) => set('vehicle')(event.target.value)} />
           </Field>
           <Field label="Delivery charge">
-            <Input type="number" min={0} value={form.deliveryCharge} onChange={(event) => set('deliveryCharge')(event.target.value)} />
+            <Input type="number" min={0} value={form.deliveryCharge} disabled={readOnly} onChange={(event) => set('deliveryCharge')(event.target.value)} />
           </Field>
           <div className="md:col-span-3">
             <Field label="Note">
-              <Textarea rows={2} value={form.note} onChange={(event) => set('note')(event.target.value)} />
+              <Textarea rows={2} value={form.note} disabled={readOnly} onChange={(event) => set('note')(event.target.value)} />
             </Field>
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-end md:justify-between">
-          <Field label="Delivery document" required>
-            <Input type="file" accept="image/*" className="md:w-80" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-          </Field>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" className="gap-1.5" disabled={busy !== null} onClick={() => void handleSave()}>
-              <Save className="h-4 w-4" />
-              {busy === 'save' ? 'Saving…' : 'Save details'}
-            </Button>
-            <Button type="button" className="gap-1.5" disabled={busy !== null || !file} onClick={() => void handleSubmit()}>
-              <Upload className="h-4 w-4" />
-              {busy === 'submit' ? 'Submitting…' : 'Submit to audit'}
-            </Button>
+        {canEdit ? (
+          <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-end md:justify-between">
+            <div className="min-w-0 space-y-2 md:w-80">
+              <Field label="Delivery document" required>
+                <Input type="file" accept={DOCUMENT_ACCEPT} disabled={busy !== null} onChange={(event) => chooseFile(event.target.files?.[0] ?? null)} />
+              </Field>
+              {file ? (
+                <p className="flex gap-1 text-xs text-muted-foreground">
+                  <span className="truncate">{file.name}</span>
+                  <span className="shrink-0">· {formatFileSize(file.size)}</span>
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Photo (JPG, PNG, HEIC) or PDF. Large photos are shrunk before upload.</p>
+              )}
+              {progress ? (
+                <div className="space-y-1" role="status">
+                  <Progress value={progress.stage === 'compressing' ? 5 : Math.max(5, progress.percent)} aria-label="Upload progress" />
+                  <p className="text-xs text-muted-foreground">{progress.stage === 'compressing' ? 'Preparing the photo…' : `Uploading ${progress.percent}%`}</p>
+                </div>
+              ) : null}
+              {uploadError ? (
+                <p role="alert" className="flex gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{uploadError}</span>
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" className="gap-1.5" disabled={busy !== null} onClick={() => void handleSave()}>
+                <Save className="h-4 w-4" />
+                {busy === 'save' ? 'Saving…' : 'Save details'}
+              </Button>
+              <Button type="button" className="gap-1.5" disabled={busy !== null || !file} onClick={() => void handleSubmit()}>
+                <Upload className="h-4 w-4" />
+                {busy === 'submit' ? 'Submitting…' : 'Submit to audit'}
+              </Button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <ViewOnlyNote />
+        )}
       </CardContent>
     </Card>
   )
+}
+
+function formatFileSize(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
 function SubmittedCard({ row }: { row: DeliveryRow }) {
@@ -266,7 +318,8 @@ function SubmittedCard({ row }: { row: DeliveryRow }) {
 }
 
 export default function DeliveryPage() {
-  const { data } = useERP()
+  const { data, hasPermission } = useERP()
+  const canEdit = hasPermission('sales.edit')
   const [tab, setTab] = useState<Tab>('to-post')
   const [search, setSearch] = useState('')
   const [feedback, setFeedback] = useState<Feedback>(null)
@@ -359,9 +412,9 @@ export default function DeliveryPage() {
           <div className="space-y-4">
             {visible.map((row) =>
               tab === 'to-post' ? (
-                <PostCard key={row.order.id} row={row} options={options} onFeedback={setFeedback} />
+                <PostCard key={row.order.id} row={row} options={options} canEdit={canEdit} onFeedback={setFeedback} />
               ) : tab === 'posted' ? (
-                <PostedCard key={row.order.id} row={row} options={options} onFeedback={setFeedback} />
+                <PostedCard key={row.order.id} row={row} options={options} canEdit={canEdit} onFeedback={setFeedback} />
               ) : (
                 <SubmittedCard key={row.order.id} row={row} />
               )

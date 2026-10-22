@@ -4272,6 +4272,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  /** Posting, editing and submitting a delivery change the order, so they need "Sales — edit", not just access to the page. */
+  function requireDeliveryEdit() {
+    if (!hasPermissionCheck(data, currentUser, 'sales.edit')) {
+      throw new Error('You do not have permission to post or submit deliveries.')
+    }
+  }
+
   /** The approved order behind a delivery; orders that never went through approval cannot be delivered here. */
   function approvedOrderFor(orderId: string) {
     const order = data?.orders[orderId]
@@ -4304,6 +4311,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!currentUser) {
       return
     }
+    requireDeliveryEdit()
     const { order } = approvedOrderFor(orderId)
     if (order.delivery) {
       throw new Error('This order has already been posted for delivery.')
@@ -4349,6 +4357,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!currentUser) {
       return
     }
+    requireDeliveryEdit()
     const { order } = approvedOrderFor(orderId)
     if (!order.delivery) {
       throw new Error('Post this order for delivery first.')
@@ -4383,6 +4392,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!currentUser) {
       return
     }
+    requireDeliveryEdit()
     const { order, request } = approvedOrderFor(orderId)
     const delivery = order.delivery
     if (!delivery) {

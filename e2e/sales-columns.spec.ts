@@ -35,7 +35,7 @@ const order = {
   items: [{ productId: 'e2e-product-a', productName: "Men's Jacket", quantity: 1, unitPrice: 2_450, purchasePrice: 0 }],
 }
 
-const ALL_COLUMNS = ['Bill', 'Customer', 'Product', 'Sales person', 'Total', 'Paid', 'Total due', 'Status', 'Sale date', 'Delivery']
+const ALL_COLUMNS = ['Bill', 'Customer', 'Product', 'Sales person', 'Total', 'Paid', 'Total due', 'Status', 'Sale date', 'Delivered date']
 
 let db: AdminDb
 

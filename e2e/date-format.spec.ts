@@ -25,7 +25,7 @@ const order = {
   customerName: `E2E Dates Dealer ${stamp}`,
   salesPersonId: 'e2e',
   salesPersonName: 'E2E Tester',
-  status: 'pending',
+  status: 'completed',
   paymentStatus: 'paid',
   subtotal: 1_000,
   discount: 0,
@@ -34,6 +34,7 @@ const order = {
   paid: 1_000,
   due: 0,
   deliveryDate: '2026-03-12T10:00:00.000Z',
+  deliveredAt: '2026-03-12T10:00:00.000Z',
   paymentDueDate: '2099-01-03',
   dueReference: 'owner',
   createdAt: '2026-03-09T10:00:00.000Z',
@@ -80,10 +81,10 @@ test.describe('Date display', () => {
     const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets.Sales)
     // The export follows the search, so it holds just the seeded order.
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ Bill: order.billNumber, 'Sale date': '09/03/2026', Delivery: '12/03/2026' })
+    expect(rows[0]).toMatchObject({ Bill: order.billNumber, 'Sale date': '09/03/2026', 'Delivered date': '12/03/2026' })
     for (const exported of rows) {
       expect(exported['Sale date']).toMatch(DAY_FIRST)
-      if (exported.Delivery) expect(exported.Delivery).toMatch(DAY_FIRST)
+      if (exported['Delivered date']) expect(exported['Delivered date']).toMatch(DAY_FIRST)
     }
   })
 

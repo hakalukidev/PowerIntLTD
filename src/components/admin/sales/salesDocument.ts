@@ -116,7 +116,7 @@ export function buildSalesDocumentHtml(
             <p class="title">${type}</p>
             <p><strong>No:</strong> ${invoiceNumber}</p>
             <p><strong>Issue:</strong> ${issueDate}</p>
-            <p><strong>Due/Delivery:</strong> ${deliveryDate}</p>
+            <p><strong>Planned delivery:</strong> ${deliveryDate}</p>
           </div>
         </div>
 

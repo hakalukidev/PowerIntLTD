@@ -121,6 +121,7 @@ import {
   type ApprovalParticipants,
   type ApprovalStage,
   nextEmployeeCode,
+  nextDeliveredAt,
   nextPartyCode,
   receivableOf,
   SUPPLIER_CODE_PREFIX,
@@ -241,7 +242,7 @@ type ERPContextValue = {
   saveZonePriceExclusions: (zoneId: string, customerIds: string[]) => Promise<void>
   updateSettings: (input: Partial<SettingsRecord>) => Promise<void>
   /** Admin only: adds a status, or renames / recolours one when `statusId` is given. Returns its id. */
-  saveOrderStatus: (input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal'>, statusId?: string) => Promise<string>
+  saveOrderStatus: (input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered'>, statusId?: string) => Promise<string>
   /** Admin only: saves the workflow order of every status, first to last. */
   reorderOrderStatuses: (statusIds: string[]) => Promise<void>
   /** Admin only: removes a status, moving every order on it to `replacementId` first. */
@@ -2268,7 +2269,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return Object.keys(data?.settings.orderStatuses ?? {}).length === 0
   }
 
-  async function saveOrderStatus(input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal'>, statusId?: string) {
+  async function saveOrderStatus(input: Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered'>, statusId?: string) {
     requireAdminUser('change order statuses')
     const label = input.label.trim()
     if (!label) {
@@ -2286,7 +2287,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const id = statusId ?? createId('status')
     const order = statusId ? statuses[statusId].order : Math.max(-1, ...Object.values(statuses).map((status) => status.order)) + 1
     const previous = statusId ? statuses[statusId] : null
-    statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal }
+    statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal, isDelivered: input.isDelivered }
 
     // Only this status's path is written, so the rest of the saved list is left as it is.
     await update(ref(getDatabaseOrThrow(), 'erp/settings/orderStatuses'), orderStatusesUnsaved() ? statuses : { [id]: statuses[id] })
@@ -2341,8 +2342,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         if (id !== statusId) changes[`settings/orderStatuses/${id}`] = status
       }
     }
+    const now = new Date().toISOString()
     for (const order of affected) {
       changes[`orders/${order.id}/status`] = replacementId
+      changes[`orders/${order.id}/deliveredAt`] = nextDeliveredAt(data.settings, order, replacementId, now)
     }
 
     await update(ref(getDatabaseOrThrow(), 'erp'), changes)
@@ -2378,7 +2381,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (order.status === status) {
       return
     }
-    await update(ref(db, `erp/orders/${orderId}`), { status })
+    await update(ref(db, `erp/orders/${orderId}`), {
+      status,
+      deliveredAt: nextDeliveredAt(data.settings, order, status, new Date().toISOString()),
+    })
     await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} from ${previousLabel} to ${label}.`)
     // Status changes need no approval, but each one is on the Daily Audit for the Chairman to see.
     await writeAuditEntry({
@@ -4401,6 +4407,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'delivery/submittedAt': now,
       'delivery/updatedAt': now,
       status: 'completed',
+      deliveredAt: now,
     })
     await writeAuditEntry({
       kind: 'delivery',

@@ -619,12 +619,27 @@ export function activitySummary(activity: ActivityRecord) {
 
 /** The five statuses the app shipped with; used until an admin saves their own list. */
 export const DEFAULT_ORDER_STATUSES: OrderStatusConfig[] = [
-  { id: 'pending', label: 'Pending', color: 'amber', order: 0, isFinal: false },
-  { id: 'ready', label: 'Ready', color: 'sky', order: 1, isFinal: false },
-  { id: 'shipped', label: 'Shipped', color: 'violet', order: 2, isFinal: false },
-  { id: 'completed', label: 'Completed', color: 'emerald', order: 3, isFinal: true },
-  { id: 'hold', label: 'Hold', color: 'rose', order: 4, isFinal: false },
+  { id: 'pending', label: 'Pending', color: 'amber', order: 0, isFinal: false, isDelivered: false },
+  { id: 'ready', label: 'Ready', color: 'sky', order: 1, isFinal: false, isDelivered: false },
+  { id: 'shipped', label: 'Shipped', color: 'violet', order: 2, isFinal: false, isDelivered: false },
+  { id: 'completed', label: 'Completed', color: 'emerald', order: 3, isFinal: true, isDelivered: true },
+  { id: 'hold', label: 'Hold', color: 'rose', order: 4, isFinal: false, isDelivered: false },
 ]
+
+/**
+ * The order's delivered date once it moves to `nextStatus`: stamped `now` on entering a status that
+ * counts as delivered, kept when it was already in one, and `null` (cleared) otherwise.
+ */
+export function nextDeliveredAt(
+  settings: Pick<SettingsRecord, 'orderStatuses'> | null | undefined,
+  order: Pick<OrderRecord, 'status' | 'deliveredAt'>,
+  nextStatus: string,
+  now: string
+): string | null {
+  if (!getOrderStatus(settings, nextStatus).isDelivered) return null
+  if (getOrderStatus(settings, order.status).isDelivered) return order.deliveredAt ?? null
+  return now
+}
 
 /** Statuses the order and delivery workflow sets by id: they can be renamed but not deleted. */
 export const PROTECTED_ORDER_STATUS_IDS = ['pending', 'shipped', 'completed']
@@ -642,7 +657,11 @@ export const ORDER_STATUS_COLORS: Record<OrderStatusColor, { label: string; badg
 
 /** The configured order statuses in workflow order, or the defaults when none were saved. */
 export function getOrderStatuses(settings?: Pick<SettingsRecord, 'orderStatuses'> | null) {
-  const saved = Object.values(settings?.orderStatuses ?? {})
+  // A list saved before `isDelivered` existed keeps Completed as the delivered step.
+  const saved = Object.values(settings?.orderStatuses ?? {}).map((status) => ({
+    ...status,
+    isDelivered: status.isDelivered ?? status.id === 'completed',
+  }))
   return (saved.length ? saved : DEFAULT_ORDER_STATUSES).slice().sort((left, right) => left.order - right.order)
 }
 
@@ -655,6 +674,7 @@ export function getOrderStatus(settings: Pick<SettingsRecord, 'orderStatuses'> |
       color: 'slate',
       order: Number.MAX_SAFE_INTEGER,
       isFinal: false,
+      isDelivered: false,
     }
   )
 }

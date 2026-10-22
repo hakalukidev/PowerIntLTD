@@ -31,9 +31,9 @@ export function OrderStatusBadge({ status, className }: { status: string; classN
   )
 }
 
-type StatusForm = Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal'>
+type StatusForm = Pick<OrderStatusConfig, 'label' | 'color' | 'isFinal' | 'isDelivered'>
 
-const emptyForm: StatusForm = { label: '', color: 'slate', isFinal: false }
+const emptyForm: StatusForm = { label: '', color: 'slate', isFinal: false, isDelivered: false }
 const colorKeys = Object.keys(ORDER_STATUS_COLORS) as OrderStatusColor[]
 
 type OrderStatusesDialogProps = {
@@ -84,7 +84,7 @@ export function OrderStatusesDialog({ open, onOpenChange }: OrderStatusesDialogP
     setDeletingId(null)
     setError(null)
     setEditingId(status?.id ?? '')
-    setForm(status ? { label: status.label, color: status.color, isFinal: status.isFinal } : emptyForm)
+    setForm(status ? { label: status.label, color: status.color, isFinal: status.isFinal, isDelivered: status.isDelivered } : emptyForm)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -185,6 +185,21 @@ export function OrderStatusesDialog({ open, onOpenChange }: OrderStatusesDialogP
               </span>
             </label>
 
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-primary"
+                checked={form.isDelivered}
+                onChange={(event) => setForm((current) => ({ ...current, isDelivered: event.target.checked }))}
+              />
+              <span>
+                Counts as delivered
+                <span className="block text-xs text-muted-foreground">
+                  Moving an order here sets its delivered date to that day; moving it to a status without this clears it.
+                </span>
+              </span>
+            </label>
+
             <div className="flex justify-end gap-3">
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setEditingId(null)} disabled={busy}>
                 Cancel
@@ -208,6 +223,7 @@ export function OrderStatusesDialog({ open, onOpenChange }: OrderStatusesDialogP
                           {status.label}
                         </Badge>
                         {status.isFinal ? <span className="text-xs font-medium text-muted-foreground">Final</span> : null}
+                        {status.isDelivered ? <span className="text-xs font-medium text-muted-foreground">Delivered</span> : null}
                         <span className="text-xs text-muted-foreground">
                           {count} order{count === 1 ? '' : 's'}
                         </span>

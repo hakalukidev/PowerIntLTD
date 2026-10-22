@@ -301,9 +301,9 @@ test.describe('Sales Full PDF page fit', () => {
       const layout = pdfLayout(file)
       expect(layout.orientations, label).toEqual([expected])
       expect(layout.outside, `${label}: words past the page edge`).toEqual([])
-      // The last column and every test bill are there in full.
+      // The last column (Delivered date, empty for these undelivered orders) and every test bill are there in full.
       const text = pdfText(file).replace(/\s+/g, ' ')
-      expect(text).toContain('02/01/2099')
+      expect(text).toContain('Delivered')
       for (const bill of bills) expect(text).toContain(bill.slice(-4))
       pdfFirstPagePng(file, `sales-pdf-${label.replace(/\W+/g, '-').toLowerCase()}`)
       note(testInfo, `${label}: ${expected}, every word inside the page.`)

@@ -70,7 +70,8 @@ const SALES_COLUMNS = [
   { key: 'due', label: 'Total due' },
   { key: 'status', label: 'Status' },
   { key: 'saleDate', label: 'Sale date' },
-  { key: 'delivery', label: 'Delivery' },
+  // Keyed `delivery` from when it showed the planned date, so saved column choices still apply.
+  { key: 'delivery', label: 'Delivered date' },
 ] as const
 
 type SalesColumnKey = (typeof SALES_COLUMNS)[number]['key']
@@ -371,7 +372,7 @@ export function SalesScreen() {
         case 'due': return formatDealerBalance(totalDueOf(order), currency)
         case 'status': return getReadableOrderState(order, data?.settings)
         case 'saleDate': return formatDate(order.createdAt)
-        case 'delivery': return formatDate(order.deliveryDate)
+        case 'delivery': return order.deliveredAt ? formatDate(order.deliveredAt) : ''
       }
     }
 
@@ -420,7 +421,7 @@ export function SalesScreen() {
         case 'due': return `<td class="numeric">${formatDealerBalance(totalDueOf(order), currency, money)}</td>`
         case 'status': return `<td class="nowrap">${escapeHtml(getReadableOrderState(order, data?.settings))}</td>`
         case 'saleDate': return `<td class="nowrap">${formatDate(order.createdAt)}</td>`
-        case 'delivery': return `<td class="nowrap">${formatDate(order.deliveryDate)}</td>`
+        case 'delivery': return `<td class="nowrap">${order.deliveredAt ? formatDate(order.deliveredAt) : ''}</td>`
       }
     }
     const headCells = visibleColumns
@@ -729,7 +730,7 @@ export function SalesScreen() {
                     {isVisible('due') ? <TableHead>Total due</TableHead> : null}
                     {isVisible('status') ? <TableHead>Status</TableHead> : null}
                     {isVisible('saleDate') ? <TableHead>Sale date</TableHead> : null}
-                    {isVisible('delivery') ? <TableHead>Delivery</TableHead> : null}
+                    {isVisible('delivery') ? <TableHead>Delivered date</TableHead> : null}
                     <TableHead className="text-right">Invoice</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -797,7 +798,9 @@ export function SalesScreen() {
                         </TableCell>
                       ) : null}
                       {isVisible('saleDate') ? <TableCell className="whitespace-nowrap">{formatDate(order.createdAt)}</TableCell> : null}
-                      {isVisible('delivery') ? <TableCell className="whitespace-nowrap">{formatDate(order.deliveryDate)}</TableCell> : null}
+                      {isVisible('delivery') ? (
+                        <TableCell className="whitespace-nowrap">{order.deliveredAt ? formatDate(order.deliveredAt) : ''}</TableCell>
+                      ) : null}
                       <TableCell onKeyDown={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-1 md:gap-2">
                           <Button
@@ -885,8 +888,10 @@ export function SalesScreen() {
                   <dd className="text-right font-medium">{detailsOrder.billNumber || detailsOrder.id}</dd>
                   <dt className="text-muted-foreground">Sale date</dt>
                   <dd className="text-right">{formatDate(detailsOrder.createdAt)}</dd>
-                  <dt className="text-muted-foreground">Delivery</dt>
+                  <dt className="text-muted-foreground">Planned delivery</dt>
                   <dd className="text-right">{detailsOrder.deliveryDate ? formatDate(detailsOrder.deliveryDate) : 'N/A'}</dd>
+                  <dt className="text-muted-foreground">Delivered</dt>
+                  <dd className="text-right">{detailsOrder.deliveredAt ? formatDate(detailsOrder.deliveredAt) : 'Not delivered'}</dd>
                   <dt className="text-muted-foreground">Payment due</dt>
                   <dd className="text-right">{detailsOrder.paymentDueDate ? formatDate(detailsOrder.paymentDueDate) : 'N/A'}</dd>
                   <dt className="self-center text-muted-foreground">Status</dt>

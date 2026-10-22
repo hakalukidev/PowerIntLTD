@@ -366,7 +366,14 @@ export type OrderRecord = {
   zoneName?: string
   subZoneKey?: string
   subZoneName?: string
+  /** The planned delivery date chosen on the order form. */
   deliveryDate: string
+  /**
+   * When the goods were actually delivered: set when the delivery document is submitted or the
+   * order moves to a status that counts as delivered, cleared when it moves to one that does not.
+   * Missing until then, and on older orders.
+   */
+  deliveredAt?: string
   paymentDueDate: string
   dueReference: 'owner' | 'courier' | 'bank' | 'bkash' | 'nagad' | 'dbbl' | ''
   overdueNotified?: boolean
@@ -539,6 +546,12 @@ export type OrderStatusConfig = {
   order: number
   /** The order is finished: it no longer counts as open. */
   isFinal: boolean
+  /**
+   * Moving an order to this status stamps its delivered date; moving it to a status without it
+   * clears the date. Separate from `isFinal`, so a final step such as "Cancelled" is not a delivery.
+   * Lists saved before this existed lack it; `getOrderStatuses` then gives it to Completed only.
+   */
+  isDelivered: boolean
 }
 
 export type AttendanceStatus = 'present' | 'absent'

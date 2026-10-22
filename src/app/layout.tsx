@@ -1,6 +1,7 @@
 ﻿import type { Metadata, Viewport } from 'next'
 import { Inter, Noto_Sans_Bengali } from 'next/font/google'
 import { ThemeProvider } from '@/components/theme-provider'
+import { ServiceWorkerRegister } from '@/components/sw-register'
 import { ERPProvider } from '@/lib/erp/provider'
 import './globals.css'
 
@@ -14,7 +15,13 @@ export const metadata: Metadata = {
   icons: {
     icon: '/power-icon.png',
     shortcut: '/power-icon.png',
-    apple: '/power-icon.png',
+    apple: '/icons/apple-touch-icon.png',
+  },
+  // iPhone "Add to Home Screen" opens without the Safari bar. The web app manifest is src/app/manifest.ts.
+  appleWebApp: {
+    capable: true,
+    title: 'Power ERP',
+    statusBarStyle: 'default',
   },
 }
 
@@ -41,6 +48,7 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <ERPProvider>{children}</ERPProvider>
         </ThemeProvider>
+        <ServiceWorkerRegister />
       </body>
     </html>
   )

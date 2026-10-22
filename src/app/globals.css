@@ -28,15 +28,15 @@
     --chart-3: 32 92% 52%;
     --chart-4: 267 70% 60%;
     --chart-5: 346 75% 55%;
-    /* The sidebar stays dark in both themes, like the rest of the brand. */
-    --sidebar-background: 215 28% 11%;
-    --sidebar-foreground: 210 20% 92%;
-    --sidebar-primary: 152 68% 38%;
+    /* The sidebar follows the theme: white here, dark under .dark. */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 39% 12%;
+    --sidebar-primary: 152 68% 34%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 215 22% 17%;
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 215 20% 18%;
-    --sidebar-ring: 152 68% 38%;
+    --sidebar-accent: 220 16% 95%;
+    --sidebar-accent-foreground: 222 39% 8%;
+    --sidebar-border: 220 14% 89%;
+    --sidebar-ring: 152 68% 34%;
   }
 
   .dark {
@@ -151,6 +151,15 @@
       radial-gradient(50rem 28rem at 100% 0%, hsl(217 90% 60% / 0.10), transparent 60%),
       radial-gradient(50rem 30rem at 50% 100%, hsl(267 80% 65% / 0.08), transparent 60%);
     background-attachment: fixed;
+  }
+
+  /* Scrolls with wheel, touch and keyboard, but draws no scrollbar (the sidebar and phone menus). */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
   /* The brand stripe across the top of headers. */

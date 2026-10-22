@@ -388,19 +388,19 @@ const navigationGroups: NavigationGroup[] = [
  * Class names are spelled out in full so Tailwind picks them up.
  */
 const TONES = {
-  emerald: { chip: 'bg-emerald-500/15 text-emerald-400', soft: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400', solid: 'from-emerald-500 to-teal-500' },
-  teal: { chip: 'bg-teal-500/15 text-teal-400', soft: 'bg-teal-500/12 text-teal-600 dark:text-teal-400', solid: 'from-teal-500 to-cyan-500' },
-  cyan: { chip: 'bg-cyan-500/15 text-cyan-400', soft: 'bg-cyan-500/12 text-cyan-600 dark:text-cyan-400', solid: 'from-cyan-500 to-sky-500' },
-  sky: { chip: 'bg-sky-500/15 text-sky-400', soft: 'bg-sky-500/12 text-sky-600 dark:text-sky-400', solid: 'from-sky-500 to-blue-500' },
-  blue: { chip: 'bg-blue-500/15 text-blue-400', soft: 'bg-blue-500/12 text-blue-600 dark:text-blue-400', solid: 'from-blue-500 to-indigo-500' },
-  indigo: { chip: 'bg-indigo-500/15 text-indigo-400', soft: 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400', solid: 'from-indigo-500 to-violet-500' },
-  violet: { chip: 'bg-violet-500/15 text-violet-400', soft: 'bg-violet-500/12 text-violet-600 dark:text-violet-400', solid: 'from-violet-500 to-fuchsia-500' },
-  fuchsia: { chip: 'bg-fuchsia-500/15 text-fuchsia-400', soft: 'bg-fuchsia-500/12 text-fuchsia-600 dark:text-fuchsia-400', solid: 'from-fuchsia-500 to-pink-500' },
-  pink: { chip: 'bg-pink-500/15 text-pink-400', soft: 'bg-pink-500/12 text-pink-600 dark:text-pink-400', solid: 'from-pink-500 to-rose-500' },
-  rose: { chip: 'bg-rose-500/15 text-rose-400', soft: 'bg-rose-500/12 text-rose-600 dark:text-rose-400', solid: 'from-rose-500 to-orange-500' },
-  orange: { chip: 'bg-orange-500/15 text-orange-400', soft: 'bg-orange-500/12 text-orange-600 dark:text-orange-400', solid: 'from-orange-500 to-amber-500' },
-  amber: { chip: 'bg-amber-500/15 text-amber-400', soft: 'bg-amber-500/12 text-amber-600 dark:text-amber-400', solid: 'from-amber-500 to-yellow-500' },
-  lime: { chip: 'bg-lime-500/15 text-lime-400', soft: 'bg-lime-500/12 text-lime-600 dark:text-lime-400', solid: 'from-lime-500 to-green-500' },
+  emerald: { chip: 'bg-emerald-500/12 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400', soft: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400', solid: 'from-emerald-500 to-teal-500' },
+  teal: { chip: 'bg-teal-500/12 text-teal-600 dark:bg-teal-500/15 dark:text-teal-400', soft: 'bg-teal-500/12 text-teal-600 dark:text-teal-400', solid: 'from-teal-500 to-cyan-500' },
+  cyan: { chip: 'bg-cyan-500/12 text-cyan-600 dark:bg-cyan-500/15 dark:text-cyan-400', soft: 'bg-cyan-500/12 text-cyan-600 dark:text-cyan-400', solid: 'from-cyan-500 to-sky-500' },
+  sky: { chip: 'bg-sky-500/12 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400', soft: 'bg-sky-500/12 text-sky-600 dark:text-sky-400', solid: 'from-sky-500 to-blue-500' },
+  blue: { chip: 'bg-blue-500/12 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400', soft: 'bg-blue-500/12 text-blue-600 dark:text-blue-400', solid: 'from-blue-500 to-indigo-500' },
+  indigo: { chip: 'bg-indigo-500/12 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400', soft: 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400', solid: 'from-indigo-500 to-violet-500' },
+  violet: { chip: 'bg-violet-500/12 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400', soft: 'bg-violet-500/12 text-violet-600 dark:text-violet-400', solid: 'from-violet-500 to-fuchsia-500' },
+  fuchsia: { chip: 'bg-fuchsia-500/12 text-fuchsia-600 dark:bg-fuchsia-500/15 dark:text-fuchsia-400', soft: 'bg-fuchsia-500/12 text-fuchsia-600 dark:text-fuchsia-400', solid: 'from-fuchsia-500 to-pink-500' },
+  pink: { chip: 'bg-pink-500/12 text-pink-600 dark:bg-pink-500/15 dark:text-pink-400', soft: 'bg-pink-500/12 text-pink-600 dark:text-pink-400', solid: 'from-pink-500 to-rose-500' },
+  rose: { chip: 'bg-rose-500/12 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400', soft: 'bg-rose-500/12 text-rose-600 dark:text-rose-400', solid: 'from-rose-500 to-orange-500' },
+  orange: { chip: 'bg-orange-500/12 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400', soft: 'bg-orange-500/12 text-orange-600 dark:text-orange-400', solid: 'from-orange-500 to-amber-500' },
+  amber: { chip: 'bg-amber-500/12 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400', soft: 'bg-amber-500/12 text-amber-600 dark:text-amber-400', solid: 'from-amber-500 to-yellow-500' },
+  lime: { chip: 'bg-lime-500/12 text-lime-600 dark:bg-lime-500/15 dark:text-lime-400', soft: 'bg-lime-500/12 text-lime-600 dark:text-lime-400', solid: 'from-lime-500 to-green-500' },
 } as const
 
 type Tone = keyof typeof TONES
@@ -522,12 +522,12 @@ function SidebarContent({
           className={cn('flex min-w-0 items-center gap-2.5', collapsed && 'justify-center')}
           onClick={onNavigate}
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/95 p-1 ring-1 ring-sidebar-border dark:ring-0">
             <Image src="/power-icon.png" alt="ERP" loading="eager" width={28} height={28} className="h-7 w-7 object-contain" />
           </span>
           {!collapsed ? (
             <span className="min-w-0 leading-tight">
-              <span className="block truncate text-[13px] font-semibold tracking-tight text-white">Power International</span>
+              <span className="block truncate text-[13px] font-semibold tracking-tight text-sidebar-accent-foreground">Power International</span>
               <span className="block text-[11px] text-sidebar-foreground/55">BD · ERP System</span>
             </span>
           ) : null}
@@ -536,7 +536,7 @@ function SidebarContent({
           <Button
             variant="ghost"
             size="icon"
-            className="hidden h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white lg:inline-flex"
+            className="hidden h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground lg:inline-flex"
             onClick={onToggleCollapse}
             title="Collapse sidebar"
           >
@@ -548,13 +548,13 @@ function SidebarContent({
       <div
         ref={scrollRef}
         onScroll={saveScroll}
-        className={cn('flex-1 space-y-5 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}
+        className={cn('no-scrollbar flex-1 space-y-5 overflow-y-auto overflow-x-hidden py-4', collapsed ? 'px-2' : 'px-3')}
       >
         {onToggleCollapse && collapsed ? (
           <Button
             variant="ghost"
             size="icon"
-            className="mx-auto hidden h-9 w-9 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white lg:flex"
+            className="mx-auto hidden h-9 w-9 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground lg:flex"
             onClick={onToggleCollapse}
             title="Expand sidebar"
           >
@@ -584,7 +584,7 @@ function SidebarContent({
                       collapsed ? 'h-10 justify-center' : 'px-2 py-1.5',
                       isActive
                         ? cn('bg-gradient-to-r text-white shadow-md', tone.solid)
-                        : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-white'
+                        : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                     )}
                   >
                     <span
@@ -612,7 +612,7 @@ function SidebarContent({
             </span>
             {!collapsed ? (
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate text-sm font-medium text-white">{currentUser.name}</span>
+                <span className="block truncate text-sm font-medium text-sidebar-accent-foreground">{currentUser.name}</span>
                 <span className="block truncate text-[11px] text-sidebar-foreground/55">{roleName}</span>
               </span>
             ) : null}
@@ -621,7 +621,7 @@ function SidebarContent({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white"
+                  className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                   title="Change password"
                   aria-label="Change password"
                 >
@@ -632,7 +632,7 @@ function SidebarContent({
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-white"
+              className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
               onClick={logout}
               title="Log out"
               aria-label="Log out"
@@ -731,7 +731,7 @@ function MobileLauncher({ active, open, onOpenChange }: { active: string; open: 
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-3xl px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
+      <SheetContent side="bottom" className="no-scrollbar max-h-[88dvh] overflow-y-auto rounded-t-3xl px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
         <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-muted-foreground/30" />
         <SheetHeader className="text-left">
           <SheetTitle>All modules</SheetTitle>

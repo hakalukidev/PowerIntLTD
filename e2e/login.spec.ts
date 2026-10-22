@@ -9,6 +9,15 @@ import { note, screenshot } from './support/evidence'
  * login page while the dashboard loaded, so it looked like nothing happened.
  */
 test.describe('Login', () => {
+  // The E2E dev server compiles each route on its first visit, which can take longer than a test's
+  // 30 s. Opening the dashboard once (signed out) compiles it, so TC-L.1 times the sign-in, not the build.
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000)
+    const page = await browser.newPage()
+    await page.goto('/admin/dashboard', { waitUntil: 'load', timeout: 180_000 })
+    await page.close()
+  })
+
   test('TC-L.1 one click on "Enter dashboard" signs in and opens the dashboard', async ({ page }, testInfo) => {
     await page.goto('/')
     // The sign-in button, whatever it currently says.

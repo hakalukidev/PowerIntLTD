@@ -128,7 +128,9 @@ import {
   type ApprovalParticipants,
   type ApprovalStage,
   nextEmployeeCode,
+  deriveOrderStatus,
   nextDeliveredAt,
+  orderLineStates,
   nextPartyCode,
   receivableOf,
   SUPPLIER_CODE_PREFIX,
@@ -245,7 +247,10 @@ type ERPContextValue = {
   /** A stock change by hand (or a new product's opening stock) waits for the Authorizer and the Chairman. */
   submitStockAdjustment: (input: StockAdjustmentInput) => Promise<void>
   reviewStockAdjustment: (adjustmentId: string, decision: 'approve' | 'reject') => Promise<void>
+  /** Moves the whole order, and with it every one of its products, to `status`. */
   updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
+  /** Moves one product of an order; the order's status follows its products. Not to a cancelling status. */
+  updateOrderItemStatus: (orderId: string, itemIndex: number, status: OrderRecord['status']) => Promise<void>
   setCustomerCreditLimit: (customerId: string, creditLimit: number) => Promise<void>
   saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
   /** Prices for every dealer: each product's general (wholesale) price. */
@@ -2670,7 +2675,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
     if (previous && Boolean(previous.isCancelled) !== isCancelled) {
       // Orders already on it hold (or gave back) their stock by the old setting.
-      const holding = toArray(data?.orders).filter((entry) => entry.status === previous.id && (entry.stockState === 'reserved' || entry.stockState === 'released'))
+      const holding = toArray(data?.orders).filter(
+        (entry) =>
+          (entry.status === previous.id || (entry.items ?? []).some((item) => item.status === previous.id)) &&
+          (entry.stockState === 'reserved' || entry.stockState === 'released')
+      )
       if (holding.length) {
         throw new Error(`Move the ${holding.length} undelivered order${holding.length === 1 ? '' : 's'} off "${previous.label}" before changing whether it cancels the order.`)
       }
@@ -2718,9 +2727,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    const affected = toArray(data.orders).filter((order) => order.status === statusId)
+    const affected = toArray(data.orders).filter((order) => order.status === statusId || (order.items ?? []).some((item) => item.status === statusId))
     if (affected.length && (!statuses[replacementId] || replacementId === statusId)) {
       throw new Error('Pick another status for the orders that use this one.')
+    }
+    // Cancelling is for whole orders only, so a product cannot be moved alone onto a cancelling status.
+    const partly = affected.filter((order) => orderLineStates(data.settings, order).some((line) => line.status !== statusId))
+    if (partly.length && statuses[replacementId]?.isCancelled) {
+      throw new Error(`${partly.length} order${partly.length === 1 ? ' has' : 's have'} only some products on "${removed.label}". Pick a status that does not cancel the order.`)
     }
 
     // One multi-path write, so the orders and the list never disagree.
@@ -2733,9 +2747,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const now = new Date().toISOString()
     const stockMoves: StockMove[] = []
     for (const order of affected) {
-      changes[`orders/${order.id}/status`] = replacementId
-      changes[`orders/${order.id}/deliveredAt`] = nextDeliveredAt(data.settings, order, replacementId, now)
-      const stock = orderStatusStockMoves(order, replacementId, now)
+      const next = orderLineUpdates(order, (current) => (current === statusId ? replacementId : current), now)
+      Object.assign(changes, next.updates)
+      const stock = orderStatusStockMoves(order, next.status, now)
       stockMoves.push(...stock.moves)
       if (stock.state) changes[`orders/${order.id}/stockState`] = stock.state
     }
@@ -2791,6 +2805,28 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Writes that move the order's products to `lineStatus(current)`: each product's status and
+   * delivered date (kept when it was delivered already, stamped `now` on arriving, cleared
+   * otherwise), and the order's status and delivered date worked out from them.
+   * Keys are relative to `erp/`, or to the order itself with `prefix` ''.
+   */
+  function orderLineUpdates(order: OrderRecord, lineStatus: (current: string, index: number) => string, now: string, prefix = `orders/${order.id}/`) {
+    const settings = data?.settings
+    const lines = orderLineStates(settings, order).map((line, index) => {
+      const status = lineStatus(line.status, index)
+      return { status, deliveredAt: nextDeliveredAt(settings, { status: line.status, deliveredAt: line.deliveredAt ?? undefined }, status, now) }
+    })
+    const orderStatus = lineStatus(order.status, -1)
+    const derived = lines.length ? deriveOrderStatus(settings, lines) : { status: orderStatus, deliveredAt: nextDeliveredAt(settings, order, orderStatus, now) }
+    const updates: Record<string, unknown> = { [`${prefix}status`]: derived.status, [`${prefix}deliveredAt`]: derived.deliveredAt }
+    lines.forEach((line, index) => {
+      updates[`${prefix}items/${index}/status`] = line.status
+      updates[`${prefix}items/${index}/deliveredAt`] = line.deliveredAt
+    })
+    return { updates, status: derived.status }
+  }
+
   async function updateOrderStatus(orderId: string, status: OrderRecord['status']) {
     if (!data) {
       return
@@ -2811,14 +2847,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const label = getOrderStatus(data.settings, status).label
     const previousLabel = getOrderStatus(data.settings, order.status).label
     const billNumber = order.billNumber || orderId
-    if (order.status === status) {
+    // The order may already show this status while some of its products are on another.
+    if (order.status === status && orderLineStates(data.settings, order).every((line) => line.status === status)) {
       return
     }
     const now = new Date().toISOString()
     const stock = orderStatusStock(order, status, now)
     await update(ref(db, 'erp'), {
-      [`orders/${orderId}/status`]: status,
-      [`orders/${orderId}/deliveredAt`]: nextDeliveredAt(data.settings, order, status, now),
+      ...orderLineUpdates(order, () => status, now).updates,
       ...stock.updates,
     })
     await writeActivity('order_status_changed', 'sales', `Moved order ${billNumber} from ${previousLabel} to ${label}.`)
@@ -2837,6 +2873,66 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeNotification(
       'Order status updated',
       `Order ${billNumber} status was updated to "${label}" by ${currentUser?.name ?? 'Admin'}.`,
+      'info',
+      ['admin', 'sales_person', 'accountant']
+    )
+  }
+
+  async function updateOrderItemStatus(orderId: string, itemIndex: number, status: OrderRecord['status']) {
+    if (!data) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'sales.edit')) {
+      throw new Error('You do not have permission to change order status.')
+    }
+    const next = getOrderStatuses(data.settings).find((entry) => entry.id === status)
+    if (!next) {
+      throw new Error('That status no longer exists.')
+    }
+    const order = data.orders[orderId]
+    const item = order?.items?.[itemIndex]
+    if (!order || !item) {
+      return
+    }
+    const billNumber = order.billNumber || orderId
+    if (next.isCancelled) {
+      throw new Error(`Products cannot be cancelled one at a time. Change the status of the whole order ${billNumber} instead.`)
+    }
+    if (getOrderStatus(data.settings, order.status).isCancelled || order.stockState === 'released') {
+      throw new Error(`${billNumber} is cancelled. Move the whole order back to an open status first.`)
+    }
+    // Same rule as for the whole order: posting the delivery is what takes the stock from a warehouse.
+    if (next.isDelivered && !order.delivery && order.stockState === 'reserved') {
+      throw new Error(`Post ${billNumber} for delivery first, so its stock leaves the right warehouse.`)
+    }
+    const previous = orderLineStates(data.settings, order)[itemIndex].status
+    if (previous === status) {
+      return
+    }
+
+    const now = new Date().toISOString()
+    const result = orderLineUpdates(order, (current, index) => (index === itemIndex ? status : current), now)
+    await update(ref(getDatabaseOrThrow(), 'erp'), result.updates)
+
+    const label = next.label
+    const previousLabel = getOrderStatus(data.settings, previous).label
+    const orderLabel = getOrderStatus(data.settings, result.status).label
+    await writeActivity('order_status_changed', 'sales', `Moved ${item.productName} on order ${billNumber} from ${previousLabel} to ${label}.`)
+    // Logged like a whole-order status change, on the Daily Audit.
+    await writeAuditEntry({
+      kind: 'order_status',
+      refId: orderId,
+      decision: 'changed',
+      party: order.customerName,
+      summary: `${billNumber} · ${item.productName}: ${previousLabel} → ${label}${result.status === order.status ? '' : ` (order now ${orderLabel})`}`,
+      amount: item.quantity * item.unitPrice,
+      submittedByName: currentUser?.name ?? '',
+      submittedByRole: currentUser ? roleNameOf(currentUser.id) : '',
+      submittedAt: now,
+    })
+    await writeNotification(
+      'Order status updated',
+      `${item.productName} on order ${billNumber} was updated to "${label}" by ${currentUser?.name ?? 'Admin'}.`,
       'info',
       ['admin', 'sales_person', 'accountant']
     )
@@ -4798,7 +4894,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     await update(ref(db), withStockHistory({
       [`orders/${orderId}/delivery`]: delivery,
-      [`orders/${orderId}/status`]: 'shipped',
+      // The whole order leaves together, so every product is shipped.
+      ...orderLineUpdates(order, () => 'shipped', now).updates,
       [`orders/${orderId}/courierName`]: delivery.courierName || order.courierName || '',
       ...(order.stockState === 'reserved' ? { ...stock.updates, [`orders/${orderId}/stockState`]: 'delivered' } : {}),
     }, stock.movements))
@@ -4885,8 +4982,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'delivery/submittedByName': currentUser.name,
       'delivery/submittedAt': now,
       'delivery/updatedAt': now,
-      status: 'completed',
-      deliveredAt: now,
+      // Products delivered earlier keep their own status and date; the rest are delivered now.
+      ...orderLineUpdates(order, (current) => (getOrderStatus(data?.settings, current).isDelivered || getOrderStatus(data?.settings, current).isCancelled ? current : 'completed'), now, '').updates,
     })
     await writeAuditEntry({
       kind: 'delivery',
@@ -6293,6 +6390,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       submitStockAdjustment,
       reviewStockAdjustment,
       updateOrderStatus: viewOnlyForZone(updateOrderStatus),
+      updateOrderItemStatus: viewOnlyForZone(updateOrderItemStatus),
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),
       saveGeneralPrices,

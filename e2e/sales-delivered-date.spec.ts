@@ -74,6 +74,10 @@ const orderIds = [statusOrder.id, deliveryOrder.id]
 
 type StatusMap = Record<string, { label: string }>
 
+// Set straight in the database: the product line goes back to following the order (as on orders
+// saved before products had their own status), so the earlier tests' line status does not linger.
+const linesFollowOrder = { 'items/0/status': null, 'items/0/deliveredAt': null }
+
 let db: AdminDb
 let statusesBefore: StatusMap
 
@@ -217,7 +221,7 @@ test.describe('Delivered date on the sales table', () => {
 
   test('TC-19.2 "Counts as delivered" is separate from "Final step"', async ({ page }, testInfo) => {
     // Already delivered on an earlier day.
-    await db.update(`erp/orders/${statusOrder.id}`, { status: 'completed', deliveredAt: '2026-10-01T10:00:00.000Z' })
+    await db.update(`erp/orders/${statusOrder.id}`, { status: 'completed', deliveredAt: '2026-10-01T10:00:00.000Z', ...linesFollowOrder })
     const row = await openSales(page, statusOrder.billNumber)
     await expect(await deliveredCell(page, row)).toHaveText('01/10/2026')
 
@@ -279,7 +283,7 @@ test.describe('Delivered date on a phone in dark mode', () => {
   test.use({ ...phone, viewport: { width: 360, height: 780 } })
 
   test('TC-19.4 the order dialog and the status form fit 360px in dark mode', async ({ page }, testInfo) => {
-    await db.update(`erp/orders/${statusOrder.id}`, { status: 'completed', deliveredAt: '2026-10-01T10:00:00.000Z' })
+    await db.update(`erp/orders/${statusOrder.id}`, { status: 'completed', deliveredAt: '2026-10-01T10:00:00.000Z', ...linesFollowOrder })
     const row = await openSales(page, statusOrder.billNumber)
     await page.getByRole('button', { name: 'Toggle color mode' }).first().click()
     await expect(page.locator('html')).toHaveClass(/\bdark\b/)

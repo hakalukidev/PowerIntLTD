@@ -371,6 +371,13 @@ export type OrderItem = {
   tierMinQty?: number
   /** Priced at the product's cash price. A cash-sale line without it had no cash price and used the normal price. */
   cashPrice?: boolean
+  /**
+   * This product's own step in the workflow; the order's `status` is worked out from its lines
+   * (`deriveOrderStatus`). Missing on lines saved before lines had a status: they follow the order.
+   */
+  status?: OrderStatus
+  /** When this product was delivered; set and cleared like the order's `deliveredAt`. */
+  deliveredAt?: string | null
 }
 
 /** How the dealer pays: on credit (the usual, quantity prices apply) or in cash (the cash price). */

@@ -683,8 +683,68 @@ export function orderStatusBadgeClass(color: OrderStatusColor) {
   return (ORDER_STATUS_COLORS[color] ?? ORDER_STATUS_COLORS.slate).badge
 }
 
+/** The order's status label, with "(1/2 delivered)" while only some of its products are delivered. */
 export function getReadableOrderState(order: OrderRecord, settings?: Pick<SettingsRecord, 'orderStatuses'> | null) {
-  return getOrderStatus(settings, order.status).label
+  const label = getOrderStatus(settings, order.status).label
+  const progress = orderItemProgress(settings, order)
+  return progress.partial ? `${label} (${progress.delivered}/${progress.total} delivered)` : label
+}
+
+type StatusSettings = Pick<SettingsRecord, 'orderStatuses'> | null | undefined
+type LineState = { status: string; deliveredAt: string | null }
+
+/**
+ * Each product's status and delivered date. Lines saved before lines had a status follow the
+ * order, so older orders read the same as before.
+ */
+export function orderLineStates(settings: StatusSettings, order: Pick<OrderRecord, 'status' | 'deliveredAt' | 'items'>): LineState[] {
+  return (order.items ?? []).map((item) => {
+    const status = item.status ?? order.status
+    const delivered = getOrderStatus(settings, status).isDelivered
+    return { status, deliveredAt: delivered ? item.deliveredAt ?? order.deliveredAt ?? null : null }
+  })
+}
+
+/**
+ * The order's status and delivered date, worked out from its products. Products on a cancelling
+ * status are left out unless every product is cancelled.
+ * - All on one status: that status.
+ * - Some not delivered: the earliest workflow step among those, so a partly delivered order stays open.
+ * - All delivered (on different delivered steps): the earliest of those.
+ * The delivered date is set only once every product counts as delivered: the latest product's date.
+ */
+export function deriveOrderStatus(settings: StatusSettings, lines: LineState[]): LineState {
+  if (!lines.length) return { status: 'pending', deliveredAt: null }
+  const active = lines.filter((line) => !getOrderStatus(settings, line.status).isCancelled)
+  const counted = active.length ? active : lines
+  const earliest = (candidates: LineState[]) =>
+    candidates.reduce((first, line) => (getOrderStatus(settings, line.status).order < getOrderStatus(settings, first.status).order ? line : first)).status
+
+  const waiting = counted.filter((line) => !getOrderStatus(settings, line.status).isDelivered)
+  if (waiting.length || !active.length) {
+    return { status: new Set(counted.map((line) => line.status)).size === 1 ? counted[0].status : earliest(waiting.length ? waiting : counted), deliveredAt: null }
+  }
+  const dates = counted.map((line) => line.deliveredAt).filter((date): date is string => Boolean(date))
+  return {
+    status: new Set(counted.map((line) => line.status)).size === 1 ? counted[0].status : earliest(counted),
+    deliveredAt: dates.length ? dates.reduce((latest, date) => (date > latest ? date : latest)) : null,
+  }
+}
+
+/**
+ * How far the order's products are: `delivered` of `total` (cancelled products left out),
+ * `partial` when some but not all are delivered, `mixed` when its products are on different statuses.
+ */
+export function orderItemProgress(settings: StatusSettings, order: Pick<OrderRecord, 'status' | 'deliveredAt' | 'items'>) {
+  const lines = orderLineStates(settings, order)
+  const active = lines.filter((line) => !getOrderStatus(settings, line.status).isCancelled)
+  const delivered = active.filter((line) => getOrderStatus(settings, line.status).isDelivered).length
+  return {
+    delivered,
+    total: active.length,
+    partial: delivered > 0 && delivered < active.length,
+    mixed: new Set(lines.map((line) => line.status)).size > 1,
+  }
 }
 
 // ---- Employee / Sales Target / Salary helpers ----

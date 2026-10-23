@@ -1,7 +1,9 @@
 "use client"
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ChevronDown,
+  ChevronRight,
   FileDown,
   FileSpreadsheet,
   ImageDown,
@@ -13,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import { AdminShell } from './AdminShell'
+import { OrderItemsPanel, OrderProgressChip } from './sales/OrderItemsPanel'
 import { OrderStatusBadge, OrderStatusesDialog } from './sales/OrderStatusesDialog'
 import { buildSalesDocumentHtml, escapeHtml, printSalesDocument, type SalesDocument } from './sales/salesDocument'
 import { Badge } from '@/components/ui/badge'
@@ -180,6 +183,47 @@ export function SalesScreen() {
     [customers, detailsOrder]
   )
   const [query, setQuery] = useState('')
+  // Orders whose products are open under their row.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set())
+  // The table's visible width, so an open product list stays in view while the table scrolls sideways.
+  const tableBoxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const box = tableBoxRef.current
+    if (!box || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => box.style.setProperty('--sales-view-width', `${box.clientWidth}px`))
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [])
+
+  function toggleExpanded(orderId: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current)
+      if (next.has(orderId)) next.delete(orderId)
+      else next.add(orderId)
+      return next
+    })
+  }
+
+  function expandButton(order: OrderRecord) {
+    const open = expandedIds.has(order.id)
+    const Icon = open ? ChevronDown : ChevronRight
+    return (
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        aria-expanded={open}
+        aria-controls={`order-products-${order.id}`}
+        aria-label={`${open ? 'Hide' : 'Show'} products of ${order.billNumber || order.id}`}
+        onClick={(event) => {
+          event.stopPropagation()
+          toggleExpanded(order.id)
+        }}
+      >
+        <Icon className="h-4 w-4" />
+      </Button>
+    )
+  }
   const orderStatuses = useMemo(() => getOrderStatuses(data?.settings), [data?.settings])
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
   const [statusesOpen, setStatusesOpen] = useState(false)
@@ -738,7 +782,7 @@ export function SalesScreen() {
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-2xl border border-border/70">
+            <div ref={tableBoxRef} className="overflow-x-auto rounded-2xl border border-border/70">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
@@ -760,125 +804,146 @@ export function SalesScreen() {
                 </TableHeader>
                 <TableBody>
                   {filteredOrders.map((order) => (
-                    <TableRow
-                      key={order.id}
-                      tabIndex={0}
-                      aria-label={`View invoice ${order.billNumber || order.id}`}
-                      onClick={() => openInvoiceDetails(order.id)}
-                      onKeyDown={(event) => {
-                        // Only the focused row itself; keys inside its controls keep their own meaning.
-                        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-                          event.preventDefault()
-                          openInvoiceDetails(order.id)
-                        }
-                      }}
-                      className={cn(
-                        'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                        order.due > 0 ? 'bg-rose-500/5 dark:bg-rose-500/10' : ''
-                      )}
-                    >
-                      {isVisible('bill') ? <TableCell className="hidden font-medium md:table-cell">{order.billNumber}</TableCell> : null}
-                      {isVisible('customer') ? (
-                        <TableCell
-                          sticky
-                          className={cn(order.due > 0 && '[--sticky-tint:rgb(244_63_94/0.05)] dark:[--sticky-tint:rgb(244_63_94/0.1)]')}
-                        >
-                          <p className="font-semibold">{order.customerName}</p>
-                          {/* The Bill column is hidden on phones, so the bill number rides under the name. */}
-                          {isVisible('bill') ? (
-                            <p className="whitespace-nowrap font-mono text-[10px] text-muted-foreground md:hidden">{order.billNumber}</p>
-                          ) : null}
-                        </TableCell>
-                      ) : null}
-                      {isVisible('product') ? (
-                        <TableCell>
-                          <span>{order.items[0]?.productName ?? 'N/A'}</span>
-                          {order.items.length > 1 ? (
-                            <Badge variant="secondary" className="ml-1.5 whitespace-nowrap px-1.5 py-0 text-[10px] font-medium">
-                              +{order.items.length - 1} more
-                            </Badge>
-                          ) : null}
-                        </TableCell>
-                      ) : null}
-                      {isVisible('salesPerson') ? <TableCell className="text-sm text-muted-foreground">{order.salesPersonName}</TableCell> : null}
-                      {isVisible('zone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).zoneName}</TableCell> : null}
-                      {isVisible('subZone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).subZoneName || '-'}</TableCell> : null}
-                      {isVisible('total') ? <TableCell>{formatCurrency(order.total, data?.settings.currency)}</TableCell> : null}
-                      {isVisible('paid') ? <TableCell>{formatCurrency(order.paid, data?.settings.currency)}</TableCell> : null}
-                      {isVisible('due') ? (
-                        <TableCell className={cn(totalDueOf(order) > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : '')}>
-                          {formatDealerBalance(totalDueOf(order), data?.settings.currency)}
-                          {order.totalDueAfter !== undefined ? (
-                            <p className="text-xs font-normal text-muted-foreground">This order: {formatCurrency(order.due, data?.settings.currency)}</p>
-                          ) : null}
-                          {order.due > 0 && order.dueReference ? (
-                            <p className="text-xs font-normal text-muted-foreground">Held by: {order.dueReference}</p>
-                          ) : null}
-                        </TableCell>
-                      ) : null}
-                      {isVisible('status') ? (
-                        <TableCell>
-                          <OrderStatusBadge status={order.status} />
-                        </TableCell>
-                      ) : null}
-                      {isVisible('saleType') ? (
-                        <TableCell>
-                          {saleTypeOf(order) === 'cash' ? (
-                            <Badge
+                    <Fragment key={order.id}>
+                      <TableRow
+                        tabIndex={0}
+                        aria-label={`View invoice ${order.billNumber || order.id}`}
+                        onClick={() => openInvoiceDetails(order.id)}
+                        onKeyDown={(event) => {
+                          // Only the focused row itself; keys inside its controls keep their own meaning.
+                          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                            event.preventDefault()
+                            openInvoiceDetails(order.id)
+                          }
+                        }}
+                        className={cn(
+                          'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                          order.due > 0 ? 'bg-rose-500/5 dark:bg-rose-500/10' : ''
+                        )}
+                      >
+                        {isVisible('bill') ? <TableCell className="hidden font-medium md:table-cell">{order.billNumber}</TableCell> : null}
+                        {isVisible('customer') ? (
+                          <TableCell
+                            sticky
+                            className={cn(order.due > 0 && '[--sticky-tint:rgb(244_63_94/0.05)] dark:[--sticky-tint:rgb(244_63_94/0.1)]')}
+                          >
+                            <div className="flex items-start gap-1">
+                              {expandButton(order)}
+                              <div className="min-w-0 pt-0.5">
+                                <p className="font-semibold">{order.customerName}</p>
+                                {/* The Bill column is hidden on phones, so the bill number rides under the name. */}
+                                {isVisible('bill') ? (
+                                  <p className="whitespace-nowrap font-mono text-[10px] text-muted-foreground md:hidden">{order.billNumber}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </TableCell>
+                        ) : null}
+                        {isVisible('product') ? (
+                          <TableCell>
+                            <span>{order.items[0]?.productName ?? 'N/A'}</span>
+                            {order.items.length > 1 ? (
+                              <Badge variant="secondary" className="ml-1.5 whitespace-nowrap px-1.5 py-0 text-[10px] font-medium">
+                                +{order.items.length - 1} more
+                              </Badge>
+                            ) : null}
+                          </TableCell>
+                        ) : null}
+                        {isVisible('salesPerson') ? <TableCell className="text-sm text-muted-foreground">{order.salesPersonName}</TableCell> : null}
+                        {isVisible('zone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).zoneName}</TableCell> : null}
+                        {isVisible('subZone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).subZoneName || '-'}</TableCell> : null}
+                        {isVisible('total') ? <TableCell>{formatCurrency(order.total, data?.settings.currency)}</TableCell> : null}
+                        {isVisible('paid') ? <TableCell>{formatCurrency(order.paid, data?.settings.currency)}</TableCell> : null}
+                        {isVisible('due') ? (
+                          <TableCell className={cn(totalDueOf(order) > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : '')}>
+                            {formatDealerBalance(totalDueOf(order), data?.settings.currency)}
+                            {order.totalDueAfter !== undefined ? (
+                              <p className="text-xs font-normal text-muted-foreground">This order: {formatCurrency(order.due, data?.settings.currency)}</p>
+                            ) : null}
+                            {order.due > 0 && order.dueReference ? (
+                              <p className="text-xs font-normal text-muted-foreground">Held by: {order.dueReference}</p>
+                            ) : null}
+                          </TableCell>
+                        ) : null}
+                        {isVisible('status') ? (
+                          <TableCell>
+                            <div className="flex flex-col items-start gap-1">
+                              <OrderStatusBadge status={order.status} />
+                              <OrderProgressChip order={order} />
+                            </div>
+                          </TableCell>
+                        ) : null}
+                        {isVisible('saleType') ? (
+                          <TableCell>
+                            {saleTypeOf(order) === 'cash' ? (
+                              <Badge
+                                variant="outline"
+                                className="whitespace-nowrap border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                                data-testid="sale-type-cash"
+                              >
+                                {SALE_TYPE_LABELS.cash}
+                              </Badge>
+                            ) : null}
+                          </TableCell>
+                        ) : null}
+                        {isVisible('saleDate') ? <TableCell className="whitespace-nowrap">{formatDate(order.createdAt)}</TableCell> : null}
+                        {isVisible('delivery') ? (
+                          <TableCell className="whitespace-nowrap">{order.deliveredAt ? formatDate(order.deliveredAt) : ''}</TableCell>
+                        ) : null}
+                        <TableCell onKeyDown={(event) => event.stopPropagation()}>
+                          <div className="flex justify-end gap-1 md:gap-2">
+                            {/* With the Customer column hidden, the products open from here. */}
+                            {isVisible('customer') ? null : expandButton(order)}
+                            <Button
                               variant="outline"
-                              className="whitespace-nowrap border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
-                              data-testid="sale-type-cash"
+                              size="icon"
+                              className="h-9 w-9"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                printInvoice(order)
+                              }}
+                              aria-label={`Print invoice ${order.id}`}
                             >
-                              {SALE_TYPE_LABELS.cash}
-                            </Badge>
-                          ) : null}
+                              <Printer className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void downloadInvoicePdf(order)
+                              }}
+                              aria-label={`Download invoice ${order.id} as PDF`}
+                            >
+                              <FileDown className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-9 w-9"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void downloadInvoiceJpg(order)
+                              }}
+                              aria-label={`Download invoice ${order.id} as JPG`}
+                            >
+                              <ImageDown className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
+                      </TableRow>
+                      {expandedIds.has(order.id) ? (
+                        <TableRow id={`order-products-${order.id}`} className="bg-muted/20 hover:!bg-muted/20">
+                          <TableCell colSpan={visibleColumns.length + 1} className="p-0">
+                            {/* Pinned to the visible part of the table, so it fits a phone while the row scrolls sideways. */}
+                            <div className="sticky left-0 w-[var(--sales-view-width,100%)] max-w-full p-2 md:max-w-3xl md:p-3">
+                              <OrderItemsPanel order={order} />
+                            </div>
+                          </TableCell>
+                        </TableRow>
                       ) : null}
-                      {isVisible('saleDate') ? <TableCell className="whitespace-nowrap">{formatDate(order.createdAt)}</TableCell> : null}
-                      {isVisible('delivery') ? (
-                        <TableCell className="whitespace-nowrap">{order.deliveredAt ? formatDate(order.deliveredAt) : ''}</TableCell>
-                      ) : null}
-                      <TableCell onKeyDown={(event) => event.stopPropagation()}>
-                        <div className="flex justify-end gap-1 md:gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              printInvoice(order)
-                            }}
-                            aria-label={`Print invoice ${order.id}`}
-                          >
-                            <Printer className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void downloadInvoicePdf(order)
-                            }}
-                            aria-label={`Download invoice ${order.id} as PDF`}
-                          >
-                            <FileDown className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void downloadInvoiceJpg(order)
-                            }}
-                            aria-label={`Download invoice ${order.id} as JPG`}
-                          >
-                            <ImageDown className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                    </Fragment>
                   ))}
                   {filteredOrders.length === 0 ? (
                     <TableRow>
@@ -934,7 +999,7 @@ export function SalesScreen() {
                   <dt className="text-muted-foreground">Payment due</dt>
                   <dd className="text-right">{detailsOrder.paymentDueDate ? formatDate(detailsOrder.paymentDueDate) : 'N/A'}</dd>
                   <dt className="self-center text-muted-foreground">Status</dt>
-                  <dd className="flex justify-end">
+                  <dd className="flex flex-col items-end gap-1">
                     {hasPermission('sales.edit') ? (
                       <Select
                         value={detailsOrder.status}
@@ -951,7 +1016,7 @@ export function SalesScreen() {
                         <SelectContent>
                           {/* An order on a status that was removed elsewhere still shows it until moved. */}
                           {orderStatuses.some((status) => status.id === detailsOrder.status) ? null : (
-                            <SelectItem value={detailsOrder.status}>{getReadableOrderState(detailsOrder, data?.settings)}</SelectItem>
+                            <SelectItem value={detailsOrder.status}>{getOrderStatus(data?.settings, detailsOrder.status).label}</SelectItem>
                           )}
                           {orderStatuses.map((status) => (
                             <SelectItem key={status.id} value={status.id}>
@@ -963,6 +1028,9 @@ export function SalesScreen() {
                     ) : (
                       <OrderStatusBadge status={detailsOrder.status} />
                     )}
+                    {hasPermission('sales.edit') && detailsOrder.items.length > 1 ? (
+                      <span className="text-[11px] text-muted-foreground">Applies to every product</span>
+                    ) : null}
                   </dd>
                 </dl>
               </div>

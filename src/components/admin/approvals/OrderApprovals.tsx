@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { isQuantityPrice, priceTiersOf, tierFor } from '@/lib/erp/pricing'
+import { cashPriceOf, isQuantityPrice, priceTiersOf, SALE_TYPE_LABELS, saleTypeOf, tierFor } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -188,6 +188,18 @@ export function OrderRequestCard({
           <CardTitle className="flex flex-wrap items-center gap-2 text-base">
             {badge}
             {request.customerName}
+            {saleTypeOf(request) === 'cash' ? (
+              <span
+                className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+                data-testid="approval-sale-type"
+              >
+                Cash sale
+              </span>
+            ) : (
+              <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground" data-testid="approval-sale-type">
+                Credit sale
+              </span>
+            )}
             {request.overCreditLimit ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="h-3.5 w-3.5" />
@@ -248,7 +260,15 @@ export function OrderRequestCard({
                       <TableCell className={stock < item.quantity ? 'text-right tabular-nums text-rose-600' : 'text-right tabular-nums'}>{stock}</TableCell>
                       <TableCell className="text-right tabular-nums">
                         {formatCurrency(item.unitPrice)}
-                        {item.quantityPrice ? (
+                        {item.cashPrice ? (
+                          <span className="block whitespace-nowrap text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="approval-cash-price">
+                            Cash price
+                          </span>
+                        ) : saleTypeOf(request) === 'cash' ? (
+                          <span className="block whitespace-nowrap text-[11px] font-medium text-amber-700 dark:text-amber-300" data-testid="approval-no-cash-price">
+                            No cash price
+                          </span>
+                        ) : item.quantityPrice ? (
                           <span className="block whitespace-nowrap text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="approval-qty-price">
                             Qty price{item.tierMinQty ? ` · ${item.tierMinQty}+` : ''}
                           </span>
@@ -262,6 +282,7 @@ export function OrderRequestCard({
             </Table>
           </div>
           <dl className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+            <SummaryRow label="Sale type" value={SALE_TYPE_LABELS[saleTypeOf(request)]} />
             <SummaryRow label="Order date" value={formatDate(request.orderDate)} />
             <SummaryRow label="Delivery date" value={formatDate(request.deliveryDate)} />
             <SummaryRow label="Courier" value={request.courierName || '—'} />
@@ -315,8 +336,9 @@ export function OrderRequestCard({
 /**
  * `followsTiers`: the unit price follows the product's quantity prices until it is typed by hand.
  * The line only counts as a quantity price while that step is above minimum 1 (`isQuantityPrice`).
+ * `cashPrice`: on a cash sale, the unit price is the product's cash price until it is typed by hand.
  */
-type EditLine = { key: string; productId: string; quantity: string; unitPrice: string; followsTiers: boolean; tierMinQty?: number }
+type EditLine = { key: string; productId: string; quantity: string; unitPrice: string; followsTiers: boolean; tierMinQty?: number; cashPrice?: boolean }
 
 const editLineIsQuantityPrice = (line: EditLine) => line.followsTiers && isQuantityPrice({ source: 'tier', tierMinQty: line.tierMinQty })
 
@@ -330,6 +352,7 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
       unitPrice: String(item.unitPrice),
       followsTiers: Boolean(item.quantityPrice),
       tierMinQty: item.tierMinQty,
+      cashPrice: Boolean(item.cashPrice),
     }))
   )
   const [paid, setPaid] = useState(String(request.paid))
@@ -354,7 +377,15 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
 
   function selectProduct(key: string, productId: string) {
     const product = data?.products[productId]
-    updateLine(key, { productId, unitPrice: product ? String(product.wholesalePrice || product.sellingPrice) : '0', followsTiers: false, tierMinQty: undefined })
+    // A cash sale stays a cash sale: a product added to it starts at its cash price when it has one.
+    const cash = product && saleTypeOf(request) === 'cash' ? cashPriceOf(product) : null
+    updateLine(key, {
+      productId,
+      unitPrice: cash !== null ? String(cash) : product ? String(product.wholesalePrice || product.sellingPrice) : '0',
+      followsTiers: false,
+      tierMinQty: undefined,
+      cashPrice: cash !== null,
+    })
   }
 
   /** A line priced by quantity is priced again from the product's quantity prices when its quantity changes. */
@@ -379,6 +410,7 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
           quantity: Number(line.quantity) || 0,
           unitPrice: Number(line.unitPrice) || 0,
           ...(editLineIsQuantityPrice(line) ? { quantityPrice: true, tierMinQty: line.tierMinQty } : {}),
+          ...(line.cashPrice ? { cashPrice: true } : {}),
         })),
         paid: Number(paid) || 0,
         deliveryDate: new Date(deliveryDate).toISOString(),
@@ -398,7 +430,9 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit order — {request.customerName}</DialogTitle>
-          <DialogDescription>Your name and every changed field are recorded on the order.</DialogDescription>
+          <DialogDescription>
+            {SALE_TYPE_LABELS[saleTypeOf(request)]} sale. Your name and every changed field are recorded on the order.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           {lines.map((line) => (
@@ -411,9 +445,11 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
                   min={0}
                   aria-label="Unit price"
                   value={line.unitPrice}
-                  onChange={(event) => updateLine(line.key, { unitPrice: event.target.value, followsTiers: false, tierMinQty: undefined })}
+                  onChange={(event) => updateLine(line.key, { unitPrice: event.target.value, followsTiers: false, tierMinQty: undefined, cashPrice: false })}
                 />
-                {editLineIsQuantityPrice(line) ? (
+                {line.cashPrice ? (
+                  <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">Cash price</p>
+                ) : editLineIsQuantityPrice(line) ? (
                   <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">Qty price{line.tierMinQty ? ` · ${line.tierMinQty}+` : ''}</p>
                 ) : null}
               </div>

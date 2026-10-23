@@ -14,9 +14,9 @@ import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { dealerPrice, isQuantityPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricing'
+import { dealerPrice, isQuantityPrice, PRICE_SOURCE_LABELS, SALE_TYPE_LABELS } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
-import type { CustomerRecord, OrderRecord, ProductRecord } from '@/lib/erp/types'
+import type { CustomerRecord, OrderRecord, ProductRecord, SaleType } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatCurrency, formatDealerBalance, partyCode, receivableOf, shortRecordId, toArray, userRoleIds } from '@/lib/erp/utils'
 import { formatWarehouseSplit } from '@/lib/erp/stock'
@@ -75,6 +75,10 @@ export default function OrderFormPage() {
   const [pricesOpen, setPricesOpen] = useState(false)
   // Quantity prices (5+ pcs etc.) for the whole order; off uses the dealer, depot, zone or general price.
   const [useTiers, setUseTiers] = useState(true)
+  // Cash sales take each product's cash price and never quantity prices.
+  const [saleType, setSaleType] = useState<SaleType>('credit')
+  // On a cash sale Paid now follows the payable amount until someone types in it.
+  const [paidFollowsPayable, setPaidFollowsPayable] = useState(false)
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
   const canCreate = hasPermission('sales.create')
@@ -143,16 +147,26 @@ export default function OrderFormPage() {
   const pricedLines = lines.map((line) => {
     const product = line.productId ? data?.products[line.productId] : undefined
     const quantity = Math.max(Number(line.quantity) || 0, 0)
-    const priced = product ? dealerPrice(product, { customer, zone: pricingZone, depot }, { quantity, useTiers }) : null
+    const priced = product ? dealerPrice(product, { customer, zone: pricingZone, depot }, { quantity, useTiers, saleType }) : null
     const unitPrice = priced?.price ?? 0
-    return { ...line, product, quantity, unitPrice, priceSource: priced?.source, tierMinQty: priced?.tierMinQty, quantityPrice: isQuantityPrice(priced), lineTotal: unitPrice * quantity }
+    return {
+      ...line,
+      product,
+      quantity,
+      unitPrice,
+      priceSource: priced?.source,
+      tierMinQty: priced?.tierMinQty,
+      quantityPrice: isQuantityPrice(priced),
+      noCashPrice: Boolean(priced?.noCashPrice),
+      lineTotal: unitPrice * quantity,
+    }
   })
   const total = pricedLines.reduce((sum, line) => sum + line.lineTotal, 0)
   const discountInput = paymentOn ? Math.max(Number(discount) || 0, 0) : 0
   const paidInput = paymentOn ? Math.max(Number(paid) || 0, 0) : 0
   const discountAmount = Math.min(discountInput, total)
   const payable = total - discountAmount
-  const paidAmount = Math.min(paidInput, payable)
+  const paidAmount = paymentOn && paidFollowsPayable ? payable : Math.min(paidInput, payable)
   const orderDue = payable - paidAmount
   const effectivePaymentDueDate = paymentDueDate || defaultPaymentDueDate(orderDate)
 
@@ -166,6 +180,20 @@ export default function OrderFormPage() {
 
   function updateLine(key: string, patch: Partial<OrderLine>) {
     setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)))
+  }
+
+  /** Cash opens the Payment section paid in full; back to credit undoes that unless Paid now was typed. */
+  function changeSaleType(next: SaleType) {
+    if (next === saleType) return
+    setSaleType(next)
+    if (next === 'cash') {
+      setPaymentOn(true)
+      setPaidFollowsPayable(true)
+    } else if (paidFollowsPayable) {
+      setPaidFollowsPayable(false)
+      setPaid('0')
+      setPaymentOn(false)
+    }
   }
 
   function selectCustomer(id: string) {
@@ -189,6 +217,8 @@ export default function OrderFormPage() {
     setBillNumber('')
     setLimitDraft(null)
     setUseTiers(true)
+    setSaleType('credit')
+    setPaidFollowsPayable(false)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -203,7 +233,7 @@ export default function OrderFormPage() {
     if (!deliveryDate) return setFeedback({ tone: 'error', text: 'Set the delivery date.' })
     if (!courierName) return setFeedback({ tone: 'error', text: 'Choose a courier.' })
     if (discountInput > total) return setFeedback({ tone: 'error', text: 'The discount cannot be more than the total.' })
-    if (paidInput > payable) return setFeedback({ tone: 'error', text: 'Paid now cannot be more than the payable amount.' })
+    if (!paidFollowsPayable && paidInput > payable) return setFeedback({ tone: 'error', text: 'Paid now cannot be more than the payable amount.' })
     if (submitBlocked) return setFeedback({ tone: 'error', text: 'This order is over the dealer’s credit limit. Over-limit orders are blocked.' })
 
     setIsSaving(true)
@@ -216,7 +246,9 @@ export default function OrderFormPage() {
           quantity: line.quantity,
           unitPrice: line.unitPrice,
           ...(line.quantityPrice ? { quantityPrice: true, tierMinQty: line.tierMinQty } : {}),
+          ...(line.priceSource === 'cash' ? { cashPrice: true } : {}),
         })),
+        saleType,
         paid: paidAmount,
         orderDate: new Date(orderDate).toISOString(),
         deliveryDate: new Date(deliveryDate).toISOString(),
@@ -268,6 +300,7 @@ export default function OrderFormPage() {
           due: orderDue,
           deliveryDate: deliveryDate || orderDate,
           createdAt: new Date(orderDate || todayInput()).toISOString(),
+          saleType,
           items: items.map((line) => ({
             productId: line.productId,
             productName: line.product!.name,
@@ -356,15 +389,42 @@ export default function OrderFormPage() {
               ) : null}
             </CardHeader>
             <CardContent className="space-y-3">
-              <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-border px-3 py-2 text-sm">
                 <span>
-                  <span className="block font-medium">Use quantity prices</span>
+                  <span className="block font-medium" id="sale-type-label">Sale type</span>
                   <span className="block text-xs text-muted-foreground">
-                    {useTiers ? 'On: products with quantity prices are priced by quantity (e.g. 5+ pcs).' : 'Off: the dealer, depot, zone or general price is used.'}
+                    {saleType === 'cash' ? 'Cash: every product at its cash price, paid in full.' : 'Credit: the dealer pays later; quantity prices apply.'}
                   </span>
                 </span>
-                <Switch checked={useTiers} onCheckedChange={setUseTiers} aria-label="Use quantity prices" />
-              </label>
+                <div role="radiogroup" aria-labelledby="sale-type-label" className="inline-flex shrink-0 rounded-md border border-input p-0.5">
+                  {(['credit', 'cash'] as const).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      role="radio"
+                      aria-checked={saleType === type}
+                      onClick={() => changeSaleType(type)}
+                      className={cn(
+                        'rounded px-3 py-1 text-sm font-medium transition-colors',
+                        saleType === type ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {SALE_TYPE_LABELS[type]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {saleType === 'credit' ? (
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                  <span>
+                    <span className="block font-medium">Use quantity prices</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {useTiers ? 'On: products with quantity prices are priced by quantity (e.g. 5+ pcs).' : 'Off: the dealer, depot, zone or general price is used.'}
+                    </span>
+                  </span>
+                  <Switch checked={useTiers} onCheckedChange={setUseTiers} aria-label="Use quantity prices" />
+                </label>
+              ) : null}
               {pricedLines.map((line) => (
                 <div key={line.key} className="grid gap-2 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_96px_120px_auto] sm:items-end sm:border-0 sm:p-0">
                   <div className="space-y-1">
@@ -391,7 +451,15 @@ export default function OrderFormPage() {
                     <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular-nums" data-testid="line-price">
                       {line.product ? formatCurrency(line.unitPrice) : '—'}
                     </div>
-                    {line.quantityPrice ? (
+                    {line.noCashPrice ? (
+                      <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300" data-testid="no-cash-price">
+                        No cash price — normal price
+                      </p>
+                    ) : line.priceSource === 'cash' ? (
+                      <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="cash-price-label">
+                        Cash price
+                      </p>
+                    ) : line.quantityPrice ? (
                       <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="qty-price-label">
                         Qty price · {line.tierMinQty}+ pcs
                       </p>
@@ -479,7 +547,16 @@ export default function OrderFormPage() {
               <CardContent className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Paid now ({data?.settings.currency ?? 'BDT'})</p>
-                  <Input type="number" min={0} value={paid} onChange={(event) => setPaid(event.target.value)} />
+                  <Input
+                    type="number"
+                    min={0}
+                    aria-label="Paid now"
+                    value={paidFollowsPayable ? String(payable) : paid}
+                    onChange={(event) => {
+                      setPaidFollowsPayable(false)
+                      setPaid(event.target.value)
+                    }}
+                  />
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Discount ({data?.settings.currency ?? 'BDT'})</p>

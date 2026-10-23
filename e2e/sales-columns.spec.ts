@@ -35,7 +35,7 @@ const order = {
   items: [{ productId: 'e2e-product-a', productName: "Men's Jacket", quantity: 1, unitPrice: 2_450, purchasePrice: 0 }],
 }
 
-const ALL_COLUMNS = ['Bill', 'Customer', 'Product', 'Sales person', 'Total', 'Paid', 'Total due', 'Status', 'Sale date', 'Delivered date']
+const ALL_COLUMNS = ['Bill', 'Customer', 'Product', 'Sales person', 'Total', 'Paid', 'Total due', 'Status', 'Sale type', 'Sale date', 'Delivered date']
 
 let db: AdminDb
 
@@ -81,13 +81,13 @@ test.describe('Sales table column picker', () => {
 
   test('TC-15.1 hiding Status removes it from the table, the Excel export and the PDF', async ({ page }, testInfo) => {
     await openSalesTable(page)
-    await expect(columnsButton(page)).toHaveText('Columns (10/12)')
+    await expect(columnsButton(page)).toHaveText('Columns (11/13)')
     await expect(page.getByRole('columnheader', { name: 'Paid', exact: true })).toBeVisible()
 
     await columnsButton(page).click()
     await setColumn(page, 'Status', false)
     await page.keyboard.press('Escape')
-    await expect(columnsButton(page)).toHaveText('Columns (9/12)')
+    await expect(columnsButton(page)).toHaveText('Columns (10/13)')
     await expect(page.getByRole('columnheader', { name: 'Status', exact: true })).toHaveCount(0)
     await expect(page.getByRole('row', { name: `View invoice ${order.billNumber}` }).getByRole('combobox')).toHaveCount(0)
     await screenshot(page, 'sales-columns-status-hidden', testInfo)
@@ -121,12 +121,12 @@ test.describe('Sales table column picker', () => {
     await bill.click({ force: true })
     await expect(bill).toHaveAttribute('aria-checked', 'true')
     await page.keyboard.press('Escape')
-    await expect(columnsButton(page)).toHaveText('Columns (1/12)')
+    await expect(columnsButton(page)).toHaveText('Columns (1/13)')
 
     // A full reload ends the in-memory session; signing in again must bring the same columns back.
     await page.reload()
     await openSalesTable(page)
-    await expect(columnsButton(page)).toHaveText('Columns (1/12)')
+    await expect(columnsButton(page)).toHaveText('Columns (1/13)')
     await expect(page.getByRole('columnheader', { name: 'Bill', exact: true })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: 'Customer', exact: true })).toHaveCount(0)
   })

@@ -38,9 +38,10 @@ import { DateInput } from '@/components/ui/date-input'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { SALE_TYPE_LABELS, saleTypeOf } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import type { CustomerRecord, OrderRecord, ZoneRecord } from '@/lib/erp/types'
+import type { CustomerRecord, OrderRecord, SaleType, ZoneRecord } from '@/lib/erp/types'
 import { cn } from '@/lib/utils'
 import {
   exportXlsx,
@@ -69,6 +70,8 @@ const SALES_COLUMNS = [
   { key: 'paid', label: 'Paid' },
   { key: 'due', label: 'Total due' },
   { key: 'status', label: 'Status' },
+  // The table marks only cash sales; the Excel and PDF exports write Credit or Cash on every row.
+  { key: 'saleType', label: 'Sale type' },
   { key: 'saleDate', label: 'Sale date' },
   // Keyed `delivery` from when it showed the planned date, so saved column choices still apply.
   { key: 'delivery', label: 'Delivered date' },
@@ -184,6 +187,7 @@ export function SalesScreen() {
   // A filter on a status that was just deleted falls back to every status.
   const statusFilter = orderStatuses.some((status) => status.id === statusFilterChoice) ? statusFilterChoice : 'all'
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all')
+  const [saleTypeFilter, setSaleTypeFilter] = useState<SaleType | 'all'>('all')
   const [salesPersonFilter, setSalesPersonFilter] = useState<string>('all')
   const [zoneFilter, setZoneFilter] = useState('all')
   const [subZoneFilter, setSubZoneFilter] = useState('all')
@@ -266,6 +270,7 @@ export function SalesScreen() {
         subZoneFilter === 'all' || (zone?.subZoneKey ?? '') === (subZoneFilter === NO_SUB_ZONE_FILTER ? '' : subZoneFilter)
       const matchesStatus = statusFilter === 'all' || order.status === statusFilter
       const matchesPayment = paymentFilter === 'all' || paymentStatusOf(order) === paymentFilter
+      const matchesSaleType = saleTypeFilter === 'all' || saleTypeOf(order) === saleTypeFilter
       const matchesSalesPerson = salesPersonFilter === 'all' || order.salesPersonId === salesPersonFilter
       const matchesDue = !dueOnly || order.due > 0
       const orderDate = new Date(order.createdAt)
@@ -278,13 +283,14 @@ export function SalesScreen() {
         matchesSubZone &&
         matchesStatus &&
         matchesPayment &&
+        matchesSaleType &&
         matchesSalesPerson &&
         matchesDue &&
         matchesFrom &&
         matchesTo
       )
     })
-  }, [orders, orderZones, query, zoneFilter, subZoneFilter, statusFilter, paymentFilter, salesPersonFilter, dueOnly, fromDate, toDate])
+  }, [orders, orderZones, query, zoneFilter, subZoneFilter, statusFilter, paymentFilter, saleTypeFilter, salesPersonFilter, dueOnly, fromDate, toDate])
 
   // Sub-zones that have orders in the chosen zone (or in any zone the user sees).
   const subZoneOptions = useMemo(() => {
@@ -349,6 +355,7 @@ export function SalesScreen() {
     setQuery('')
     setStatusFilter('all')
     setPaymentFilter('all')
+    setSaleTypeFilter('all')
     setSalesPersonFilter('all')
     setZoneFilter('all')
     setSubZoneFilter('all')
@@ -371,6 +378,7 @@ export function SalesScreen() {
         case 'paid': return formatCurrency(order.paid, currency)
         case 'due': return formatDealerBalance(totalDueOf(order), currency)
         case 'status': return getReadableOrderState(order, data?.settings)
+        case 'saleType': return SALE_TYPE_LABELS[saleTypeOf(order)]
         case 'saleDate': return formatDate(order.createdAt)
         case 'delivery': return order.deliveredAt ? formatDate(order.deliveredAt) : ''
       }
@@ -397,6 +405,7 @@ export function SalesScreen() {
       query.trim() ? `Search: "${query.trim()}"` : '',
       statusFilter !== 'all' ? `Status: ${getOrderStatus(data?.settings, statusFilter).label}` : '',
       paymentFilter !== 'all' ? `Payment: ${paymentFilter}` : '',
+      saleTypeFilter !== 'all' ? `Sale type: ${SALE_TYPE_LABELS[saleTypeFilter]}` : '',
       salesPersonName ? `Sales person: ${salesPersonName}` : '',
       zoneFilterName ? `Zone: ${zoneFilterName}` : '',
       subZoneFilterName ? `Sub-zone: ${subZoneFilterName}` : '',
@@ -420,6 +429,7 @@ export function SalesScreen() {
         case 'paid': return `<td class="numeric">${money(order.paid)}</td>`
         case 'due': return `<td class="numeric">${formatDealerBalance(totalDueOf(order), currency, money)}</td>`
         case 'status': return `<td class="nowrap">${escapeHtml(getReadableOrderState(order, data?.settings))}</td>`
+        case 'saleType': return `<td class="nowrap">${SALE_TYPE_LABELS[saleTypeOf(order)]}</td>`
         case 'saleDate': return `<td class="nowrap">${formatDate(order.createdAt)}</td>`
         case 'delivery': return `<td class="nowrap">${order.deliveredAt ? formatDate(order.deliveredAt) : ''}</td>`
       }
@@ -700,6 +710,19 @@ export function SalesScreen() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Sale type</p>
+                <Select value={saleTypeFilter} onValueChange={(value) => setSaleTypeFilter(value as SaleType | 'all')}>
+                  <SelectTrigger aria-label="Sale type filter">
+                    <SelectValue placeholder="All sale types" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sale types</SelectItem>
+                    <SelectItem value="credit">{SALE_TYPE_LABELS.credit}</SelectItem>
+                    <SelectItem value="cash">{SALE_TYPE_LABELS.cash}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-1">
                 <p className="text-xs font-medium text-muted-foreground">From date</p>
                 <DateInput value={fromDate} onChange={(value) => setFromDate(value)} />
@@ -729,6 +752,7 @@ export function SalesScreen() {
                     {isVisible('paid') ? <TableHead>Paid</TableHead> : null}
                     {isVisible('due') ? <TableHead>Total due</TableHead> : null}
                     {isVisible('status') ? <TableHead>Status</TableHead> : null}
+                    {isVisible('saleType') ? <TableHead>Sale type</TableHead> : null}
                     {isVisible('saleDate') ? <TableHead>Sale date</TableHead> : null}
                     {isVisible('delivery') ? <TableHead>Delivered date</TableHead> : null}
                     <TableHead className="text-right">Invoice</TableHead>
@@ -795,6 +819,19 @@ export function SalesScreen() {
                       {isVisible('status') ? (
                         <TableCell>
                           <OrderStatusBadge status={order.status} />
+                        </TableCell>
+                      ) : null}
+                      {isVisible('saleType') ? (
+                        <TableCell>
+                          {saleTypeOf(order) === 'cash' ? (
+                            <Badge
+                              variant="outline"
+                              className="whitespace-nowrap border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                              data-testid="sale-type-cash"
+                            >
+                              {SALE_TYPE_LABELS.cash}
+                            </Badge>
+                          ) : null}
                         </TableCell>
                       ) : null}
                       {isVisible('saleDate') ? <TableCell className="whitespace-nowrap">{formatDate(order.createdAt)}</TableCell> : null}
@@ -886,6 +923,8 @@ export function SalesScreen() {
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-xl border border-border/70 p-3">
                   <dt className="text-muted-foreground">Bill no.</dt>
                   <dd className="text-right font-medium">{detailsOrder.billNumber || detailsOrder.id}</dd>
+                  <dt className="text-muted-foreground">Sale type</dt>
+                  <dd className="text-right">{SALE_TYPE_LABELS[saleTypeOf(detailsOrder)]}</dd>
                   <dt className="text-muted-foreground">Sale date</dt>
                   <dd className="text-right">{formatDate(detailsOrder.createdAt)}</dd>
                   <dt className="text-muted-foreground">Planned delivery</dt>

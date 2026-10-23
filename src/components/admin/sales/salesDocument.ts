@@ -1,4 +1,5 @@
 import type { CustomerRecord, OrderRecord, SettingsRecord, ZoneRecord } from '@/lib/erp/types'
+import { SALE_TYPE_LABELS, saleTypeOf } from '@/lib/erp/pricing'
 import { formatCurrency, formatDate, formatDealerBalance } from '@/lib/erp/utils'
 import { resolveCustomerZone } from '@/lib/erp/zones'
 
@@ -14,7 +15,7 @@ export const DUE_REFERENCE_OPTIONS: { value: Exclude<OrderRecord['dueReference']
 
 export type SalesDocument = Pick<
   OrderRecord,
-  'id' | 'billNumber' | 'customerId' | 'customerName' | 'salesPersonName' | 'total' | 'paid' | 'due' | 'deliveryDate' | 'createdAt' | 'items'
+  'id' | 'billNumber' | 'customerId' | 'customerName' | 'salesPersonName' | 'total' | 'paid' | 'due' | 'deliveryDate' | 'createdAt' | 'items' | 'saleType'
 > & { subtotal?: number; discount?: number; previousDue?: number; totalDueAfter?: number }
 
 export type SalesDocumentContext = {
@@ -131,6 +132,7 @@ export function buildSalesDocumentHtml(
           <div class="party">
             <h2>Prepared By</h2>
             <p><strong>${escapeHtml(document.salesPersonName)}</strong></p>
+            <p class="sale-type">Sale type: <strong>${SALE_TYPE_LABELS[saleTypeOf(document)]}</strong></p>
             <p>Payment status: ${document.due > 0 ? 'Due' : 'Paid'}</p>
           </div>
         </div>

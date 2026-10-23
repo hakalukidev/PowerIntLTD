@@ -10,7 +10,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { dealerPrice, formatTiers, generalPrice, PRICE_SOURCE_LABELS, priceTiersOf, validateTiers, type PriceContext } from '@/lib/erp/pricing'
+import { cashPriceOf, dealerPrice, formatTiers, generalPrice, PRICE_SOURCE_LABELS, priceTiersOf, validateTiers, type PriceContext } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import type { ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -25,7 +25,7 @@ const SCOPES: Array<{ id: Scope; label: string; description: string }> = [
     id: 'general',
     label: 'Every dealer',
     description:
-      'The general price every dealer pays unless a zone, depot or dealer price is set. Press + to add quantity prices (for example 5 or more): they apply to every dealer, unless a dealer, depot or zone price is saved after them.',
+      'The general price every dealer pays unless a zone, depot or dealer price is set. Press + to add quantity prices (for example 5 or more): they apply to every dealer, unless a dealer, depot or zone price is saved after them. The cash price is what every dealer pays on a cash sale; leave it empty for no cash price.',
   },
   { id: 'zone', label: 'One zone', description: 'A price for every dealer of one zone. Dealers you leave out keep the general price.' },
   { id: 'dealer', label: 'One dealer', description: 'A price only this dealer gets. It wins over every other price.' },
@@ -217,8 +217,10 @@ function TierEditor({ product, onClose }: { product: ProductRecord; onClose: () 
 }
 
 function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEdit: boolean }) {
-  const { saveGeneralPrices } = useERP()
+  const { saveGeneralPrices, saveCashPrices } = useERP()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  // Cash prices typed since the last save; a product not in here shows its saved cash price.
+  const [cashDrafts, setCashDrafts] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
   const [tiersOpen, setTiersOpen] = useState('')
@@ -230,9 +232,19 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
       const prices = Object.fromEntries(
         Object.entries(parseDrafts(drafts)).filter((entry): entry is [string, number] => entry[1] !== null && Number.isFinite(entry[1]))
       )
-      await saveGeneralPrices(prices)
+      const cashPrices = parseDrafts(cashDrafts)
+      if (Object.values(cashPrices).some((price) => price !== null && !(Number.isFinite(price) && price >= 0))) {
+        throw new Error('Every cash price must be 0 or more, or empty for no cash price.')
+      }
+      if (Object.keys(prices).length) await saveGeneralPrices(prices)
+      if (Object.keys(cashPrices).length) await saveCashPrices(cashPrices)
       setDrafts({})
-      setFeedback({ tone: 'success', text: 'General prices saved. They apply to every dealer without a more specific price.' })
+      setCashDrafts({})
+      const saved = [
+        Object.keys(prices).length ? 'General prices saved. They apply to every dealer without a more specific price.' : '',
+        Object.keys(cashPrices).length ? 'Cash prices saved. They apply to every cash sale.' : '',
+      ]
+      setFeedback({ tone: 'success', text: saved.filter(Boolean).join(' ') })
     } catch (error) {
       setFeedback({ tone: 'error', text: error instanceof Error ? error.message : 'Could not save prices.' })
     } finally {
@@ -245,7 +257,7 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle className="text-base">General price for every dealer</CardTitle>
         {canEdit ? (
-          <Button type="button" disabled={isSaving || Object.keys(drafts).length === 0} onClick={() => void handleSave()}>
+          <Button type="button" disabled={isSaving || Object.keys(drafts).length + Object.keys(cashDrafts).length === 0} onClick={() => void handleSave()}>
             {isSaving ? 'Saving...' : 'Save prices'}
           </Button>
         ) : null}
@@ -259,6 +271,7 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
               <TableHead className="text-right">Retail</TableHead>
               <TableHead className="text-right">Current general</TableHead>
               <TableHead>New price</TableHead>
+              <TableHead>Cash price</TableHead>
               <TableHead>Quantity prices</TableHead>
               <TableHead>From</TableHead>
             </TableRow>
@@ -266,6 +279,7 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
           <TableBody>
             {products.map((product) => {
               const tiers = priceTiersOf(product)
+              const cash = cashPriceOf(product)
               return (
                 <Fragment key={product.id}>
                   <TableRow>
@@ -288,6 +302,27 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
                             return next
                           })
                         }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min={0}
+                        aria-label={`Cash price for ${product.name}`}
+                        value={cashDrafts[product.id] ?? (cash === null ? '' : String(cash))}
+                        placeholder="No cash price"
+                        disabled={!canEdit}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setCashDrafts((current) => {
+                            const next = { ...current }
+                            // Typing the saved value back is no change.
+                            if (value === (cash === null ? '' : String(cash))) delete next[product.id]
+                            else next[product.id] = value
+                            return next
+                          })
+                        }}
+                        className="w-32"
                       />
                     </TableCell>
                     <TableCell>
@@ -321,7 +356,7 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
                   </TableRow>
                   {tiersOpen === product.id ? (
                     <TableRow className="hover:bg-transparent">
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={7}>
                         <TierEditor product={product} onClose={() => setTiersOpen('')} />
                       </TableCell>
                     </TableRow>

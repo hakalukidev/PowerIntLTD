@@ -98,7 +98,7 @@ import type {
   CommissionAuthorizationRecord,
   PriceTier,
 } from '@/lib/erp/types'
-import { priceTiersOf, validateTiers } from '@/lib/erp/pricing'
+import { priceTiersOf, saleTypeOf, validateTiers } from '@/lib/erp/pricing'
 import {
   approvalBlockReason,
   approvalStage,
@@ -250,6 +250,8 @@ type ERPContextValue = {
   saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
   /** Prices for every dealer: each product's general (wholesale) price. */
   saveGeneralPrices: (prices: Record<string, number>) => Promise<void>
+  /** Cash prices for every dealer (product id → price); `null` removes a product's cash price. */
+  saveCashPrices: (prices: Record<string, number | null>) => Promise<void>
   /**
    * Quantity prices for every dealer: minimum 1 first, minimums going up. The minimum-1 price
    * becomes the general price; `null` (or only the minimum-1 row) removes the quantity prices.
@@ -2335,6 +2337,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         unitPrice: item.unitPrice,
         purchasePrice: product.purchasePrice,
         ...(item.quantityPrice && (item.tierMinQty ?? 0) > 1 ? { quantityPrice: true, tierMinQty: item.tierMinQty } : {}),
+        ...(item.cashPrice ? { cashPrice: true } : {}),
       }
     })
 
@@ -2402,6 +2405,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         employeeName: employee?.name ?? '',
         courierName: input.courierName?.trim() ?? '',
         overCreditLimit,
+        saleType: input.saleType === 'cash' ? 'cash' : 'credit',
         // Held against the products' totals; it leaves a warehouse when the delivery is posted.
         stockState: 'reserved',
         createdAt: orderDate,
@@ -2489,6 +2493,31 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     await update(ref(db, 'erp'), updates)
     await writeActivity('zone_prices_updated', 'inventory', `Updated product prices for zone ${data.zones[zoneId].name}.`)
+  }
+
+  async function saveCashPrices(prices: Record<string, number | null>) {
+    requireAdminUser('change prices')
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string | null> = {}
+    let changed = 0
+    Object.entries(prices).forEach(([productId, price]) => {
+      const product = data.products[productId]
+      if (!product) return
+      if (price !== null && !(Number.isFinite(price) && price >= 0)) throw new Error(`The cash price of ${product.name} must be 0 or more.`)
+      const before = typeof product.cashPrice === 'number' ? product.cashPrice : null
+      if (price === before) return
+      updates[`products/${productId}/cashPrice`] = price
+      updates[`products/${productId}/updatedAt`] = now
+      changed += 1
+    })
+    if (changed === 0) return
+
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity('cash_prices_updated', 'inventory', `Changed the cash price of ${changed} product${changed === 1 ? '' : 's'}.`)
   }
 
   async function saveGeneralPrices(prices: Record<string, number>) {
@@ -4506,6 +4535,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         unitPrice: item.unitPrice,
         purchasePrice: product.purchasePrice,
         ...(item.quantityPrice && (item.tierMinQty ?? 0) > 1 ? { quantityPrice: true, tierMinQty: item.tierMinQty } : {}),
+        ...(item.cashPrice ? { cashPrice: true } : {}),
       }
     })
     const subtotal = orderItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
@@ -4548,6 +4578,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         employeeId: employee?.id ?? '',
         employeeName: employee?.name ?? '',
         ...priced,
+        saleType: input.saleType === 'cash' ? 'cash' : 'credit',
         orderDate: input.orderDate?.trim() || now,
         deliveryDate: input.deliveryDate,
         courierName: input.courierName?.trim() ?? '',
@@ -4655,7 +4686,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
               unitPrice: item.unitPrice,
               quantityPrice: item.quantityPrice,
               tierMinQty: item.tierMinQty,
+              cashPrice: item.cashPrice,
             })),
+            saleType: saleTypeOf(request),
             discount: request.discount,
             paid: request.paid,
             orderDate: request.orderDate,
@@ -6263,6 +6296,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),
       saveGeneralPrices,
+      saveCashPrices,
       savePriceTiers,
       saveDealerPrices: viewOnlyForZone(saveDealerPrices),
       saveZonePriceExclusions: viewOnlyForZone(saveZonePriceExclusions),

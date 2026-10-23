@@ -262,13 +262,13 @@ test.describe('Sales zone and sub-zone filter', () => {
   test('TC-18.4 Zone and Sub-zone columns are hidden by default and, once shown, appear in the table, Excel and PDF', async ({ page }, testInfo) => {
     await openSales(page)
     const columns = page.getByRole('button', { name: /^Columns \(\d+\/\d+\)$/ })
-    await expect(columns).toHaveText('Columns (10/12)')
+    await expect(columns).toHaveText('Columns (11/13)')
     await expect(page.getByRole('columnheader', { name: 'Zone', exact: true })).toHaveCount(0)
 
     await columns.click()
     for (const name of ['Zone', 'Sub-zone']) await page.getByRole('menuitemcheckbox', { name, exact: true }).click()
     await page.keyboard.press('Escape')
-    await expect(columns).toHaveText('Columns (12/12)')
+    await expect(columns).toHaveText('Columns (13/13)')
     await expect(page.getByRole('columnheader', { name: 'Zone', exact: true })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: 'Sub-zone', exact: true })).toBeVisible()
     await expect(row(page, bills[2])).toContainText(zoneB.name)
@@ -309,12 +309,12 @@ test.describe('Sales Full PDF page fit', () => {
       note(testInfo, `${label}: ${expected}, every word inside the page.`)
     }
 
-    await check('landscape', 'Default 10 columns')
+    await check('landscape', 'Default 11 columns')
     await toggle(['Zone', 'Sub-zone'])
-    await expect(columns).toHaveText('Columns (12/12)')
-    await check('landscape', 'All 12 columns')
-    await toggle(['Zone', 'Sub-zone', 'Status', 'Sale date'])
-    await expect(columns).toHaveText('Columns (8/12)')
+    await expect(columns).toHaveText('Columns (13/13)')
+    await check('landscape', 'All 13 columns')
+    await toggle(['Zone', 'Sub-zone', 'Status', 'Sale type', 'Sale date'])
+    await expect(columns).toHaveText('Columns (8/13)')
     await check('portrait', '8 columns')
   })
 })

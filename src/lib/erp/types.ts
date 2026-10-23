@@ -344,6 +344,8 @@ export type ProductRecord = {
    */
   priceTiers?: PriceTier[]
   priceTiersUpdatedAt?: string
+  /** The one price every dealer pays on a cash sale; quantity prices do not apply. Missing means none. */
+  cashPrice?: number
   createdAt: string
   updatedAt: string
 }
@@ -367,7 +369,12 @@ export type OrderItem = {
   /** The unit price came from the product's quantity prices; `tierMinQty` is the minimum of the tier used. */
   quantityPrice?: boolean
   tierMinQty?: number
+  /** Priced at the product's cash price. A cash-sale line without it had no cash price and used the normal price. */
+  cashPrice?: boolean
 }
+
+/** How the dealer pays: on credit (the usual, quantity prices apply) or in cash (the cash price). */
+export type SaleType = 'credit' | 'cash'
 
 export type OrderRecord = {
   id: string
@@ -416,6 +423,8 @@ export type OrderRecord = {
   courierName?: string
   /** Submitted although it took the dealer over their credit limit. */
   overCreditLimit?: boolean
+  /** Credit or cash sale; missing on orders from before it was asked, which were credit. */
+  saleType?: SaleType
   /** Set once an approved order is posted for delivery. */
   delivery?: OrderDelivery
   /**
@@ -891,6 +900,8 @@ export type OrderRequestRecord = {
   dueReference?: OrderRecord['dueReference']
   billNumber?: string
   overCreditLimit: boolean
+  /** Credit or cash sale; missing on requests from before it was asked, which were credit. */
+  saleType?: SaleType
   status: DepositStatus
   submittedById: string
   submittedByName: string
@@ -912,7 +923,7 @@ export type OrderRequestRecord = {
 }
 
 export type OrderRequestEdit = {
-  items: Array<{ productId: string; quantity: number; unitPrice: number; quantityPrice?: boolean; tierMinQty?: number }>
+  items: Array<{ productId: string; quantity: number; unitPrice: number; quantityPrice?: boolean; tierMinQty?: number; cashPrice?: boolean }>
   paid: number
   deliveryDate: string
   courierName: string
@@ -1477,7 +1488,11 @@ export type OrderInput = {
     /** The unit price came from a quantity price; stored on the line so it never changes later. */
     quantityPrice?: boolean
     tierMinQty?: number
+    /** The unit price is the product's cash price (cash sales only). */
+    cashPrice?: boolean
   }>
+  /** Defaults to credit. */
+  saleType?: SaleType
   discount?: number
   paid: number
   deliveryDate: string

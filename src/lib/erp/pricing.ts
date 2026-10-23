@@ -1,9 +1,13 @@
-import type { CustomerRecord, DepotRecord, PriceTier, ProductRecord, ZoneRecord } from './types'
+import type { CustomerRecord, DepotRecord, PriceTier, ProductRecord, SaleType, ZoneRecord } from './types'
 
-/** Where a dealer's price for a product came from, from most to least specific. `tier` is a quantity price. */
-export type PriceSource = 'dealer' | 'depot' | 'zone' | 'tier' | 'general'
+/**
+ * Where a dealer's price for a product came from, from most to least specific. `tier` is a
+ * quantity price; `cash` is the cash price of a cash sale.
+ */
+export type PriceSource = 'cash' | 'dealer' | 'depot' | 'zone' | 'tier' | 'general'
 
 export const PRICE_SOURCE_LABELS: Record<PriceSource, string> = {
+  cash: 'Cash price',
   dealer: 'Dealer price',
   depot: 'Depot price',
   zone: 'Zone price',
@@ -14,6 +18,18 @@ export const PRICE_SOURCE_LABELS: Record<PriceSource, string> = {
 /** The price every dealer pays unless a more specific price is set: wholesale, else retail. */
 export function generalPrice(product: Pick<ProductRecord, 'wholesalePrice' | 'sellingPrice'>) {
   return product.wholesalePrice || product.sellingPrice || 0
+}
+
+/** A product's cash price, or null when it has none. */
+export function cashPriceOf(product: Pick<ProductRecord, 'cashPrice'>) {
+  return typeof product.cashPrice === 'number' && product.cashPrice >= 0 ? product.cashPrice : null
+}
+
+export const SALE_TYPE_LABELS: Record<SaleType, string> = { credit: 'Credit', cash: 'Cash' }
+
+/** Orders and requests from before the sale type was asked were credit sales. */
+export function saleTypeOf(record: { saleType?: SaleType }): SaleType {
+  return record.saleType === 'cash' ? 'cash' : 'credit'
 }
 
 /** A product's quantity prices, lowest minimum first; empty when it has none (one row is just the general price). */
@@ -66,6 +82,8 @@ export type PriceOptions = {
   quantity?: number
   /** The order form's "Use quantity prices" switch. Defaults to on. */
   useTiers?: boolean
+  /** A cash sale takes the cash price and never a quantity price. Defaults to credit. */
+  saleType?: SaleType
 }
 
 export type PriceContext = {
@@ -79,6 +97,8 @@ export type ResolvedPrice = {
   source: PriceSource
   /** The minimum quantity of the quantity price used, when `source` is `tier`. */
   tierMinQty?: number
+  /** A cash sale of a product without a cash price: `price` is the normal price instead. */
+  noCashPrice?: boolean
 }
 
 /** True when a dealer, depot or zone price was saved after the quantity prices; one without a date is older. */
@@ -95,9 +115,18 @@ function savedAfterTiers(updatedAt: string | undefined, tiersUpdatedAt: string |
  *
  * Quantity prices (tiers) apply to every dealer, unless a dealer, depot or zone price for that
  * product was saved after the tiers were last saved: then that newer price wins for its dealers.
+ *
+ * A cash sale takes the product's one cash price, the same for every dealer. A product without
+ * one falls back to the normal price without quantity prices, marked `noCashPrice`.
  * The order form, the approval screen and the dealer portal all price through this.
  */
 export function dealerPrice(product: ProductRecord, context: PriceContext, options: PriceOptions = {}): ResolvedPrice {
+  if (options.saleType === 'cash') {
+    const cash = cashPriceOf(product)
+    if (cash !== null) return { price: cash, source: 'cash' }
+    return { ...dealerPrice(product, context, { quantity: options.quantity, useTiers: false }), noCashPrice: true }
+  }
+
   const { customer, zone, depot } = context
   const quantity = Math.max(options.quantity ?? 1, 0)
   const tiers = options.useTiers === false ? [] : priceTiersOf(product)

@@ -1,7 +1,7 @@
 "use client"
 
-import { useMemo, useState } from 'react'
-import { Tags } from 'lucide-react'
+import { Fragment, useMemo, useState } from 'react'
+import { Plus, Tags, Trash2, X } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import { Button } from '@/components/ui/button'
@@ -10,18 +10,23 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { dealerPrice, generalPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricing'
+import { dealerPrice, formatTiers, generalPrice, PRICE_SOURCE_LABELS, priceTiersOf, validateTiers, type PriceContext } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import type { ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatTableAmount, partyCode, toArray, userRoleIds } from '@/lib/erp/utils'
+import { formatDate, formatTableAmount, partyCode, toArray, userRoleIds } from '@/lib/erp/utils'
 import { customerZoneId } from '@/lib/erp/zones'
 import { cn } from '@/lib/utils'
 
 type Scope = 'general' | 'zone' | 'dealer'
 
 const SCOPES: Array<{ id: Scope; label: string; description: string }> = [
-  { id: 'general', label: 'Every dealer', description: 'The general price every dealer pays unless a zone, depot or dealer price is set.' },
+  {
+    id: 'general',
+    label: 'Every dealer',
+    description:
+      'The general price every dealer pays unless a zone, depot or dealer price is set. Press + to add quantity prices (for example 5 or more): they apply to every dealer, unless a dealer, depot or zone price is saved after them.',
+  },
   { id: 'zone', label: 'One zone', description: 'A price for every dealer of one zone. Dealers you leave out keep the general price.' },
   { id: 'dealer', label: 'One dealer', description: 'A price only this dealer gets. It wins over every other price.' },
 ]
@@ -50,7 +55,8 @@ export default function PriceListPage() {
             </CardTitle>
             <CardDescription>
               Prices change for one dealer, for a zone (leaving some dealers out), or for every dealer. An order takes the most specific price:
-              dealer, then depot, then zone, then general. Orders already placed keep the price they were billed at.
+              dealer, then depot, then zone, then general. Quantity prices win over a dealer, depot or zone price saved before them, and lose to
+              one saved after them. Orders already placed keep the price they were billed at.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -94,11 +100,128 @@ function PriceInput({ value, placeholder, disabled, onChange }: { value: string;
   return <Input type="number" min={0} value={value} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="w-32" />
 }
 
+/** Which price applies, as shown in the "From" columns; quantity prices also list their steps. */
+function PriceFrom({ product, context }: { product: ProductRecord; context: PriceContext }) {
+  const resolved = dealerPrice(product, context)
+  return (
+    <span className="block text-xs text-muted-foreground">
+      <span className={cn('block', resolved.source === 'tier' && 'font-medium text-emerald-700 dark:text-emerald-300')}>{PRICE_SOURCE_LABELS[resolved.source]}</span>
+      {resolved.source === 'tier' ? <span className="block whitespace-nowrap">{formatTiers(priceTiersOf(product))}</span> : null}
+    </span>
+  )
+}
+
+type TierDraft = { key: string; minQty: string; price: string }
+
+function tierDraftsFor(product: ProductRecord): TierDraft[] {
+  const tiers = priceTiersOf(product)
+  const rows = tiers.length ? tiers : [{ minQty: 1, price: generalPrice(product) }, { minQty: 5, price: generalPrice(product) }]
+  return rows.map((tier, index) => ({ key: `${index}-${tier.minQty}`, minQty: String(tier.minQty), price: String(tier.price) }))
+}
+
+/** Quantity prices of one product: minimum 1 (the general price) first, then each step up. */
+function TierEditor({ product, onClose }: { product: ProductRecord; onClose: () => void }) {
+  const { savePriceTiers } = useERP()
+  const [rows, setRows] = useState<TierDraft[]>(() => tierDraftsFor(product))
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+  const hasTiers = priceTiersOf(product).length > 0
+
+  function updateRow(key: string, patch: Partial<TierDraft>) {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)))
+  }
+
+  function addRow() {
+    setRows((current) => {
+      const last = current[current.length - 1]
+      const minQty = last ? (Number(last.minQty) || 1) * 2 : 1
+      return [...current, { key: Math.random().toString(36).slice(2), minQty: String(minQty), price: last?.price ?? '' }]
+    })
+  }
+
+  async function save(tiers: Array<{ minQty: number; price: number }> | null) {
+    setError('')
+    if (tiers) {
+      if (tiers.some((tier) => !Number.isFinite(tier.minQty) || !Number.isFinite(tier.price))) return setError('Fill in every minimum quantity and price.')
+      const problem = validateTiers(tiers)
+      if (problem) return setError(problem)
+      if (tiers.length < 2) return setError('Add a second quantity price, for example 5 or more.')
+    }
+    setIsSaving(true)
+    try {
+      await savePriceTiers(product.id, tiers)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not save the quantity prices.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const parsed = rows.map((row) => ({ minQty: row.minQty.trim() === '' ? NaN : Number(row.minQty), price: row.price.trim() === '' ? NaN : Number(row.price) }))
+
+  return (
+    <div className="sticky left-0 w-[calc(100vw-5rem)] max-w-md space-y-3 rounded-lg border border-border bg-muted/30 p-3" data-testid={`tiers-${product.id}`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-medium">Quantity prices — {product.name}</p>
+        <Button type="button" variant="ghost" size="icon" aria-label="Close quantity prices" onClick={onClose}>
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 text-xs font-medium text-muted-foreground">
+        <span>Minimum quantity</span>
+        <span>Price</span>
+        <span className="w-9" />
+      </div>
+      {rows.map((row, index) => (
+        <div key={row.key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
+          <Input
+            type="number"
+            min={1}
+            aria-label={`Minimum quantity ${index + 1}`}
+            value={row.minQty}
+            disabled={index === 0}
+            onChange={(event) => updateRow(row.key, { minQty: event.target.value })}
+          />
+          <Input type="number" min={0} aria-label={`Price ${index + 1}`} value={row.price} onChange={(event) => updateRow(row.key, { price: event.target.value })} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove quantity price ${index + 1}`}
+            disabled={index === 0}
+            onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      <p className="text-xs text-muted-foreground">The minimum-1 price is the general price; saving changes both.</p>
+      {error ? <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p> : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={addRow}>
+          <Plus className="h-4 w-4" />
+          Add step
+        </Button>
+        <Button type="button" size="sm" disabled={isSaving} onClick={() => void save(parsed)}>
+          {isSaving ? 'Saving...' : 'Save quantity prices'}
+        </Button>
+        {hasTiers ? (
+          <Button type="button" variant="outline" size="sm" disabled={isSaving} onClick={() => void save(null)}>
+            Remove all
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEdit: boolean }) {
   const { saveGeneralPrices } = useERP()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
   const [feedback, setFeedback] = useState<Feedback>(null)
+  const [tiersOpen, setTiersOpen] = useState('')
 
   async function handleSave() {
     setIsSaving(true)
@@ -136,34 +259,76 @@ function GeneralPrices({ products, canEdit }: { products: ProductRecord[]; canEd
               <TableHead className="text-right">Retail</TableHead>
               <TableHead className="text-right">Current general</TableHead>
               <TableHead>New price</TableHead>
+              <TableHead>Quantity prices</TableHead>
+              <TableHead>From</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {products.map((product) => (
-              <TableRow key={product.id}>
-                <TableCell>
-                  <span className="block font-medium">{product.name}</span>
-                  <span className="block text-xs text-muted-foreground">{product.sku}</span>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{formatTableAmount(product.sellingPrice)}</TableCell>
-                <TableCell className="text-right font-medium tabular-nums">{formatTableAmount(generalPrice(product))}</TableCell>
-                <TableCell>
-                  <PriceInput
-                    value={drafts[product.id] ?? ''}
-                    placeholder="Unchanged"
-                    disabled={!canEdit}
-                    onChange={(value) =>
-                      setDrafts((current) => {
-                        const next = { ...current }
-                        if (value === '') delete next[product.id]
-                        else next[product.id] = value
-                        return next
-                      })
-                    }
-                  />
-                </TableCell>
-              </TableRow>
-            ))}
+            {products.map((product) => {
+              const tiers = priceTiersOf(product)
+              return (
+                <Fragment key={product.id}>
+                  <TableRow>
+                    <TableCell>
+                      <span className="block font-medium">{product.name}</span>
+                      <span className="block text-xs text-muted-foreground">{product.sku}</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{formatTableAmount(product.sellingPrice)}</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{formatTableAmount(generalPrice(product))}</TableCell>
+                    <TableCell>
+                      <PriceInput
+                        value={drafts[product.id] ?? ''}
+                        placeholder="Unchanged"
+                        disabled={!canEdit}
+                        onChange={(value) =>
+                          setDrafts((current) => {
+                            const next = { ...current }
+                            if (value === '') delete next[product.id]
+                            else next[product.id] = value
+                            return next
+                          })
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {canEdit ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            aria-label={`Quantity prices for ${product.name}`}
+                            aria-expanded={tiersOpen === product.id}
+                            onClick={() => setTiersOpen((current) => (current === product.id ? '' : product.id))}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                        {tiers.length ? (
+                          <span className="text-xs">
+                            <span className="block whitespace-nowrap tabular-nums">{formatTiers(tiers)}</span>
+                            {product.priceTiersUpdatedAt ? <span className="block text-muted-foreground">Saved {formatDate(product.priceTiersUpdatedAt)}</span> : null}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">None</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <PriceFrom product={product} context={{}} />
+                    </TableCell>
+                  </TableRow>
+                  {tiersOpen === product.id ? (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={6}>
+                        <TierEditor product={product} onClose={() => setTiersOpen('')} />
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </Fragment>
+              )
+            })}
           </TableBody>
         </Table>
       </CardContent>
@@ -258,6 +423,7 @@ function ZonePrices({ products, canEdit }: { products: ProductRecord[]; canEdit:
                   <TableHead>Product</TableHead>
                   <TableHead className="text-right">General</TableHead>
                   <TableHead>Zone price</TableHead>
+                  <TableHead>From</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -275,6 +441,9 @@ function ZonePrices({ products, canEdit }: { products: ProductRecord[]; canEdit:
                         disabled={!canEdit}
                         onChange={(value) => setDrafts((current) => ({ ...current, [product.id]: value }))}
                       />
+                    </TableCell>
+                    <TableCell>
+                      <PriceFrom product={product} context={{ zone }} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -385,7 +554,9 @@ function DealerPrices({ products, canEdit }: { products: ProductRecord[]; canEdi
                       <span className="block text-xs text-muted-foreground">{product.sku}</span>
                     </TableCell>
                     <TableCell className="text-right font-medium tabular-nums">{formatTableAmount(current.price)}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{PRICE_SOURCE_LABELS[current.source]}</TableCell>
+                    <TableCell>
+                      <PriceFrom product={product} context={{ customer, zone, depot }} />
+                    </TableCell>
                     <TableCell>
                       <PriceInput
                         value={drafts[product.id] ?? ''}

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { DateInput } from '@/components/ui/date-input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { isQuantityPrice, priceTiersOf, tierFor } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -245,7 +246,14 @@ export function OrderRequestCard({
                       <TableCell className="font-medium">{item.productName}</TableCell>
                       <TableCell className="text-right tabular-nums">{item.quantity}</TableCell>
                       <TableCell className={stock < item.quantity ? 'text-right tabular-nums text-rose-600' : 'text-right tabular-nums'}>{stock}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(item.unitPrice)}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(item.unitPrice)}
+                        {item.quantityPrice ? (
+                          <span className="block whitespace-nowrap text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="approval-qty-price">
+                            Qty price{item.tierMinQty ? ` · ${item.tierMinQty}+` : ''}
+                          </span>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{formatCurrency(item.unitPrice * item.quantity)}</TableCell>
                     </TableRow>
                   )
@@ -304,12 +312,25 @@ export function OrderRequestCard({
   )
 }
 
-type EditLine = { key: string; productId: string; quantity: string; unitPrice: string }
+/**
+ * `followsTiers`: the unit price follows the product's quantity prices until it is typed by hand.
+ * The line only counts as a quantity price while that step is above minimum 1 (`isQuantityPrice`).
+ */
+type EditLine = { key: string; productId: string; quantity: string; unitPrice: string; followsTiers: boolean; tierMinQty?: number }
+
+const editLineIsQuantityPrice = (line: EditLine) => line.followsTiers && isQuantityPrice({ source: 'tier', tierMinQty: line.tierMinQty })
 
 export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderRequestRecord; onClose: () => void; onSaved: (text: string) => void }) {
   const { data, editOrderRequest } = useERP()
   const [lines, setLines] = useState<EditLine[]>(() =>
-    request.items.map((item) => ({ key: item.productId, productId: item.productId, quantity: String(item.quantity), unitPrice: String(item.unitPrice) }))
+    request.items.map((item) => ({
+      key: item.productId,
+      productId: item.productId,
+      quantity: String(item.quantity),
+      unitPrice: String(item.unitPrice),
+      followsTiers: Boolean(item.quantityPrice),
+      tierMinQty: item.tierMinQty,
+    }))
   )
   const [paid, setPaid] = useState(String(request.paid))
   const [deliveryDate, setDeliveryDate] = useState(localDay(request.deliveryDate))
@@ -333,7 +354,14 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
 
   function selectProduct(key: string, productId: string) {
     const product = data?.products[productId]
-    updateLine(key, { productId, unitPrice: product ? String(product.wholesalePrice || product.sellingPrice) : '0' })
+    updateLine(key, { productId, unitPrice: product ? String(product.wholesalePrice || product.sellingPrice) : '0', followsTiers: false, tierMinQty: undefined })
+  }
+
+  /** A line priced by quantity is priced again from the product's quantity prices when its quantity changes. */
+  function changeQuantity(line: EditLine, quantity: string) {
+    const product = line.followsTiers ? data?.products[line.productId] : undefined
+    const tier = product ? tierFor(priceTiersOf(product), Math.max(Number(quantity) || 0, 1)) : null
+    updateLine(line.key, tier ? { quantity, unitPrice: String(tier.price), tierMinQty: tier.minQty } : { quantity })
   }
 
   async function save() {
@@ -346,7 +374,12 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
     setError(null)
     try {
       await editOrderRequest(request.id, {
-        items: items.map((line) => ({ productId: line.productId, quantity: Number(line.quantity) || 0, unitPrice: Number(line.unitPrice) || 0 })),
+        items: items.map((line) => ({
+          productId: line.productId,
+          quantity: Number(line.quantity) || 0,
+          unitPrice: Number(line.unitPrice) || 0,
+          ...(editLineIsQuantityPrice(line) ? { quantityPrice: true, tierMinQty: line.tierMinQty } : {}),
+        })),
         paid: Number(paid) || 0,
         deliveryDate: new Date(deliveryDate).toISOString(),
         courierName,
@@ -371,8 +404,19 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
           {lines.map((line) => (
             <div key={line.key} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_90px_120px_auto] sm:items-end">
               <Combobox options={productOptions} value={line.productId} onChange={(productId) => selectProduct(line.key, productId)} placeholder="Select product" />
-              <Input type="number" min={1} aria-label="Quantity" value={line.quantity} onChange={(event) => updateLine(line.key, { quantity: event.target.value })} />
-              <Input type="number" min={0} aria-label="Unit price" value={line.unitPrice} onChange={(event) => updateLine(line.key, { unitPrice: event.target.value })} />
+              <Input type="number" min={1} aria-label="Quantity" value={line.quantity} onChange={(event) => changeQuantity(line, event.target.value)} />
+              <div className="space-y-0.5">
+                <Input
+                  type="number"
+                  min={0}
+                  aria-label="Unit price"
+                  value={line.unitPrice}
+                  onChange={(event) => updateLine(line.key, { unitPrice: event.target.value, followsTiers: false, tierMinQty: undefined })}
+                />
+                {editLineIsQuantityPrice(line) ? (
+                  <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">Qty price{line.tierMinQty ? ` · ${line.tierMinQty}+` : ''}</p>
+                ) : null}
+              </div>
               <Button
                 type="button"
                 variant="ghost"
@@ -390,7 +434,7 @@ export function EditOrderDialog({ request, onClose, onSaved }: { request: OrderR
             variant="outline"
             size="sm"
             className="gap-1.5"
-            onClick={() => setLines((current) => [...current, { key: Math.random().toString(36).slice(2), productId: '', quantity: '1', unitPrice: '0' }])}
+            onClick={() => setLines((current) => [...current, { key: Math.random().toString(36).slice(2), productId: '', quantity: '1', unitPrice: '0', followsTiers: false }])}
           >
             <Plus className="h-4 w-4" />
             Add product

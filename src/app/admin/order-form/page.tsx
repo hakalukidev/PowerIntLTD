@@ -14,7 +14,7 @@ import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { dealerPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricing'
+import { dealerPrice, isQuantityPrice, PRICE_SOURCE_LABELS } from '@/lib/erp/pricing'
 import { useERP } from '@/lib/erp/provider'
 import type { CustomerRecord, OrderRecord, ProductRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
@@ -73,6 +73,8 @@ export default function OrderFormPage() {
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
   const [limitDraft, setLimitDraft] = useState<string | null>(null)
   const [pricesOpen, setPricesOpen] = useState(false)
+  // Quantity prices (5+ pcs etc.) for the whole order; off uses the dealer, depot, zone or general price.
+  const [useTiers, setUseTiers] = useState(true)
 
   const isAdmin = currentUser ? userRoleIds(currentUser).includes('admin') : false
   const canCreate = hasPermission('sales.create')
@@ -141,9 +143,9 @@ export default function OrderFormPage() {
   const pricedLines = lines.map((line) => {
     const product = line.productId ? data?.products[line.productId] : undefined
     const quantity = Math.max(Number(line.quantity) || 0, 0)
-    const priced = product ? dealerPrice(product, { customer, zone: pricingZone, depot }) : null
+    const priced = product ? dealerPrice(product, { customer, zone: pricingZone, depot }, { quantity, useTiers }) : null
     const unitPrice = priced?.price ?? 0
-    return { ...line, product, quantity, unitPrice, priceSource: priced?.source, lineTotal: unitPrice * quantity }
+    return { ...line, product, quantity, unitPrice, priceSource: priced?.source, tierMinQty: priced?.tierMinQty, quantityPrice: isQuantityPrice(priced), lineTotal: unitPrice * quantity }
   })
   const total = pricedLines.reduce((sum, line) => sum + line.lineTotal, 0)
   const discountInput = paymentOn ? Math.max(Number(discount) || 0, 0) : 0
@@ -186,6 +188,7 @@ export default function OrderFormPage() {
     setDueReference('owner')
     setBillNumber('')
     setLimitDraft(null)
+    setUseTiers(true)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -208,7 +211,12 @@ export default function OrderFormPage() {
       await submitOrderRequest({
         customerId: customer.id,
         employeeId,
-        items: items.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPrice: line.unitPrice })),
+        items: items.map((line) => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          ...(line.quantityPrice ? { quantityPrice: true, tierMinQty: line.tierMinQty } : {}),
+        })),
         paid: paidAmount,
         orderDate: new Date(orderDate).toISOString(),
         deliveryDate: new Date(deliveryDate).toISOString(),
@@ -348,6 +356,15 @@ export default function OrderFormPage() {
               ) : null}
             </CardHeader>
             <CardContent className="space-y-3">
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                <span>
+                  <span className="block font-medium">Use quantity prices</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {useTiers ? 'On: products with quantity prices are priced by quantity (e.g. 5+ pcs).' : 'Off: the dealer, depot, zone or general price is used.'}
+                  </span>
+                </span>
+                <Switch checked={useTiers} onCheckedChange={setUseTiers} aria-label="Use quantity prices" />
+              </label>
               {pricedLines.map((line) => (
                 <div key={line.key} className="grid gap-2 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_96px_120px_auto] sm:items-end sm:border-0 sm:p-0">
                   <div className="space-y-1">
@@ -371,10 +388,14 @@ export default function OrderFormPage() {
                   </div>
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-muted-foreground">Price</p>
-                    <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular-nums">
+                    <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm tabular-nums" data-testid="line-price">
                       {line.product ? formatCurrency(line.unitPrice) : '—'}
                     </div>
-                    {line.priceSource && line.priceSource !== 'general' ? (
+                    {line.quantityPrice ? (
+                      <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300" data-testid="qty-price-label">
+                        Qty price · {line.tierMinQty}+ pcs
+                      </p>
+                    ) : line.priceSource && line.priceSource !== 'general' && line.priceSource !== 'tier' ? (
                       <p className="text-[11px] text-muted-foreground">{PRICE_SOURCE_LABELS[line.priceSource]}</p>
                     ) : null}
                   </div>

@@ -96,7 +96,9 @@ import type {
   EmployeeAdvanceRecord,
   CommissionAuthorizationInput,
   CommissionAuthorizationRecord,
+  PriceTier,
 } from '@/lib/erp/types'
+import { priceTiersOf, validateTiers } from '@/lib/erp/pricing'
 import {
   approvalBlockReason,
   approvalStage,
@@ -248,6 +250,11 @@ type ERPContextValue = {
   saveZonePrices: (zoneId: string, prices: Record<string, number | null>) => Promise<void>
   /** Prices for every dealer: each product's general (wholesale) price. */
   saveGeneralPrices: (prices: Record<string, number>) => Promise<void>
+  /**
+   * Quantity prices for every dealer: minimum 1 first, minimums going up. The minimum-1 price
+   * becomes the general price; `null` (or only the minimum-1 row) removes the quantity prices.
+   */
+  savePriceTiers: (productId: string, tiers: PriceTier[] | null) => Promise<void>
   /** Prices for one dealer only; `null` drops the dealer back to their depot, zone or general price. */
   saveDealerPrices: (customerId: string, prices: Record<string, number | null>) => Promise<void>
   /** Dealers of a zone who keep the general price instead of the zone's prices. */
@@ -1821,11 +1828,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Depot not found.')
     }
 
-    const updates: Record<string, number | null> = {}
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string | null> = {}
     Object.entries(prices).forEach(([productId, price]) => {
       if (!data.products[productId]) return
+      // An unchanged price keeps its date, so re-saving a depot does not jump it ahead of the quantity prices.
+      const before = depot.prices?.[productId]
+      if (price === before || (price === null && before === undefined)) return
       updates[`depots/${depotId}/prices/${productId}`] = price === null ? null : Math.max(price, 0)
+      updates[`depots/${depotId}/pricesUpdatedAt/${productId}`] = price === null ? null : now
     })
+    if (!Object.keys(updates).length) return
 
     const db = getDatabaseOrThrow()
     await update(ref(db, 'erp'), updates)
@@ -2321,6 +2334,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         purchasePrice: product.purchasePrice,
+        ...(item.quantityPrice && (item.tierMinQty ?? 0) > 1 ? { quantityPrice: true, tierMinQty: item.tierMinQty } : {}),
       }
     })
 
@@ -2460,11 +2474,18 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const db = getDatabaseOrThrow()
-    const updates: Record<string, number | null> = {}
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string | null> = {}
     Object.entries(prices).forEach(([productId, price]) => {
-      if (!data.products[productId]) return
+      const product = data.products[productId]
+      if (!product) return
+      // An unchanged price keeps its date, so re-saving a zone does not jump it ahead of the quantity prices.
+      const before = product.zonePrices?.[zoneId]
+      if (price === before || (price === null && before === undefined)) return
       updates[`products/${productId}/zonePrices/${zoneId}`] = price === null ? null : Math.max(price, 0)
+      updates[`products/${productId}/zonePricesUpdatedAt/${zoneId}`] = price === null ? null : now
     })
+    if (!Object.keys(updates).length) return
 
     await update(ref(db, 'erp'), updates)
     await writeActivity('zone_prices_updated', 'inventory', `Updated product prices for zone ${data.zones[zoneId].name}.`)
@@ -2477,13 +2498,19 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     }
 
     const now = new Date().toISOString()
-    const updates: Record<string, number | string> = {}
+    const updates: Record<string, number | string | PriceTier[]> = {}
     let changed = 0
     Object.entries(prices).forEach(([productId, price]) => {
       const product = data.products[productId]
       if (!product || !(price >= 0) || price === product.wholesalePrice) return
       updates[`products/${productId}/wholesalePrice`] = price
       updates[`products/${productId}/updatedAt`] = now
+      // The minimum-1 quantity price is the general price: keep them the same.
+      const tiers = priceTiersOf(product)
+      if (tiers.length) {
+        updates[`products/${productId}/priceTiers`] = tiers.map((tier) => (tier.minQty === 1 ? { minQty: 1, price } : tier))
+        updates[`products/${productId}/priceTiersUpdatedAt`] = now
+      }
       changed += 1
     })
     if (changed === 0) {
@@ -2494,6 +2521,41 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('general_prices_updated', 'inventory', `Changed the price of ${changed} product${changed === 1 ? '' : 's'} for every dealer.`)
   }
 
+  async function savePriceTiers(productId: string, tiers: PriceTier[] | null) {
+    requireAdminUser('change prices')
+    const product = data?.products[productId]
+    if (!data || !product) {
+      throw new Error('Product not found.')
+    }
+
+    const next = (tiers ?? []).map((tier) => ({ minQty: Number(tier.minQty), price: Number(tier.price) }))
+    if (next.length) {
+      const problem = validateTiers(next)
+      if (problem) throw new Error(problem)
+    }
+    const keep = next.length > 1
+    if (!keep && !priceTiersOf(product).length) {
+      throw new Error('Add a second quantity price, for example 5 or more.')
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string | PriceTier[] | null> = {
+      [`products/${productId}/priceTiers`]: keep ? next : null,
+      [`products/${productId}/priceTiersUpdatedAt`]: keep ? now : null,
+      [`products/${productId}/updatedAt`]: now,
+    }
+    // The minimum-1 quantity price is the general price.
+    if (next.length) updates[`products/${productId}/wholesalePrice`] = next[0].price
+    await update(ref(getDatabaseOrThrow(), 'erp'), updates)
+    await writeActivity(
+      'price_tiers_updated',
+      'inventory',
+      keep
+        ? `Set the quantity prices of ${product.name}: ${next.map((tier) => `${tier.minQty}+ ${tier.price.toLocaleString()}`).join(', ')}.`
+        : `Removed the quantity prices of ${product.name}.`
+    )
+  }
+
   async function saveDealerPrices(customerId: string, prices: Record<string, number | null>) {
     requireAdminUser('change prices')
     const customer = data?.customers[customerId]
@@ -2501,11 +2563,17 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('Dealer not found.')
     }
 
-    const updates: Record<string, number | null> = {}
+    const now = new Date().toISOString()
+    const updates: Record<string, number | string | null> = {}
     Object.entries(prices).forEach(([productId, price]) => {
       if (!data.products[productId]) return
+      // An unchanged price keeps its date, so re-saving a dealer does not jump it ahead of the quantity prices.
+      const before = customer.prices?.[productId]
+      if (price === before || (price === null && before === undefined)) return
       updates[`customers/${customerId}/prices/${productId}`] = price === null ? null : Math.max(price, 0)
+      updates[`customers/${customerId}/pricesUpdatedAt/${productId}`] = price === null ? null : now
     })
+    if (!Object.keys(updates).length) return
 
     await update(ref(getDatabaseOrThrow(), 'erp'), updates)
     await writeActivity('dealer_prices_updated', 'inventory', `Updated the dealer prices of ${customer.name}.`)
@@ -4437,6 +4505,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         purchasePrice: product.purchasePrice,
+        ...(item.quantityPrice && (item.tierMinQty ?? 0) > 1 ? { quantityPrice: true, tierMinQty: item.tierMinQty } : {}),
       }
     })
     const subtotal = orderItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
@@ -4580,7 +4649,13 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           {
             customerId: request.customerId,
             employeeId: request.employeeId || undefined,
-            items: request.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })),
+            items: request.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              quantityPrice: item.quantityPrice,
+              tierMinQty: item.tierMinQty,
+            })),
             discount: request.discount,
             paid: request.paid,
             orderDate: request.orderDate,
@@ -6188,6 +6263,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),
       saveGeneralPrices,
+      savePriceTiers,
       saveDealerPrices: viewOnlyForZone(saveDealerPrices),
       saveZonePriceExclusions: viewOnlyForZone(saveZonePriceExclusions),
       updateSettings,

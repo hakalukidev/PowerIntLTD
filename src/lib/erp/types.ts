@@ -191,6 +191,8 @@ export type CustomerRecord = {
   creditLimit?: number
   /** Prices only this dealer gets (product id → price). They win over depot, zone and general prices. */
   prices?: Record<string, number>
+  /** When each dealer price was last saved (product id → ISO time); compared with the product's quantity prices. */
+  pricesUpdatedAt?: Record<string, string>
   /** Depot the dealer belongs to. Their orders use the depot's prices and are delivered from the depot. */
   depotId?: string
   commitments?: Record<string, CustomerCommitment>
@@ -254,6 +256,8 @@ export type DepotRecord = {
   warehouseId: string
   /** Depot price by product id. Products without one fall back to the zone or wholesale price. */
   prices?: Record<string, number>
+  /** When each depot price was last saved (product id → ISO time); compared with the product's quantity prices. */
+  pricesUpdatedAt?: Record<string, string>
   notes: string
   createdAt: string
   updatedAt: string
@@ -332,8 +336,22 @@ export type ProductRecord = {
   imagePublicId?: string
   /** Zone-specific selling price by zone id; the order form falls back to the wholesale price. */
   zonePrices?: Record<string, number>
+  /** When each zone price was last saved (zone id → ISO time); compared with `priceTiersUpdatedAt`. */
+  zonePricesUpdatedAt?: Record<string, string>
+  /**
+   * Quantity prices for every dealer, lowest minimum first; the first is minimum 1 and equals
+   * `wholesalePrice`. A dealer, depot or zone price saved after `priceTiersUpdatedAt` wins over them.
+   */
+  priceTiers?: PriceTier[]
+  priceTiersUpdatedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+/** One quantity price: from `minQty` units up, each unit costs `price`. */
+export type PriceTier = {
+  minQty: number
+  price: number
 }
 
 /** The id of a configured status (`settings.orderStatuses`); the defaults are pending, ready, shipped, completed and hold. */
@@ -346,6 +364,9 @@ export type OrderItem = {
   quantity: number
   unitPrice: number
   purchasePrice: number
+  /** The unit price came from the product's quantity prices; `tierMinQty` is the minimum of the tier used. */
+  quantityPrice?: boolean
+  tierMinQty?: number
 }
 
 export type OrderRecord = {
@@ -891,7 +912,7 @@ export type OrderRequestRecord = {
 }
 
 export type OrderRequestEdit = {
-  items: Array<{ productId: string; quantity: number; unitPrice: number }>
+  items: Array<{ productId: string; quantity: number; unitPrice: number; quantityPrice?: boolean; tierMinQty?: number }>
   paid: number
   deliveryDate: string
   courierName: string
@@ -1453,6 +1474,9 @@ export type OrderInput = {
     productId: string
     quantity: number
     unitPrice: number
+    /** The unit price came from a quantity price; stored on the line so it never changes later. */
+    quantityPrice?: boolean
+    tierMinQty?: number
   }>
   discount?: number
   paid: number

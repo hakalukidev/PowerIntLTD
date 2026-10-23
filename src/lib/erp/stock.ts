@@ -1,6 +1,6 @@
 import { increment } from 'firebase/database'
 
-import type { ProductRecord, StockAdjustmentReason, WarehouseQty, WarehouseRecord } from './types'
+import type { ProductRecord, StockAdjustmentReason, StockMovementRecord, StockMovementType, WarehouseQty, WarehouseRecord } from './types'
 import { getProductStatus } from './utils'
 
 /**
@@ -10,7 +10,8 @@ import { getProductStatus } from './utils'
  * - `stockQty`: units that can still be sold, `sum(stockByWarehouse) − reservedQty`.
  *
  * Every change to any of them is a `StockMove`, turned into one database update by
- * `planStockMoves`, so a movement log can later be written from that one place.
+ * `planStockMoves`, which also writes the stock history: one `StockMovementRecord` for each move
+ * that changes a warehouse's count.
  */
 export type StockMoveKind =
   /** A received purchase, into a warehouse. */
@@ -55,6 +56,8 @@ export type StockMove = {
   /** The business date of the movement (received date, delivery date…), not when it was approved. */
   date: string
   ref: StockMoveRef
+  /** An adjustment's reason; a damage shows as such in the stock history. */
+  reason?: StockAdjustmentReason
 }
 
 /**
@@ -65,7 +68,7 @@ export function stockMove(
   kind: StockMoveKind,
   productId: string,
   quantity: number,
-  options: { warehouseId?: string; date: string; ref: StockMoveRef }
+  options: { warehouseId?: string; date: string; ref: StockMoveRef; reason?: StockAdjustmentReason }
 ): StockMove {
   const effect: Record<StockMoveKind, { onHand: number; reserved: number }> = {
     purchase: { onHand: quantity, reserved: 0 },
@@ -82,7 +85,55 @@ export function stockMove(
   if (effect[kind].onHand && !warehouseId) {
     throw new Error(`A ${kind.replace('_', ' ')} needs a warehouse.`)
   }
-  return { kind, productId, warehouseId, ...effect[kind], date: options.date, ref: options.ref }
+  return { kind, productId, warehouseId, ...effect[kind], date: options.date, ref: options.ref, ...(options.reason ? { reason: options.reason } : {}) }
+}
+
+/** How a move shows in the stock history. `reserve` and `release` change no warehouse, so they have no row. */
+function movementType(move: StockMove): StockMovementType {
+  switch (move.kind) {
+    case 'delivery':
+      return 'sale'
+    case 'delivery_reversed':
+      return 'return'
+    case 'adjustment':
+      return move.reason === 'damage' ? 'damage' : 'adjustment'
+    case 'reserve':
+    case 'release':
+      throw new Error(`A ${move.kind} changes no warehouse.`)
+    default:
+      return move.kind
+  }
+}
+
+/** `YYYY-MM-DD` of a stored date in local time; a bare `YYYY-MM-DD` as it is. */
+export function businessDay(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
+
+/**
+ * Ids that sort in the order the rows were written (the history lists rows of the same day in key
+ * order). scripts/stock-history-starting-balance.mjs makes the same shape.
+ */
+function movementId(time: number, sequence: number) {
+  return `stockmove_${time}_${String(sequence).padStart(3, '0')}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * Changes under `erp/` and stock history rows (kept outside `erp`) as one update at the database
+ * root, so a stock change and its history are written together or not at all.
+ */
+export function withStockHistory(erpChanges: Record<string, unknown>, movements: Record<string, StockMovementRecord>) {
+  const changes: Record<string, unknown> = {}
+  Object.entries(erpChanges).forEach(([path, value]) => {
+    changes[`erp/${path}`] = value
+  })
+  Object.entries(movements).forEach(([id, row]) => {
+    changes[`stockMovements/${id}`] = row
+  })
+  return changes
 }
 
 /**
@@ -164,6 +215,9 @@ export type StockAfter = { stockQty: number; reservedQty: number; byWarehouse: R
  * caused them (the approval, the order, the delivery). Counts are `increment()`s, so stock moved by
  * someone else meanwhile is not overwritten.
  *
+ * `movements` are the stock history rows, one per move that changes a warehouse's count, to be
+ * written in the same update (`withStockHistory`). Reserve and release make none.
+ *
  * Throws, before anything is written, when a move would take a warehouse below zero or the units
  * that can be sold below zero. Moves that only add are never refused.
  *
@@ -175,10 +229,12 @@ export type StockAfter = { stockQty: number; reservedQty: number; byWarehouse: R
 export function planStockMoves(
   products: Record<string, ProductRecord>,
   moves: StockMove[],
-  context: { now: string; warehouses: Record<string, WarehouseRecord> }
-): { updates: Record<string, unknown>; after: Map<string, StockAfter> } {
+  context: { now: string; warehouses: Record<string, WarehouseRecord>; by: { id: string; name: string } }
+): { updates: Record<string, unknown>; after: Map<string, StockAfter>; movements: Record<string, StockMovementRecord> } {
   const updates: Record<string, unknown> = {}
   const after = new Map<string, StockAfter>()
+  const movements: Record<string, StockMovementRecord> = {}
+  const writtenAt = Date.parse(context.now) || Date.now()
   const byProduct = new Map<string, StockMove[]>()
   moves.forEach((move) => byProduct.set(move.productId, [...(byProduct.get(move.productId) ?? []), move]))
   const warehouseName = (id: string) => context.warehouses[id]?.name ?? 'that warehouse'
@@ -228,9 +284,39 @@ export function planStockMoves(
     if (availableDelta) updates[`${path}/stockQty`] = increment(availableDelta)
     updates[`${path}/status`] = getProductStatus(stockQty, product.minStock)
     updates[`${path}/updatedAt`] = context.now
-    // Prompt 27: the stock movement log is written here, one row per move (with `byWarehouse` as the balance after).
+
+    // The balance is judged from this snapshot, like the checks above. The counts themselves are
+    // increments, so they stay right if someone else moves the same stock at the same moment, but
+    // then one of the two rows' balance misses the other's change. Accepted: it needs two people
+    // moving the same product in the same warehouse within the same second.
+    const running = { ...before }
+    productMoves.forEach((move) => {
+      if (!move.onHand) return
+      running[move.warehouseId] = (running[move.warehouseId] ?? 0) + move.onHand
+      const id = movementId(writtenAt, Object.keys(movements).length)
+      const date = businessDay(move.date) || businessDay(context.now)
+      movements[id] = {
+        id,
+        date,
+        productId,
+        productName: product.name,
+        warehouseId: move.warehouseId,
+        warehouseName: context.warehouses[move.warehouseId]?.name ?? '',
+        type: movementType(move),
+        change: move.onHand,
+        balance: running[move.warehouseId],
+        refKind: move.ref.kind,
+        refId: move.ref.id,
+        refLabel: move.ref.label,
+        byId: context.by.id,
+        byName: context.by.name,
+        createdAt: context.now,
+        productDay: `${productId}|${date}`,
+        warehouseDay: `${move.warehouseId}|${date}`,
+      }
+    })
     after.set(productId, { stockQty, reservedQty, byWarehouse })
   })
 
-  return { updates, after }
+  return { updates, after, movements }
 }

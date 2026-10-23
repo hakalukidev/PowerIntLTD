@@ -228,6 +228,8 @@ test.describe('Product details on a 360px phone in dark mode', () => {
     await expectDetails(dialog)
     await expectPlaceholder(dialog)
 
+    // Measured once the open animation (zoom and slide in) is over.
+    await dialog.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
     const box = (await dialog.boundingBox())!
     expect(box.x).toBeGreaterThanOrEqual(0)
     expect(box.x + box.width).toBeLessThanOrEqual(360)

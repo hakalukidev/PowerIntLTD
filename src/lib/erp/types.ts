@@ -584,6 +584,52 @@ export type StockAdjustmentInput = {
   date?: string
 }
 
+/**
+ * What changed a warehouse's count. `starting_balance` is the count when the history began
+ * (scripts/stock-history-starting-balance.mjs); `return` is stock put back into a warehouse, as
+ * when a posted delivery is moved to another one.
+ */
+export type StockMovementType =
+  | 'starting_balance'
+  | 'purchase'
+  | 'opening'
+  | 'transfer_in'
+  | 'transfer_out'
+  | 'sale'
+  | 'return'
+  | 'adjustment'
+  | 'damage'
+
+/**
+ * One change to one warehouse's count of one product, at `stockMovements/{id}` (outside `erp`,
+ * so it is not loaded with the rest; see src/lib/erp/stockHistory.ts). Written in the same update
+ * as the change itself, and never edited.
+ */
+export type StockMovementRecord = {
+  id: string
+  /** Business date, `YYYY-MM-DD`: the received, transfer, adjustment or delivery date. */
+  date: string
+  productId: string
+  productName: string
+  warehouseId: string
+  warehouseName: string
+  type: StockMovementType
+  /** + into the warehouse, − out of it. */
+  change: number
+  /** The warehouse's count of the product after this change. */
+  balance: number
+  refKind: 'purchase' | 'order' | 'transfer' | 'adjustment' | 'system'
+  refId: string
+  /** Purchase "product from supplier", order bill number, "Dhaka → Chattogram", adjustment reason. */
+  refLabel: string
+  byId: string
+  byName: string
+  createdAt: string
+  /** `productId|date` and `warehouseId|date`: one product's or warehouse's rows in date order, for queries. */
+  productDay: string
+  warehouseDay: string
+}
+
 export type TaskStatus = 'pending' | 'in-progress' | 'done'
 export type TaskPriority = 'low' | 'medium' | 'high'
 

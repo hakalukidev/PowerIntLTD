@@ -1,12 +1,13 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { increment } from 'firebase/database'
+import * as XLSX from 'xlsx'
 
 import { ADMIN_EMAIL, loginAsAdmin } from './auth'
 import { approveThroughBothStages, authorizerDealerFields, hasApproverLogins, keepAdminSignedIn, openApprovalsAs, reviewOnCard } from './support/approvals'
 import { navigate, note, screenshot } from './support/evidence'
 import { connectAsAdmin, testDealer, type AdminDb } from './support/firebase'
-import { planStockMoves, stockMove, warehouseStock } from '../src/lib/erp/stock'
-import type { ProductRecord, WarehouseRecord } from '../src/lib/erp/types'
+import { businessDay, planStockMoves, stockMove, warehouseStock, withStockHistory } from '../src/lib/erp/stock'
+import type { ProductRecord, StockMovementRecord, WarehouseRecord } from '../src/lib/erp/types'
 
 /**
  * Prompt 25: stock is kept per warehouse. Receive purchase splits the quantity over warehouses,
@@ -15,6 +16,9 @@ import type { ProductRecord, WarehouseRecord } from '../src/lib/erp/types'
  *
  * Seeds two run-unique warehouses, a supplier, a product and two dealers; the admin works through
  * the forms and the seeded Authorizer and Chairman approve. Everything is removed afterwards.
+ *
+ * Prompt 27: each of those actions writes exactly one stock history row per warehouse it changes,
+ * with the warehouse's count after it (TC-25.1–25.4 check the rows, TC-27.x the screens).
  */
 
 const stamp = Date.now()
@@ -54,6 +58,16 @@ async function product() {
   return (await db.read<StoredProduct>(`erp/products/${ids.product}`))!
 }
 
+type HistoryRow = Pick<StockMovementRecord, 'type' | 'warehouseId' | 'change' | 'balance'>
+
+/** This run's product's stock history rows (optionally only some), as type, warehouse, change and balance. */
+async function history(only: (row: StockMovementRecord) => boolean = () => true): Promise<HistoryRow[]> {
+  const rows = Object.values((await db.read<Record<string, StockMovementRecord>>('stockMovements')) ?? {})
+  return rows
+    .filter((row) => row.productId === ids.product && only(row))
+    .map(({ type, warehouseId, change, balance }) => ({ type, warehouseId, change, balance }))
+}
+
 async function stock() {
   const stored = await product()
   return { dhaka: stored.stockByWarehouse?.[ids.dhaka] ?? 0, ctg: stored.stockByWarehouse?.[ids.ctg] ?? 0, available: stored.stockQty, held: stored.reservedQty ?? 0 }
@@ -82,11 +96,12 @@ test.describe('Stock movements (pure)', () => {
   const ref = { kind: 'order' as const, id: 'o', label: 'INV-1' }
   const date = '2026-10-22T00:00:00.000Z'
   const now = date
+  const by = { id: 'u', name: 'Tester' }
 
   test('TC-25.0 reserve, delivery, reversal, release and transfer keep shelves − held = available', () => {
     const products = { p: { ...base, stockQty: 20, reservedQty: 0, stockByWarehouse: { a: 12, b: 8 } } }
     // Order approved for 10: held, no warehouse yet.
-    const reserve = planStockMoves(products, [stockMove('reserve', 'p', 10, { date, ref })], { now, warehouses })
+    const reserve = planStockMoves(products, [stockMove('reserve', 'p', 10, { date, ref })], { now, warehouses, by })
     expect(reserve.after.get('p')).toEqual({ stockQty: 10, reservedQty: 10, byWarehouse: { a: 12, b: 8 } })
     expect(reserve.updates['products/p/stockQty']).toEqual(increment(-10))
     expect(reserve.updates['products/p/reservedQty']).toEqual(increment(10))
@@ -94,18 +109,18 @@ test.describe('Stock movements (pure)', () => {
 
     // Posted from Chattogram (8) is refused; from Dhaka (12) it leaves the shelf and is no longer held.
     const held = { p: { ...products.p, stockQty: 10, reservedQty: 10 } }
-    expect(() => planStockMoves(held, [stockMove('delivery', 'p', 10, { warehouseId: 'b', date, ref })], { now, warehouses })).toThrow('Only 8 of Battery in Chattogram.')
-    const delivered = planStockMoves(held, [stockMove('delivery', 'p', 10, { warehouseId: 'a', date, ref })], { now, warehouses })
+    expect(() => planStockMoves(held, [stockMove('delivery', 'p', 10, { warehouseId: 'b', date, ref })], { now, warehouses, by })).toThrow('Only 8 of Battery in Chattogram.')
+    const delivered = planStockMoves(held, [stockMove('delivery', 'p', 10, { warehouseId: 'a', date, ref })], { now, warehouses, by })
     expect(delivered.after.get('p')).toEqual({ stockQty: 10, reservedQty: 0, byWarehouse: { a: 2, b: 8 } })
     expect(delivered.updates['products/p/stockQty']).toBeUndefined()
 
     // Moving that delivery to Chattogram: back into Dhaka, out of Chattogram; refused for 10 (only 8 there).
     const after = { p: { ...held.p, reservedQty: 0, stockByWarehouse: { a: 2, b: 8 } } }
     const moved = [stockMove('delivery_reversed', 'p', 10, { warehouseId: 'a', date, ref }), stockMove('delivery', 'p', 10, { warehouseId: 'b', date, ref })]
-    expect(() => planStockMoves(after, moved, { now, warehouses })).toThrow('Only 8 of Battery in Chattogram.')
+    expect(() => planStockMoves(after, moved, { now, warehouses, by })).toThrow('Only 8 of Battery in Chattogram.')
 
     // Released: can be sold again.
-    const released = planStockMoves(held, [stockMove('release', 'p', 10, { date, ref })], { now, warehouses })
+    const released = planStockMoves(held, [stockMove('release', 'p', 10, { date, ref })], { now, warehouses, by })
     expect(released.after.get('p')).toEqual({ stockQty: 20, reservedQty: 0, byWarehouse: { a: 12, b: 8 } })
 
     // Transfer: the total does not change; more than is there is refused.
@@ -113,14 +128,85 @@ test.describe('Stock movements (pure)', () => {
       stockMove('transfer_out', 'p', quantity, { warehouseId: 'a', date, ref }),
       stockMove('transfer_in', 'p', quantity, { warehouseId: 'b', date, ref }),
     ]
-    expect(planStockMoves(products, transfer(5), { now, warehouses }).after.get('p')).toEqual({ stockQty: 20, reservedQty: 0, byWarehouse: { a: 7, b: 13 } })
-    expect(() => planStockMoves(products, transfer(13), { now, warehouses })).toThrow('Only 12 of Battery in Dhaka.')
+    expect(planStockMoves(products, transfer(5), { now, warehouses, by }).after.get('p')).toEqual({ stockQty: 20, reservedQty: 0, byWarehouse: { a: 7, b: 13 } })
+    expect(() => planStockMoves(products, transfer(13), { now, warehouses, by })).toThrow('Only 12 of Battery in Dhaka.')
+  })
+
+  test('TC-27.0 one history row per warehouse a move changes, with its count after; none for reserve and release', () => {
+    const products = { p: { ...base, stockQty: 0, reservedQty: 0, stockByWarehouse: {} } }
+    const purchase = { kind: 'purchase' as const, id: 'pu', label: 'Battery from Supplier' }
+    const received = planStockMoves(
+      products,
+      [stockMove('purchase', 'p', 12, { warehouseId: 'a', date: '2026-10-20', ref: purchase }), stockMove('purchase', 'p', 8, { warehouseId: 'b', date: '2026-10-20', ref: purchase })],
+      { now, warehouses, by }
+    )
+    const rows = Object.values(received.movements)
+    expect(rows.map(({ type, warehouseId, change, balance }) => ({ type, warehouseId, change, balance }))).toEqual([
+      { type: 'purchase', warehouseId: 'a', change: 12, balance: 12 },
+      { type: 'purchase', warehouseId: 'b', change: 8, balance: 8 },
+    ])
+    expect(rows[0]).toMatchObject({
+      date: '2026-10-20', productId: 'p', productName: 'Battery', warehouseName: 'Dhaka', refKind: 'purchase', refId: 'pu', refLabel: 'Battery from Supplier',
+      byId: 'u', byName: 'Tester', createdAt: now, productDay: 'p|2026-10-20', warehouseDay: 'a|2026-10-20',
+    })
+    expect(rows.every((row) => received.movements[row.id] === row)).toBe(true)
+    expect(rows[0].id < rows[1].id, 'ids sort in the order written').toBe(true)
+
+    // Written with the change, at the database root.
+    const root = withStockHistory({ ...received.updates, 'purchases/pu': { id: 'pu' } }, received.movements)
+    expect(root['erp/purchases/pu']).toEqual({ id: 'pu' })
+    expect(root['erp/products/p/stockByWarehouse/a']).toEqual(increment(12))
+    expect(root[`stockMovements/${rows[0].id}`]).toBe(rows[0])
+
+    const split = { p: { ...base, stockQty: 20, reservedQty: 0, stockByWarehouse: { a: 12, b: 8 } } }
+    const brief = (result: ReturnType<typeof planStockMoves>) => Object.values(result.movements).map(({ type, warehouseId, change, balance }) => ({ type, warehouseId, change, balance }))
+    const transfer = { kind: 'transfer' as const, id: 't', label: 'Dhaka → Chattogram' }
+    expect(brief(planStockMoves(split, [
+      stockMove('transfer_out', 'p', 5, { warehouseId: 'a', date, ref: transfer }),
+      stockMove('transfer_in', 'p', 5, { warehouseId: 'b', date, ref: transfer }),
+    ], { now, warehouses, by }))).toEqual([
+      { type: 'transfer_out', warehouseId: 'a', change: -5, balance: 7 },
+      { type: 'transfer_in', warehouseId: 'b', change: 5, balance: 13 },
+    ])
+
+    // Reserve and release change no warehouse: no rows.
+    expect(planStockMoves(split, [stockMove('reserve', 'p', 10, { date, ref })], { now, warehouses, by }).movements).toEqual({})
+    const held = { p: { ...split.p, stockQty: 10, reservedQty: 10 } }
+    expect(planStockMoves(held, [stockMove('release', 'p', 10, { date, ref })], { now, warehouses, by }).movements).toEqual({})
+
+    // A delivery is a sale; moving it to another warehouse is a return into the first and a sale from the second.
+    expect(brief(planStockMoves(held, [stockMove('delivery', 'p', 10, { warehouseId: 'a', date, ref })], { now, warehouses, by }))).toEqual([
+      { type: 'sale', warehouseId: 'a', change: -10, balance: 2 },
+    ])
+    const delivered = { p: { ...held.p, reservedQty: 0, stockByWarehouse: { a: 2, b: 18 } } }
+    expect(brief(planStockMoves(delivered, [
+      stockMove('delivery_reversed', 'p', 10, { warehouseId: 'a', date, ref }),
+      stockMove('delivery', 'p', 10, { warehouseId: 'b', date, ref }),
+    ], { now, warehouses, by }))).toEqual([
+      { type: 'return', warehouseId: 'a', change: 10, balance: 12 },
+      { type: 'sale', warehouseId: 'b', change: -10, balance: 8 },
+    ])
+
+    // An adjustment shows as damage when that is its reason; two moves on one warehouse keep a running balance.
+    const adjustment = { kind: 'adjustment' as const, id: 'ad', label: 'Damage' }
+    expect(brief(planStockMoves(split, [
+      stockMove('adjustment', 'p', -2, { warehouseId: 'a', date, ref: adjustment, reason: 'damage' }),
+      stockMove('adjustment', 'p', 3, { warehouseId: 'a', date, ref: adjustment, reason: 'count_correction' }),
+    ], { now, warehouses, by }))).toEqual([
+      { type: 'damage', warehouseId: 'a', change: -2, balance: 10 },
+      { type: 'adjustment', warehouseId: 'a', change: 3, balance: 13 },
+    ])
+
+    // Business dates: a form date as it is; a stored time as its local day.
+    expect(businessDay('2026-10-20')).toBe('2026-10-20')
+    const local = new Date(2026, 9, 20, 23, 30)
+    expect(businessDay(local.toISOString())).toBe('2026-10-20')
   })
 
   test('TC-25.0b a product not yet migrated has its stock in its main warehouse and is written in full the first time', () => {
     const legacy = { p: { ...base, stockQty: 30 } }
     expect(warehouseStock(legacy.p)).toEqual({ a: 30 })
-    const { updates, after } = planStockMoves(legacy, [stockMove('purchase', 'p', 5, { warehouseId: 'b', date, ref })], { now, warehouses })
+    const { updates, after } = planStockMoves(legacy, [stockMove('purchase', 'p', 5, { warehouseId: 'b', date, ref })], { now, warehouses, by })
     expect(updates['products/p/stockByWarehouse/a']).toBe(30)
     expect(updates['products/p/stockByWarehouse/b']).toBe(5)
     expect(after.get('p')?.stockQty).toBe(35)
@@ -173,6 +259,9 @@ test.describe('Stock per warehouse', () => {
         if (text.includes(tag) || text.includes(deliveryBill) || text.includes(approvalBill) || ours.some((ourId) => text.includes(ourId))) await db.remove(`erp/${section}/${id}`)
       }
     }
+    for (const [id, row] of Object.entries((await db.read<Record<string, StockMovementRecord>>('stockMovements')) ?? {})) {
+      if (row.productId === ids.product || Object.values(ids).includes(row.warehouseId)) await db.remove(`stockMovements/${id}`)
+    }
     // Only the status this run added; when the list was not saved before, the defaults it had to write too.
     if (statusesBefore) await db.remove(`erp/settings/orderStatuses/${ids.cancelStatus}`)
     else await db.remove('erp/settings/orderStatuses')
@@ -212,8 +301,15 @@ test.describe('Stock per warehouse', () => {
     await expect(page.getByText('Purchase sent for approval.')).toBeVisible({ timeout: 20_000 })
     expect(await stock()).toEqual({ dhaka: 0, ctg: 0, available: 0, held: 0 })
 
+    expect(await history(), 'no history before the final approval').toEqual([])
     await approveThroughBothStages(browser, names.supplier, page)
     await expect.poll(stock).toEqual({ dhaka: 12, ctg: 8, available: 20, held: 0 })
+    const received = await history()
+    expect(received).toHaveLength(2)
+    expect(received).toEqual(expect.arrayContaining([
+      { type: 'purchase', warehouseId: ids.dhaka, change: 12, balance: 12 },
+      { type: 'purchase', warehouseId: ids.ctg, change: 8, balance: 8 },
+    ]))
 
     await navigate(page, '/admin/approvals')
     await page.getByRole('button', { name: /Stock & warehouse/ }).click()
@@ -233,7 +329,7 @@ test.describe('Stock per warehouse', () => {
     await expect(row).toContainText('20 units')
     await expect(row.locator('[data-warehouse-split]')).toContainText(`${names.dhaka} 12`)
     await expect(row.locator('[data-warehouse-split]')).toContainText(`${names.ctg} 8`)
-    note(testInfo, 'Received 20 as Dhaka 12 + Chattogram 8: report rows 12 and 8, product total 20.')
+    note(testInfo, 'Received 20 as Dhaka 12 + Chattogram 8: report rows 12 and 8, product total 20; history rows Dhaka +12 (12), Chattogram +8 (8).')
   })
 
   test('TC-25.2 a transfer of 5 moves stock only after final approval', async ({ browser, page }, testInfo) => {
@@ -259,6 +355,8 @@ test.describe('Stock per warehouse', () => {
     await reviewOnCard(authorizer.page, card, 'Authorize')
     await authorizer.close()
     expect(await stock(), 'nothing moves at the first approval').toEqual({ dhaka: 12, ctg: 8, available: 20, held: 0 })
+    const transfers = (row: StockMovementRecord) => row.refKind === 'transfer'
+    expect(await history(transfers), 'no history at the first approval').toEqual([])
 
     const chairman = await openApprovalsAs(browser, 'chairman')
     await chairman.page.setViewportSize({ width: 360, height: 800 })
@@ -268,6 +366,12 @@ test.describe('Stock per warehouse', () => {
     await chairman.close()
     await keepAdminSignedIn(page)
     await expect.poll(stock).toEqual({ dhaka: 7, ctg: 13, available: 20, held: 0 })
+    const moved = await history(transfers)
+    expect(moved).toHaveLength(2)
+    expect(moved).toEqual(expect.arrayContaining([
+      { type: 'transfer_out', warehouseId: ids.dhaka, change: -5, balance: 7 },
+      { type: 'transfer_in', warehouseId: ids.ctg, change: 5, balance: 13 },
+    ]))
     const audit = Object.values((await db.read<Stored>('erp/auditLog')) ?? {}).filter((entry) => entry.kind === 'stock_transfer' && String(entry.summary).includes(names.product))
     expect(audit).toHaveLength(1)
     note(testInfo, 'Transfer of 5: Dhaka 12 / Chattogram 8 after the Authorizer, Dhaka 7 / Chattogram 13 after the Chairman.')
@@ -310,6 +414,8 @@ test.describe('Stock per warehouse', () => {
     await card.getByRole('button', { name: 'Post' }).click()
     await expect(page.getByText(`Only 7 of ${names.product} in ${names.dhaka}.`)).toBeVisible({ timeout: 20_000 })
     expect(await stock(), 'a refused post moves nothing').toEqual({ dhaka: 7, ctg: 13, available: 10, held: 10 })
+    const ofDelivery = (row: StockMovementRecord) => row.refLabel === deliveryBill
+    expect(await history(ofDelivery), 'a refused post writes no history').toEqual([])
     await screenshot(page, 'delivery-not-enough-in-warehouse', testInfo)
 
     await pickOption(page, warehouse, `${names.ctg} — E2E`)
@@ -318,6 +424,7 @@ test.describe('Stock per warehouse', () => {
     await expect(page.getByText(`${deliveryBill} posted.`)).toBeVisible({ timeout: 20_000 })
     await expect.poll(stock).toEqual({ dhaka: 7, ctg: 3, available: 10, held: 0 })
     expect((await db.read<{ stockState: string }>(`erp/orders/${ids.order}`))?.stockState).toBe('delivered')
+    expect(await history(ofDelivery)).toEqual([{ type: 'sale', warehouseId: ids.ctg, change: -10, balance: 3 }])
 
     // Moving the posted delivery to Dhaka (7 there, 10 needed) is refused and moves nothing.
     await page.getByRole('button', { name: /^Posted/ }).click()
@@ -327,6 +434,7 @@ test.describe('Stock per warehouse', () => {
     await posted.getByRole('button', { name: /Save/ }).click()
     await expect(page.getByText(`Only 7 of ${names.product} in ${names.dhaka}.`)).toBeVisible({ timeout: 20_000 })
     expect(await stock()).toEqual({ dhaka: 7, ctg: 3, available: 10, held: 0 })
+    expect(await history(ofDelivery), 'a refused move writes no history').toEqual([{ type: 'sale', warehouseId: ids.ctg, change: -10, balance: 3 }])
     note(testInfo, 'Posting 10 from Dhaka (7) refused; from Chattogram (13) it left 3 there; moving it to Dhaka refused.')
   })
 
@@ -379,6 +487,7 @@ test.describe('Stock per warehouse', () => {
     await pickOption(page, status, 'Pending')
     await expect.poll(stock).toEqual({ dhaka: 7, ctg: 3, available: 8, held: 2 })
     expect((await db.read<{ stockState: string }>(`erp/orders/${order!.id}`))?.stockState).toBe('reserved')
+    expect(await history((row) => row.refLabel === approvalBill), 'holding and giving back change no warehouse: no history').toEqual([])
     note(testInfo, 'Approved order of 2: available 10 → 8 (held 2); Cancelled → 10 (held 0); back to Pending → 8 (held 2). Completed refused before posting.')
   })
 
@@ -422,6 +531,108 @@ test.describe('Stock per warehouse', () => {
     await split.scrollIntoViewIfNeeded()
     await expect(split).toContainText(`${names.ctg} 3`)
     await screenshot(page, 'mobile-inventory-warehouse-split-dark', testInfo)
+    await page.getByRole('button', { name: 'Toggle color mode' }).click()
+  })
+
+  /** The rows of the stock history table in `scope`, as shown: type, warehouse, change and balance. */
+  async function shownRows(scope: Locator) {
+    const rows = scope.locator('[data-stock-history-table] tbody tr[data-movement-id]')
+    return rows.evaluateAll((elements) =>
+      elements.map((element) => ({
+        type: element.getAttribute('data-movement-type'),
+        warehouseId: element.getAttribute('data-warehouse-id'),
+        change: element.querySelector('[data-cell="change"]')?.textContent,
+        balance: element.querySelector('[data-cell="balance"]')?.textContent,
+      }))
+    )
+  }
+
+  // Everything this run did to the product, newest first (TC-25.1–25.3; TC-25.4 wrote nothing).
+  const allRows = [
+    { type: 'sale', warehouseId: ids.ctg, change: '-10', balance: '3' },
+    { type: 'transfer_in', warehouseId: ids.ctg, change: '+5', balance: '13' },
+    { type: 'transfer_out', warehouseId: ids.dhaka, change: '-5', balance: '7' },
+    { type: 'purchase', warehouseId: ids.ctg, change: '+8', balance: '8' },
+    { type: 'purchase', warehouseId: ids.dhaka, change: '+12', balance: '12' },
+  ]
+  /** The two purchase rows were written together; their order between themselves is not fixed. */
+  const sortPurchases = (rows: Array<Record<string, string | null | undefined>>) =>
+    [...rows.slice(0, 3), ...rows.slice(3).sort((left, right) => String(right.change).localeCompare(String(left.change)))]
+
+  test('TC-27.1 the Stock history tab lists every movement newest first, filters by type, and exports to Excel', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await loginAsAdmin(page)
+    await navigate(page, '/admin/stock/overview')
+    await page.getByRole('button', { name: 'Stock history', exact: true }).click()
+    const tab = page.locator('[data-stock-history]')
+    await tab.locator('[data-history-filter="product"]').getByRole('combobox').click()
+    await page.getByPlaceholder('Search products...').fill(names.product)
+    await page.getByRole('button', { name: new RegExp(names.product) }).first().click()
+    await expect(tab.locator('tbody tr[data-movement-id]')).toHaveCount(5)
+    expect(sortPurchases(await shownRows(tab))).toEqual(allRows)
+    await expect(tab.locator('tbody tr').first()).toContainText(deliveryBill)
+    await screenshot(page, 'stock-history-tab', testInfo)
+
+    await pickOption(page, tab.getByRole('combobox', { name: 'Type' }), 'Transfer out')
+    await expect(tab.locator('tbody tr[data-movement-id]')).toHaveCount(1)
+    expect(await shownRows(tab)).toEqual([allRows[2]])
+    await pickOption(page, tab.getByRole('combobox', { name: 'Type' }), 'All types')
+    await expect(tab.locator('tbody tr[data-movement-id]')).toHaveCount(5)
+
+    const [download] = await Promise.all([page.waitForEvent('download'), tab.getByRole('button', { name: 'Export Excel' }).click()])
+    expect(download.suggestedFilename()).toMatch(/^stock-history-.*\.xlsx$/)
+    const workbook = XLSX.readFile(await download.path())
+    const sheet = XLSX.utils.sheet_to_json<Array<string | number>>(workbook.Sheets[workbook.SheetNames[0]], { header: 1 })
+    expect(sheet[0]).toEqual(['Date', 'Product', 'Warehouse', 'Type', 'Change', 'Balance after', 'Reference', 'By', 'Recorded at'])
+    expect(sheet).toHaveLength(6)
+    expect(sheet[1].slice(1, 7)).toEqual([names.product, names.ctg, 'Sale', -10, 3, deliveryBill])
+    expect(String(sheet[1][0])).toMatch(/^\d{2}\/\d{2}\/\d{4}$/)
+    note(testInfo, 'History of the run\'s product: 5 rows newest first (sale, transfer in/out, two purchases); "Transfer out" filter leaves 1; Excel export has the same 5 rows.')
+  })
+
+  test('TC-27.2 the product details dialog and a warehouse\'s History show the same history, filtered', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await loginAsAdmin(page)
+    await navigate(page, '/admin/stock/overview')
+    await page.getByPlaceholder('Search inventory...').fill(names.product)
+    await page.getByRole('row', { name: new RegExp(names.product) }).locator('td').first().click()
+    const details = page.locator('[data-product-details]')
+    await expect(details.locator('[data-stock-history]'), 'not read until asked for').toHaveCount(0)
+    await details.getByRole('button', { name: 'Show stock history' }).click()
+    await expect(details.locator('tbody tr[data-movement-id]')).toHaveCount(5)
+    expect(sortPurchases(await shownRows(details))).toEqual(allRows)
+    await details.locator('[data-stock-history]').scrollIntoViewIfNeeded()
+    await screenshot(page, 'product-details-stock-history', testInfo)
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: 'Warehouse control', exact: true }).click()
+    await page.getByRole('row', { name: new RegExp(names.ctg) }).getByRole('button', { name: 'History' }).click()
+    const warehouse = page.locator('[data-warehouse-history]')
+    await expect(warehouse.getByRole('heading', { name: `${names.ctg} stock history` })).toBeVisible()
+    await expect(warehouse.locator('tbody tr[data-movement-id]')).toHaveCount(3)
+    expect(await shownRows(warehouse)).toEqual(allRows.filter((row) => row.warehouseId === ids.ctg))
+    await screenshot(page, 'warehouse-stock-history', testInfo)
+    note(testInfo, 'Product dialog: the same 5 rows once "Show stock history" is clicked. Chattogram\'s History: its 3 rows (sale −10 → 3, transfer in +5 → 13, purchase +8 → 8).')
+  })
+
+  test('TC-27.3 the Stock history tab fits a 360px phone in dark mode', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width: 360, height: 800 })
+    await loginAsAdmin(page)
+    await navigate(page, '/admin/stock/overview')
+    await page.getByRole('button', { name: 'Toggle color mode' }).click()
+    await expect(page.locator('html')).toHaveClass(/dark/)
+    await page.getByRole('button', { name: 'Stock history', exact: true }).click()
+    const tab = page.locator('[data-stock-history]')
+    await tab.locator('[data-history-filter="product"]').getByRole('combobox').click()
+    await page.getByPlaceholder('Search products...').fill(names.product)
+    await page.getByRole('button', { name: new RegExp(names.product) }).first().click()
+    await expect(tab.locator('tbody tr[data-movement-id]')).toHaveCount(5)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways page scroll').toBe(true)
+    await tab.scrollIntoViewIfNeeded()
+    await screenshot(page, 'mobile-stock-history-dark', testInfo)
+    await tab.locator('tbody tr').first().scrollIntoViewIfNeeded()
+    await screenshot(page, 'mobile-stock-history-table-dark', testInfo)
     await page.getByRole('button', { name: 'Toggle color mode' }).click()
   })
 })

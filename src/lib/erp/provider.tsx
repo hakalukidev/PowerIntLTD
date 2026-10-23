@@ -148,7 +148,7 @@ import {
 import { auth, database } from '@/lib/firebase/config'
 import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId } from './ledger'
 import { BUSINESS_ENTRY_LABELS } from './business'
-import { planStockMoves, resolveWarehouseLines, STOCK_ADJUSTMENT_REASONS, stockInWarehouse, stockMove, warehouseStock, type StockMove } from './stock'
+import { planStockMoves, resolveWarehouseLines, STOCK_ADJUSTMENT_REASONS, stockInWarehouse, stockMove, warehouseStock, withStockHistory, type StockMove } from './stock'
 import { resolveRoles } from './roles'
 import { accessScopeFor, customerInScope, customerZoneId, resolveCustomerZone, scopeDataToUserZones, subZoneKey } from './zones'
 
@@ -772,7 +772,11 @@ const REVIEW_LOCK_MS = 2 * 60 * 1000
 /** Expense records carry no `updatedAt`. */
 const SECTIONS_WITHOUT_UPDATED_AT: ApprovalSection[] = ['expenses']
 
-/** An order's stock movements of one kind, one per product (lines of the same product together). */
+/**
+ * An order's stock movements of one kind, one per product (lines of the same product together).
+ * `reserve` and `release` change no warehouse, so they make no stock history rows; `delivery` and
+ * `delivery_reversed` do, and are written with `withStockHistory`.
+ */
 function orderStockMoves(
   order: Pick<OrderRecord, 'id' | 'billNumber' | 'items'>,
   kind: 'reserve' | 'release' | 'delivery' | 'delivery_reversed',
@@ -905,6 +909,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     () => users.find((user) => user.id === currentUserId) ?? null,
     [currentUserId, users]
   )
+  /** Who moved the stock, for the stock history. */
+  const stockBy = () => ({ id: currentUser?.id ?? '', name: currentUser?.name ?? '' })
 
   const currentPermissions = useMemo(() => {
     const permissions = new Set(getPermissions(data, currentUser))
@@ -2010,12 +2016,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           throw new Error(`${missing.warehouseName || 'A warehouse of this purchase'} no longer exists. Reject the purchase instead.`)
         }
         const moveRef = { kind: 'purchase' as const, id: purchaseId, label: `${request.productName} from ${request.supplierName}` }
-        const { updates: stockUpdates, after } = planStockMoves(
+        const { updates: stockUpdates, after, movements } = planStockMoves(
           data.products,
           allocations.map((line) => stockMove('purchase', product.id, line.quantity, { warehouseId: line.warehouseId, date: request.date, ref: moveRef })),
-          { now: new Date().toISOString(), warehouses: data.warehouses }
+          { now: new Date().toISOString(), warehouses: data.warehouses, by: stockBy() }
         )
-        await update(ref(getDatabaseOrThrow(), 'erp'), {
+        await update(ref(getDatabaseOrThrow()), withStockHistory({
           ...approval,
           ...stockUpdates,
           [`purchases/${purchaseId}`]: {
@@ -2037,7 +2043,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
           },
           [`purchaseRequests/${requestId}/purchaseId`]: purchaseId,
           [`products/${product.id}/purchasePrice`]: request.unitCost,
-        })
+        }, movements))
       },
     })
     if (outcome === 'authorized') return
@@ -2139,15 +2145,15 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         }
         const moveRef = { kind: 'transfer' as const, id: transferId, label: `${transfer.fromWarehouseName} → ${transfer.toWarehouseName}` }
         // Checked again here: the stock in the warehouse it leaves may have changed since it was entered.
-        const { updates } = planStockMoves(
+        const { updates, movements } = planStockMoves(
           data.products,
           [
             stockMove('transfer_out', transfer.productId, transfer.quantity, { warehouseId: transfer.fromWarehouseId, date: transfer.date, ref: moveRef }),
             stockMove('transfer_in', transfer.productId, transfer.quantity, { warehouseId: transfer.toWarehouseId, date: transfer.date, ref: moveRef }),
           ],
-          { now: new Date().toISOString(), warehouses: data.warehouses }
+          { now: new Date().toISOString(), warehouses: data.warehouses, by: stockBy() }
         )
-        await update(ref(getDatabaseOrThrow(), 'erp'), { ...approval, ...updates })
+        await update(ref(getDatabaseOrThrow()), withStockHistory({ ...approval, ...updates }, movements))
       },
     })
     if (outcome === 'authorized') return
@@ -2246,12 +2252,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         }
         const moveRef = { kind: 'adjustment' as const, id: adjustmentId, label }
         const kind = adjustment.reason === 'opening' ? 'opening' : 'adjustment'
-        const { updates } = planStockMoves(
+        const { updates, movements } = planStockMoves(
           data.products,
-          adjustment.lines.map((line) => stockMove(kind, adjustment.productId, line.quantity, { warehouseId: line.warehouseId, date: adjustment.date, ref: moveRef })),
-          { now: new Date().toISOString(), warehouses: data.warehouses }
+          adjustment.lines.map((line) =>
+            stockMove(kind, adjustment.productId, line.quantity, { warehouseId: line.warehouseId, date: adjustment.date, ref: moveRef, reason: adjustment.reason })
+          ),
+          { now: new Date().toISOString(), warehouses: data.warehouses, by: stockBy() }
         )
-        await update(ref(getDatabaseOrThrow(), 'erp'), { ...approval, ...updates })
+        await update(ref(getDatabaseOrThrow()), withStockHistory({ ...approval, ...updates }, movements))
       },
     })
     if (outcome === 'authorized') return
@@ -2389,7 +2397,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const { updates: stockUpdates, after: stockAfter } = planStockMoves(
       data.products,
       orderStockMoves(order, 'reserve', orderDate),
-      { now, warehouses: data.warehouses }
+      { now, warehouses: data.warehouses, by: stockBy() }
     )
     const updates: Record<string, unknown> = {
       ...alsoWrite?.(orderId),
@@ -2634,7 +2642,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       stockMoves.push(...stock.moves)
       if (stock.state) changes[`orders/${order.id}/stockState`] = stock.state
     }
-    Object.assign(changes, planStockMoves(data.products, stockMoves, { now, warehouses: data.warehouses }).updates)
+    Object.assign(changes, planStockMoves(data.products, stockMoves, { now, warehouses: data.warehouses, by: stockBy() }).updates)
 
     await update(ref(getDatabaseOrThrow(), 'erp'), changes)
     await writeActivity(
@@ -2680,7 +2688,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!data || !state) return { updates: {} }
     return {
       updates: {
-        ...planStockMoves(data.products, moves, { now, warehouses: data.warehouses }).updates,
+        ...planStockMoves(data.products, moves, { now, warehouses: data.warehouses, by: stockBy() }).updates,
         [`orders/${order.id}/stockState`]: state,
       },
     }
@@ -4656,8 +4664,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     // The goods leave the chosen warehouse now; refused if it does not have every line.
     const stock =
       order.stockState === 'reserved' && data
-        ? planStockMoves(data.products, orderStockMoves(order, 'delivery', now, warehouse.id), { now, warehouses: data.warehouses }).updates
-        : {}
+        ? planStockMoves(data.products, orderStockMoves(order, 'delivery', now, warehouse.id), { now, warehouses: data.warehouses, by: stockBy() })
+        : { updates: {}, movements: {} }
     const delivery: OrderDelivery = {
       status: 'posted',
       warehouseId: warehouse.id,
@@ -4680,12 +4688,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
     }
     const db = getDatabaseOrThrow()
-    await update(ref(db, 'erp'), {
+    await update(ref(db), withStockHistory({
       [`orders/${orderId}/delivery`]: delivery,
       [`orders/${orderId}/status`]: 'shipped',
       [`orders/${orderId}/courierName`]: delivery.courierName || order.courierName || '',
-      ...(order.stockState === 'reserved' ? { ...stock, [`orders/${orderId}/stockState`]: 'delivered' } : {}),
-    })
+      ...(order.stockState === 'reserved' ? { ...stock.updates, [`orders/${orderId}/stockState`]: 'delivered' } : {}),
+    }, stock.movements))
     await writeActivity(
       'delivery_posted',
       'sales',
@@ -4720,11 +4728,11 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         ? planStockMoves(
             data.products,
             [...orderStockMoves(order, 'delivery_reversed', now, previousWarehouseId), ...orderStockMoves(order, 'delivery', now, warehouse.id)],
-            { now, warehouses: data.warehouses }
-          ).updates
-        : {}
+            { now, warehouses: data.warehouses, by: stockBy() }
+          )
+        : { updates: {}, movements: {} }
     const field = (name: string) => `orders/${orderId}/${name}`
-    await update(ref(db, 'erp'), {
+    await update(ref(db), withStockHistory({
       [field('delivery/warehouseId')]: warehouse.id,
       [field('delivery/warehouseName')]: warehouse.name,
       [field('delivery/deliveryManId')]: deliveryMan.id,
@@ -4736,8 +4744,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       [field('delivery/note')]: input.note.trim(),
       [field('delivery/updatedAt')]: now,
       [field('courierName')]: courierName || order.courierName || '',
-      ...stock,
-    })
+      ...stock.updates,
+    }, stock.movements))
     await writeActivity('delivery_updated', 'sales', `Updated the delivery details of ${order.billNumber} (${order.customerName}).`)
   }
 

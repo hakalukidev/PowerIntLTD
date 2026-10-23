@@ -27,6 +27,16 @@
       "$section": {
         ".write": "auth != null && $section !== 'users' && $section !== 'roles' && root.child('erp/users').child(auth.uid).child('status').val() === 'active'"
       }
+    },
+
+    "stockMovements": {
+      ".read": "auth != null && root.child('erp/users').child(auth.uid).child('status').val() === 'active'",
+      ".indexOn": ["date", "productId", "warehouseId", "productDay", "warehouseDay"],
+
+      "$movementId": {
+        ".write": "auth != null && root.child('erp/users').child(auth.uid).child('status').val() === 'active' && ((!data.exists() && newData.child('byId').val() === auth.uid) || (!newData.exists() && root.child('erp/users').child(auth.uid).child('roleId').val() === 'admin'))",
+        ".validate": "newData.hasChildren(['id', 'date', 'productId', 'warehouseId', 'type', 'change', 'balance', 'createdAt', 'productDay', 'warehouseDay']) && newData.child('id').val() === $movementId && newData.child('change').isNumber() && newData.child('balance').isNumber() && newData.child('date').val().matches(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) && newData.child('type').val().matches(/^(starting_balance|purchase|opening|transfer_in|transfer_out|sale|return|adjustment|damage)$/) && newData.child('productDay').val() === newData.child('productId').val() + '|' + newData.child('date').val() && newData.child('warehouseDay').val() === newData.child('warehouseId').val() + '|' + newData.child('date').val()"
+      }
     }
   }
 }

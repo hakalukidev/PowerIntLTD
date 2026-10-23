@@ -3,6 +3,7 @@
 import { useDeferredValue, useMemo, useState, type ChangeEvent, type FormEvent } from 'react'
 import {
   ArrowLeftRight,
+  History,
   PencilLine,
   Search,
   SlidersHorizontal,
@@ -13,6 +14,7 @@ import { AdminShell } from './AdminShell'
 import { InventoryManagersCard } from './InventoryManagersCard'
 import { ProductDetailsDialog } from './inventory/ProductDetailsDialog'
 import { ProductImage, statusBadgeClass, statusLabel, unitsLabel } from './inventory/productDisplay'
+import { StockHistory } from './inventory/StockHistory'
 import { StockAdjustmentDialog, StockTransferDialog } from './inventory/StockMovementDialogs'
 import { allocatedTotal, allocationLines, newAllocationRow, WarehouseAllocationRows, type AllocationRow } from './inventory/WarehouseAllocationRows'
 import { QuickCreateProductDialog } from './quick-create/QuickCreateProductDialog'
@@ -85,7 +87,7 @@ type WarehouseFormState = {
   location: string
 }
 
-type InventoryView = 'products' | 'warehouses' | 'low-stock' | 'purchases'
+type InventoryView = 'products' | 'warehouses' | 'low-stock' | 'purchases' | 'history'
 
 function createEmptyProductForm(warehouseId = ''): ProductFormState {
   return {
@@ -224,6 +226,7 @@ export function StockOverviewScreen() {
   const [movementProductId, setMovementProductId] = useState('')
   // The product whose row was clicked, shown in the details dialog.
   const [detailsProductId, setDetailsProductId] = useState<string | null>(null)
+  const [historyWarehouseId, setHistoryWarehouseId] = useState<string | null>(null)
 
   const warehouseOptions: ComboboxOption[] = useMemo(
     () => warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: warehouse.location })),
@@ -634,7 +637,7 @@ export function StockOverviewScreen() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <CardTitle>
-                  {activeInventoryView === 'products' ? 'Inventory list' : activeInventoryView === 'warehouses' ? 'Warehouse control' : activeInventoryView === 'low-stock' ? 'Low stock focus' : 'Recent purchases'}
+                  {activeInventoryView === 'products' ? 'Inventory list' : activeInventoryView === 'warehouses' ? 'Warehouse control' : activeInventoryView === 'low-stock' ? 'Low stock focus' : activeInventoryView === 'history' ? 'Stock history' : 'Recent purchases'}
                 </CardTitle>
                 <CardDescription>
                   {activeInventoryView === 'products'
@@ -643,7 +646,9 @@ export function StockOverviewScreen() {
                       ? 'Add, edit, and clean up warehouse locations from one place.'
                       : activeInventoryView === 'low-stock'
                         ? 'Products that need replenishment soon. Click a product for full details.'
-                        : 'Latest stock receipts recorded in the system.'}
+                        : activeInventoryView === 'history'
+                          ? 'Every stock change in each warehouse, newest first: purchases, transfers, sales, adjustments and damage.'
+                          : 'Latest stock receipts recorded in the system.'}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -651,10 +656,12 @@ export function StockOverviewScreen() {
                 <Button variant={activeInventoryView === 'warehouses' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('warehouses')}>Warehouse control</Button>
                 <Button variant={activeInventoryView === 'low-stock' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('low-stock')}>Low stock focus</Button>
                 <Button variant={activeInventoryView === 'purchases' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('purchases')}>Recent purchases</Button>
+                <Button variant={activeInventoryView === 'history' ? 'default' : 'outline'} size="sm" className="rounded-lg" onClick={() => setActiveInventoryView('history')}>Stock history</Button>
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {activeInventoryView === 'history' ? <StockHistory /> : <>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               {activeInventoryView === 'products' ? (
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center w-full lg:max-w-3xl">
@@ -798,7 +805,7 @@ export function StockOverviewScreen() {
                         <TableCell>{warehouse.productCount}</TableCell>
                         <TableCell>{warehouse.unitCount}</TableCell>
                         <TableCell>{warehouse.lowStockCount}</TableCell>
-                        <TableCell>{canManageInventory ? <div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditWarehouseDialog(warehouse.id)}>Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteWarehouse(warehouse.id)} disabled={busyWarehouseId === warehouse.id}>Delete</Button> : null}</div> : <span className="text-sm text-muted-foreground">View only</span>}</TableCell>
+                        <TableCell><div className="flex justify-end gap-2"><Button variant="outline" size="sm" className="rounded-lg" onClick={() => setHistoryWarehouseId(warehouse.id)}><History className="mr-2 h-4 w-4" />History</Button>{canManageInventory ? <><Button variant="outline" size="sm" className="rounded-lg" onClick={() => openEditWarehouseDialog(warehouse.id)}>Edit</Button>{canDeleteInventory ? <Button variant="outline" size="sm" className="rounded-lg border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800" onClick={() => void handleDeleteWarehouse(warehouse.id)} disabled={busyWarehouseId === warehouse.id}>Delete</Button> : null}</> : null}</div></TableCell>
                       </TableRow>
                     )) : activeInventoryView === 'low-stock' ? lowStockProducts.map((product) => {
                       const warehouse = data?.warehouses[product.warehouseId]
@@ -846,6 +853,7 @@ export function StockOverviewScreen() {
                 </Table>
               </div>
             </div>
+            </>}
           </CardContent>
         </Card>
 
@@ -973,6 +981,15 @@ export function StockOverviewScreen() {
           openEditProductDialog(productId)
         } : undefined}
       />
+      <Dialog open={historyWarehouseId !== null} onOpenChange={(open) => { if (!open) setHistoryWarehouseId(null) }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl" data-warehouse-history>
+          <DialogHeader>
+            <DialogTitle className="break-words pr-6">{historyWarehouseId ? `${data?.warehouses[historyWarehouseId]?.name ?? 'Warehouse'} stock history` : 'Stock history'}</DialogTitle>
+            <DialogDescription>Every stock change in this warehouse, newest first.</DialogDescription>
+          </DialogHeader>
+          {historyWarehouseId ? <StockHistory warehouseId={historyWarehouseId} /> : null}
+        </DialogContent>
+      </Dialog>
       <StockTransferDialog open={transferOpen} onOpenChange={setTransferOpen} productId={movementProductId} onDone={setFeedback} />
       <StockAdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} productId={movementProductId} onDone={setFeedback} />
       <QuickCreateWarehouseDialog

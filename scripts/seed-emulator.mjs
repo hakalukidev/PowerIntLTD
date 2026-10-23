@@ -49,6 +49,9 @@ const { file, data } =
     ? { file: process.argv[backupIndex + 1], data: JSON.parse(readFileSync(process.argv[backupIndex + 1], 'utf8')) }
     : latestBackup()
 const { erp, portal } = data
+// Backups from before prompt 27 have neither.
+const stockMovements = data.stockMovements ?? null
+const migrations = data.migrations ?? null
 
 // One existing account per role keeps its uid, so approvals and reporting lines in the backup
 // still point at it; only the email changes to a test address.
@@ -72,7 +75,7 @@ const app = initializeApp({ projectId, databaseURL })
 const db = getDatabase(app)
 const auth = getAuth(app)
 
-await db.ref().set({ erp: { ...erp, users }, portal })
+await db.ref().set({ erp: { ...erp, users }, portal, stockMovements, migrations })
 
 // Start from an empty Auth emulator so reruns give the same logins.
 const cleared = await fetch(`http://${authHost}/emulator/v1/projects/${projectId}/accounts`, { method: 'DELETE' })

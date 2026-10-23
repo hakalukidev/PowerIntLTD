@@ -207,6 +207,10 @@ for (const id of orderIds) {
   }
 }
 const now = new Date().toISOString()
+// The stock put back on a shelf is a `return` in the stock history (stockMovements, see
+// src/lib/erp/stock.ts), with the same id shape and the business day in Bangladesh.
+const historyDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now))
+let historySequence = 0
 const stockLines = []
 for (const [productId, { available, reserved, shelves }] of stockBack) {
   const product = erp.products?.[productId]
@@ -222,7 +226,14 @@ for (const [productId, { available, reserved, shelves }] of stockBack) {
   // A product not split yet keeps all its stock in the single count.
   if (product.stockByWarehouse) {
     for (const [warehouseId, quantity] of shelves) {
-      updates[`erp/products/${productId}/stockByWarehouse/${warehouseId}`] = Number(product.stockByWarehouse[warehouseId] ?? 0) + quantity
+      const balance = Number(product.stockByWarehouse[warehouseId] ?? 0) + quantity
+      updates[`erp/products/${productId}/stockByWarehouse/${warehouseId}`] = balance
+      const id = `stockmove_${Date.parse(now)}_${String(historySequence++).padStart(3, '0')}_${Math.random().toString(36).slice(2, 8)}`
+      updates[`stockMovements/${id}`] = {
+        id, date: historyDay, productId, productName: product.name ?? '', warehouseId, warehouseName: erp.warehouses?.[warehouseId]?.name ?? '',
+        type: 'return', change: quantity, balance, refKind: 'system', refId: 'cleanup-demo-data', refLabel: 'Demo orders removed',
+        byId: 'system', byName: 'Demo data cleanup', createdAt: now, productDay: `${productId}|${historyDay}`, warehouseDay: `${warehouseId}|${historyDay}`,
+      }
     }
   }
   updates[`erp/products/${productId}/status`] = status

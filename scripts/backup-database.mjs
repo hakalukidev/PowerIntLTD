@@ -1,6 +1,7 @@
 /**
- * Saves the live `erp` and `portal` trees to one JSON file, in the format
- * scripts/seed-emulator.mjs loads, so a backup can also be replayed on the emulators.
+ * Saves the live `erp` and `portal` trees, the stock history (`stockMovements`) and the
+ * migration markers (`migrations`) to one JSON file, in the format scripts/seed-emulator.mjs
+ * loads, so a backup can also be replayed on the emulators.
  *
  * Usage:
  *   node scripts/backup-database.mjs <dir>      # writes <dir>/powerint-<timestamp>.json
@@ -48,10 +49,14 @@ initializeApp({
 })
 
 const db = getDatabase()
-const [erp, portal] = await Promise.all([db.ref('erp').get(), db.ref('portal').get()]).then((snaps) => snaps.map((snap) => snap.val() ?? {}))
+const [erp, portal, stockMovements, migrations] = await Promise.all(['erp', 'portal', 'stockMovements', 'migrations'].map((name) => db.ref(name).get())).then((snaps) =>
+  snaps.map((snap) => snap.val() ?? {})
+)
 
 mkdirSync(target, { recursive: true })
 const file = path.join(target, `powerint-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-writeFileSync(file, JSON.stringify({ erp, portal }))
-console.log(`Backed up ${Object.keys(erp).length} erp sections and ${Object.keys(portal).length} portal sections to ${file}`)
+writeFileSync(file, JSON.stringify({ erp, portal, stockMovements, migrations }))
+console.log(
+  `Backed up ${Object.keys(erp).length} erp sections, ${Object.keys(portal).length} portal sections and ${Object.keys(stockMovements).length} stock history rows to ${file}`
+)
 process.exit(0)

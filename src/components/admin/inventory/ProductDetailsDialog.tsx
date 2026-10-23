@@ -1,9 +1,10 @@
 "use client"
 
-import type { ReactNode } from 'react'
-import { PencilLine } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { History, PencilLine } from 'lucide-react'
 
 import { ProductImage, statusBadgeClass, statusLabel, unitsLabel } from './productDisplay'
+import { StockHistory } from './StockHistory'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -37,6 +38,8 @@ export function ProductDetailsDialog({
   onEdit?: (productId: string) => void
 }) {
   const { data } = useERP()
+  // The history is read only once asked for, and for the product it was asked for.
+  const [historyFor, setHistoryFor] = useState<string | null>(null)
   const product = productId ? data?.products[productId] : undefined
   const currency = data?.settings.currency ?? 'BDT'
 
@@ -133,6 +136,17 @@ export function ProductDetailsDialog({
                     ) : null}
                   </table>
                 </div>
+              </div>
+
+              <div className="space-y-2" data-product-history>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-foreground">Stock history</p>
+                  <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => setHistoryFor(historyFor === product.id ? null : product.id)}>
+                    <History className="mr-2 h-4 w-4" />
+                    {historyFor === product.id ? 'Hide stock history' : 'Show stock history'}
+                  </Button>
+                </div>
+                {historyFor === product.id ? <StockHistory productId={product.id} /> : null}
               </div>
 
               <DialogFooter className="gap-2">

@@ -42,6 +42,7 @@ import type {
   CustomerInput,
   CustomerRecord,
   LedgerEntryRequestRecord,
+  OrderCancellationRequestRecord,
   DocumentPhoto,
   DamageProductInput,
   DamageProductRecord,
@@ -116,6 +117,7 @@ import {
   DEFAULT_PROBATION_MONTHS,
   EMPLOYEE_EXPENSE_CATEGORIES,
   getOrderStatus,
+  isOrderCancelled,
   getOrderStatuses,
   getPermissions,
   getProductStatus,
@@ -150,7 +152,7 @@ import {
 } from 'firebase/auth'
 
 import { auth, database } from '@/lib/firebase/config'
-import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId } from './ledger'
+import { computeCustomerBalance, customerBalanceBefore, openingDueEntryId, reversedOrderIds } from './ledger'
 import { BUSINESS_ENTRY_LABELS } from './business'
 import { planStockMoves, resolveWarehouseLines, STOCK_ADJUSTMENT_REASONS, stockInWarehouse, stockMove, warehouseStock, withStockHistory, type StockMove } from './stock'
 import { resolveRoles } from './roles'
@@ -247,8 +249,14 @@ type ERPContextValue = {
   /** A stock change by hand (or a new product's opening stock) waits for the Authorizer and the Chairman. */
   submitStockAdjustment: (input: StockAdjustmentInput) => Promise<void>
   reviewStockAdjustment: (adjustmentId: string, decision: 'approve' | 'reject') => Promise<void>
-  /** Moves the whole order, and with it every one of its products, to `status`. */
-  updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<void>
+  /**
+   * Moves the whole order, and with it every one of its products, to `status`. Cancelling an order
+   * or bringing a cancelled one back changes the dealer's due, so that is sent for approval instead
+   * (`requested`); every other move is made straight away (`changed`).
+   */
+  updateOrderStatus: (orderId: string, status: OrderRecord['status']) => Promise<'changed' | 'requested'>
+  /** The Authorizer sends a cancellation (or reinstatement) on; the Chairman's approval applies it. */
+  reviewOrderCancellation: (requestId: string, decision: 'approve' | 'reject') => Promise<void>
   /** Moves one product of an order; the order's status follows its products. Not to a cancelling status. */
   updateOrderItemStatus: (orderId: string, itemIndex: number, status: OrderRecord['status']) => Promise<void>
   setCustomerCreditLimit: (customerId: string, creditLimit: number) => Promise<void>
@@ -573,6 +581,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     sellerTransactions: source.sellerTransactions ?? {},
     creditLedgerEntries: source.creditLedgerEntries ?? {},
     ledgerEntryRequests: source.ledgerEntryRequests ?? {},
+    orderCancellationRequests: source.orderCancellationRequests ?? {},
     deposits: source.deposits ?? {},
     complaints: source.complaints ?? {},
     replacements: source.replacements ?? {},
@@ -755,6 +764,7 @@ type ApprovalSection =
   | 'deposits'
   | 'orderRequests'
   | 'ledgerEntryRequests'
+  | 'orderCancellationRequests'
   | 'supplierPayments'
   | 'expenses'
   | 'changeRequests'
@@ -766,6 +776,7 @@ const APPROVAL_SECTION_LABELS: Record<ApprovalSection, { action: string; module:
   deposits: { action: 'deposit', module: 'customers', title: 'Deposit' },
   orderRequests: { action: 'order_request', module: 'sales', title: 'Order' },
   ledgerEntryRequests: { action: 'ledger_entry', module: 'customers', title: 'Ledger entry' },
+  orderCancellationRequests: { action: 'order_cancellation', module: 'sales', title: 'Order cancellation' },
   supplierPayments: { action: 'supplier_payment', module: 'suppliers', title: 'Supplier payment' },
   expenses: { action: 'expense', module: 'finance', title: 'Expense' },
   changeRequests: { action: 'change', module: 'approvals', title: 'Change' },
@@ -1003,7 +1014,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     const now = Date.now()
     const overdueOrders = Object.values(data.orders).filter(
-      (order) => order.due > 0 && !order.overdueNotified && new Date(order.paymentDueDate).getTime() < now
+      (order) => order.due > 0 && !order.overdueNotified && !isOrderCancelled(data.settings, order) && new Date(order.paymentDueDate).getTime() < now
     )
 
     if (overdueOrders.length === 0) {
@@ -2674,14 +2685,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       throw new Error('A status cannot both cancel the order and count as delivered.')
     }
     if (previous && Boolean(previous.isCancelled) !== isCancelled) {
-      // Orders already on it hold (or gave back) their stock by the old setting.
+      // Orders already on it hold (or gave back) their stock and dealer due by the old setting.
       const holding = toArray(data?.orders).filter(
-        (entry) =>
-          (entry.status === previous.id || (entry.items ?? []).some((item) => item.status === previous.id)) &&
-          (entry.stockState === 'reserved' || entry.stockState === 'released')
+        (entry) => entry.status === previous.id || (entry.items ?? []).some((item) => item.status === previous.id)
       )
       if (holding.length) {
-        throw new Error(`Move the ${holding.length} undelivered order${holding.length === 1 ? '' : 's'} off "${previous.label}" before changing whether it cancels the order.`)
+        throw new Error(`Move the ${holding.length} order${holding.length === 1 ? '' : 's'} off "${previous.label}" before changing whether it cancels the order.`)
       }
     }
     statuses[id] = { id, label, color: input.color, order, isFinal: input.isFinal, isDelivered: input.isDelivered, isCancelled }
@@ -2730,6 +2739,14 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const affected = toArray(data.orders).filter((order) => order.status === statusId || (order.items ?? []).some((item) => item.status === statusId))
     if (affected.length && (!statuses[replacementId] || replacementId === statusId)) {
       throw new Error('Pick another status for the orders that use this one.')
+    }
+    // Cancelling an order, or bringing one back, goes through approval, so a deleted status cannot do it.
+    if (affected.length && Boolean(removed.isCancelled) !== Boolean(statuses[replacementId]?.isCancelled)) {
+      throw new Error(
+        removed.isCancelled
+          ? `Pick a status that also cancels the order: bringing a cancelled order back needs approval.`
+          : `Pick a status that does not cancel the order: cancelling an order needs approval.`
+      )
     }
     // Cancelling is for whole orders only, so a product cannot be moved alone onto a cancelling status.
     const partly = affected.filter((order) => orderLineStates(data.settings, order).some((line) => line.status !== statusId))
@@ -2827,9 +2844,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     return { updates, status: derived.status }
   }
 
-  async function updateOrderStatus(orderId: string, status: OrderRecord['status']) {
+  async function updateOrderStatus(orderId: string, status: OrderRecord['status']): Promise<'changed' | 'requested'> {
     if (!data) {
-      return
+      return 'changed'
     }
     if (!hasPermissionCheck(data, currentUser, 'sales.edit')) {
       throw new Error('You do not have permission to change order status.')
@@ -2841,7 +2858,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const db = getDatabaseOrThrow()
     const order = data.orders[orderId]
     if (!order) {
-      return
+      return 'changed'
     }
 
     const label = getOrderStatus(data.settings, status).label
@@ -2849,7 +2866,12 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     const billNumber = order.billNumber || orderId
     // The order may already show this status while some of its products are on another.
     if (order.status === status && orderLineStates(data.settings, order).every((line) => line.status === status)) {
-      return
+      return 'changed'
+    }
+    // Cancelling an order, or bringing a cancelled one back, changes the dealer's due: both approvals.
+    if (Boolean(getOrderStatus(data.settings, status).isCancelled) !== isOrderCancelled(data.settings, order)) {
+      await submitOrderCancellation(order, status)
+      return 'requested'
     }
     const now = new Date().toISOString()
     const stock = orderStatusStock(order, status, now)
@@ -2876,6 +2898,174 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       'info',
       ['admin', 'sales_person', 'accountant']
     )
+    return 'changed'
+  }
+
+  function pendingCancellationOf(orderId: string) {
+    return toArray(data?.orderCancellationRequests).find((request) => request.orderId === orderId && request.status === 'pending') ?? null
+  }
+
+  /** Sends the cancellation (or reinstatement) of an approved order to the Authorizer. */
+  async function submitOrderCancellation(order: OrderRecord, toStatus: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    const action = isOrderCancelled(data.settings, order) ? 'reinstate' : 'cancel'
+    const billNumber = order.billNumber || order.id
+    if (action === 'cancel' && order.delivery) {
+      throw new Error(`${billNumber} has been posted for delivery, so its goods have left. It cannot be cancelled.`)
+    }
+    if (pendingCancellationOf(order.id)) {
+      throw new Error(`A ${action === 'cancel' ? 'cancellation' : 'change'} of ${billNumber} is already waiting for approval.`)
+    }
+    const customer = data.customers[order.customerId]
+
+    const id = createId('order_cancellation')
+    const now = new Date().toISOString()
+    const request: OrderCancellationRequestRecord = {
+      id,
+      action,
+      orderId: order.id,
+      billNumber,
+      customerId: order.customerId,
+      customerName: order.customerName,
+      fromStatus: order.status,
+      toStatus,
+      amount: order.total,
+      paid: order.paid,
+      status: 'pending',
+      zoneId: customer ? customerZoneId(customer, toArray(data.zones)) : order.zoneId ?? '',
+      submittedById: currentUser.id,
+      submittedByName: currentUser.name,
+      createdAt: now,
+      updatedAt: now,
+    }
+    await update(ref(getDatabaseOrThrow(), 'erp/orderCancellationRequests'), { [id]: request })
+
+    const what = action === 'cancel' ? `the cancellation of ${billNumber}` : `bringing back ${billNumber}`
+    await writeActivity('order_cancellation_submitted', 'sales', `Submitted ${what} (${order.customerName}) for approval.`)
+    await writeNotification(
+      action === 'cancel' ? 'Order cancellation awaiting the Authorizer' : 'Order reinstatement awaiting the Authorizer',
+      `${currentUser.name} asked for ${what} for ${order.customerName} (${order.total.toLocaleString()}).`,
+      'warning',
+      stageRoles('authorizer')
+    )
+  }
+
+  /**
+   * The writes a final approval makes, all in one update: the order (and each product) on the new
+   * status, its stock given back (or held again), and the ledger line taking the bill off the sheet
+   * (or putting it back), unless the sheet already shows it that way.
+   */
+  function orderCancellationWrites(request: OrderCancellationRequestRecord, now: string) {
+    if (!data) {
+      throw new Error('ERP data not loaded yet.')
+    }
+    const order = data.orders[request.orderId]
+    if (!order) {
+      throw new Error(`${request.billNumber} no longer exists. Reject the request instead.`)
+    }
+    const cancelling = request.action === 'cancel'
+    const target = getOrderStatuses(data.settings).find((status) => status.id === request.toStatus)
+    if (!target || Boolean(target.isCancelled) !== cancelling) {
+      throw new Error(`The status asked for no longer ${cancelling ? 'cancels' : 'reopens'} the order. Reject the request and ask again.`)
+    }
+    if (isOrderCancelled(data.settings, order) === cancelling) {
+      throw new Error(`${request.billNumber} is already ${cancelling ? 'cancelled' : 'open'}. Reject the request instead.`)
+    }
+    if (cancelling && order.delivery) {
+      throw new Error(`${request.billNumber} has been posted for delivery since, so it cannot be cancelled. Reject the request instead.`)
+    }
+    const customer = data.customers[order.customerId]
+    if (!customer) {
+      throw new Error('This dealer no longer exists. Reject the request instead.')
+    }
+
+    const updates: Record<string, unknown> = {
+      ...orderLineUpdates(order, () => target.id, now).updates,
+      ...orderStatusStock(order, target.id, now).updates,
+    }
+    // An order cancelled before this existed has no ledger line yet; bringing it back then adds none either.
+    const reversed = reversedOrderIds(toArray(data.creditLedgerEntries)).has(order.id)
+    let entryId = ''
+    if (cancelling !== reversed) {
+      entryId = createId('credit_entry')
+      const entry: CreditLedgerEntryRecord = {
+        id: entryId,
+        customerId: customer.id,
+        customerName: customer.name,
+        date: now,
+        particulars: `${cancelling ? 'Cancelled' : 'Reinstated'} ${request.billNumber}`,
+        qty: 0,
+        unitPrice: 0,
+        debit: cancelling ? order.total : 0,
+        credit: cancelling ? 0 : order.total,
+        kind: cancelling ? 'order_cancelled' : 'order_reinstated',
+        orderId: order.id,
+        billNumber: order.billNumber ?? '',
+        createdAt: now,
+      }
+      updates[`creditLedgerEntries/${entryId}`] = entry
+      updates[`orderCancellationRequests/${request.id}/entryId`] = entryId
+      Object.assign(updates, ledgerChanged(customer.id))
+    }
+    return { updates, entryId, order }
+  }
+
+  async function reviewOrderCancellation(requestId: string, decision: 'approve' | 'reject') {
+    if (!data || !currentUser) {
+      return
+    }
+    const request = data.orderCancellationRequests[requestId]
+    if (!request) {
+      throw new Error('Order cancellation not found.')
+    }
+
+    const cancelling = request.action === 'cancel'
+    let entryId = ''
+    const outcome = await reviewAtStage({
+      section: 'orderCancellationRequests',
+      id: requestId,
+      record: request,
+      noun: 'order cancellation',
+      what: `${cancelling ? 'the cancellation of' : 'bringing back'} ${request.billNumber} for ${request.customerName}`,
+      decision,
+      customerId: request.customerId,
+      post: async (approval) => {
+        const writes = orderCancellationWrites(request, new Date().toISOString())
+        entryId = writes.entryId
+        await update(ref(getDatabaseOrThrow(), 'erp'), { ...approval, ...writes.updates })
+        if (entryId) await syncCustomerDue(request.customerId)
+      },
+    })
+    if (outcome === 'authorized') return
+
+    const toLabel = getOrderStatus(data.settings, request.toStatus).label
+    await writeAuditEntry({
+      kind: 'order_cancellation',
+      refId: requestId,
+      decision: outcome,
+      party: request.customerName,
+      summary: [
+        `${request.billNumber}: ${cancelling ? 'cancel' : 'bring back'} (${getOrderStatus(data.settings, request.fromStatus).label} → ${toLabel})`,
+        outcome === 'approved' && entryId ? `${cancelling ? 'Debit' : 'Credit'} ${request.amount.toLocaleString()} on the ledger` : '',
+        request.authorizedByName && `Authorized by ${request.authorizedByName}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      amount: request.amount,
+      submittedByName: request.submittedByName,
+      submittedByRole: roleNameOf(request.submittedById),
+      submittedAt: request.createdAt,
+    })
+    if (outcome === 'approved') {
+      await writeNotification(
+        cancelling ? 'Order cancelled' : 'Order brought back',
+        `${request.billNumber} (${request.customerName}) is now "${toLabel}"${entryId ? `; ${request.amount.toLocaleString()} ${cancelling ? 'taken off' : 'put back on'} the dealer's due` : ''}.`,
+        'info',
+        ['admin', 'sales_person', 'accountant']
+      )
+    }
   }
 
   async function updateOrderItemStatus(orderId: string, itemIndex: number, status: OrderRecord['status']) {
@@ -4862,6 +5052,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (order.stockState === 'released' || getOrderStatus(data?.settings, order.status).isCancelled) {
       throw new Error(`${order.billNumber} is cancelled. Move it back to an open status before posting it.`)
     }
+    if (pendingCancellationOf(order.id)) {
+      throw new Error(`A cancellation of ${order.billNumber} is waiting for approval. Post it once that is decided.`)
+    }
     const { warehouse, deliveryMan } = resolveDeliveryParties(input, order)
 
     const now = new Date().toISOString()
@@ -5068,6 +5261,9 @@ export function ERPProvider({ children }: { children: ReactNode }) {
 
     if (entry.kind === 'opening') {
       throw new Error('The opening due is changed from the dealer form.')
+    }
+    if (entry.kind) {
+      throw new Error(`This line belongs to ${entry.billNumber || 'an order'} being cancelled or brought back; it changes only with the order.`)
     }
 
     if (!options.approved) {
@@ -6390,6 +6586,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       submitStockAdjustment,
       reviewStockAdjustment,
       updateOrderStatus: viewOnlyForZone(updateOrderStatus),
+      reviewOrderCancellation: viewOnlyForZone(reviewOrderCancellation),
       updateOrderItemStatus: viewOnlyForZone(updateOrderItemStatus),
       setCustomerCreditLimit: viewOnlyForZone(setCustomerCreditLimit),
       saveZonePrices: viewOnlyForZone(saveZonePrices),

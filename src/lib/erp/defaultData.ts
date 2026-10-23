@@ -1224,6 +1224,7 @@ export function createDefaultERPData(): ERPData {
     zones: {},
     creditLedgerEntries: {},
     ledgerEntryRequests: {},
+    orderCancellationRequests: {},
     deposits: {},
     complaints: {},
     replacements: {},

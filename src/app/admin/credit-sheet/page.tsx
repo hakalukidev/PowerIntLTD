@@ -32,7 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
-import { buildCustomerLedger, customerBalanceSide, ledgerTotalsOf, withRunningBalance } from '@/lib/erp/ledger'
+import { buildCustomerLedger, customerBalanceSide, ledgerTotalsOf, reversedOrderIds, withRunningBalance } from '@/lib/erp/ledger'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { escapeHtml, formatAmount, formatDate, formatDealerBalance, isZoneInCharge, partyCode, receivableOf, toArray } from '@/lib/erp/utils'
 import {
@@ -209,12 +209,20 @@ export default function CreditSheetPage() {
     const quantities = new Map<string, number>()
     const add = (totals: Map<string, number>, customerId: string, amount: number) =>
       totals.set(customerId, (totals.get(customerId) ?? 0) + amount)
+    // A cancelled order's bill and its "Cancelled" line cancel out, so neither counts as a purchase
+    // or a payment; what was paid on it still counts as paid.
+    const reversed = reversedOrderIds(creditLedgerEntries)
     for (const order of orders) {
+      if (reversed.has(order.id)) {
+        add(payments, order.customerId, order.paid)
+        continue
+      }
       add(purchases, order.customerId, order.total)
       add(payments, order.customerId, order.paid)
       add(quantities, order.customerId, (order.items ?? []).reduce((sum, item) => sum + (item.quantity || 0), 0))
     }
     for (const entry of creditLedgerEntries) {
+      if (entry.kind === 'order_cancelled' || entry.kind === 'order_reinstated') continue
       add(purchases, entry.customerId, entry.credit)
       add(payments, entry.customerId, entry.debit)
       add(quantities, entry.customerId, entry.qty || 0)

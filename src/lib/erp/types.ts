@@ -837,9 +837,54 @@ export type CreditLedgerEntryRecord = {
   unitPrice: number
   debit: number
   credit: number
-  /** `opening`: the dealer's opening due, kept in step with the customer form. */
-  kind?: 'opening'
+  /**
+   * `opening`: the dealer's opening due, kept in step with the customer form.
+   * `order_cancelled` / `order_reinstated`: written when a cancellation (or reinstatement) of the
+   * order `orderId` gets final approval; a debit taking the bill off the sheet, or a credit putting it back.
+   */
+  kind?: 'opening' | OrderReversalKind
+  orderId?: string
+  billNumber?: string
   createdAt: string
+}
+
+export type OrderReversalKind = 'order_cancelled' | 'order_reinstated'
+
+/** `cancel`: move an approved order to a cancelling status. `reinstate`: move a cancelled one back out. */
+export type OrderCancellationAction = 'cancel' | 'reinstate'
+
+/**
+ * Cancelling an approved order (or reinstating a cancelled one) changes the dealer's due, so it
+ * waits for the Authorizer and the Chairman. Final approval moves the order to `toStatus`, writes
+ * the reversing (or restoring) ledger line and gives back (or holds again) its stock, together.
+ */
+export type OrderCancellationRequestRecord = {
+  id: string
+  action: OrderCancellationAction
+  orderId: string
+  billNumber: string
+  customerId: string
+  customerName: string
+  fromStatus: string
+  toStatus: string
+  /** The bill net of discount: what the ledger line takes off (or puts back). */
+  amount: number
+  /** Paid on the order; it stays on the sheet, so after a cancellation it is the dealer's advance. */
+  paid: number
+  status: DepositStatus
+  zoneId?: string
+  submittedById: string
+  submittedByName: string
+  authorizedById?: string
+  authorizedByName?: string
+  authorizedAt?: string
+  reviewedById?: string
+  reviewedByName?: string
+  reviewedAt?: string
+  /** The ledger line written on final approval; missing when none was needed. */
+  entryId?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type DepositStatus = 'pending' | 'approved' | 'rejected'
@@ -959,6 +1004,7 @@ export type AuditKind =
   | 'delivery'
   | 'change'
   | 'order_status'
+  | 'order_cancellation'
   | 'employee'
   | 'advance'
   | 'business'
@@ -1318,6 +1364,7 @@ export type ERPData = {
   sellerTransactions: Record<string, SellerTransactionRecord>
   creditLedgerEntries: Record<string, CreditLedgerEntryRecord>
   ledgerEntryRequests: Record<string, LedgerEntryRequestRecord>
+  orderCancellationRequests: Record<string, OrderCancellationRequestRecord>
   deposits: Record<string, DepositRecord>
   complaints: Record<string, ComplaintRecord>
   replacements: Record<string, ReplacementRecord>

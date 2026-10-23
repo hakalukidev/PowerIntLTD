@@ -7,6 +7,7 @@ import { AllApprovals } from '@/components/admin/approvals/AllApprovals'
 import { ChangeApprovals } from '@/components/admin/approvals/ChangeApprovals'
 import { DailyClosingReport, DeliveryReport, StockReport } from '@/components/admin/approvals/ApprovalReports'
 import { LedgerEntryApprovals } from '@/components/admin/approvals/LedgerEntryApprovals'
+import { OrderCancellationApprovals } from '@/components/admin/approvals/OrderCancellationApprovals'
 import { OrderApprovals } from '@/components/admin/approvals/OrderApprovals'
 import { PurchaseApprovals } from '@/components/admin/approvals/PurchaseApprovals'
 import { StockAdjustmentApprovals, StockTransferApprovals } from '@/components/admin/approvals/StockApprovals'
@@ -17,7 +18,7 @@ import { useERP } from '@/lib/erp/provider'
 import { APPROVAL_PERMISSIONS, toArray, userRoleIds } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
-type Tab = 'all' | 'orders' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'purchases' | 'transfers' | 'adjustments' | 'changes' | 'stock' | 'closing' | 'delivery'
+type Tab = 'all' | 'orders' | 'cancellations' | 'deposits' | 'ledger' | 'payments' | 'expenses' | 'purchases' | 'transfers' | 'adjustments' | 'changes' | 'stock' | 'closing' | 'delivery'
 
 const REPORT_TABS: Tab[] = ['stock', 'closing', 'delivery']
 
@@ -34,6 +35,7 @@ export default function ApprovalsPage() {
 
   const approvalTabs: Array<{ id: Tab; label: string; count: number }> = [
     { id: 'orders', label: 'Orders', count: pendingCount(toArray(data?.orderRequests)) },
+    { id: 'cancellations', label: 'Cancellations', count: pendingCount(toArray(data?.orderCancellationRequests)) },
     { id: 'deposits', label: 'Deposits', count: pendingCount(toArray(data?.deposits)) },
     { id: 'ledger', label: 'Ledger entries', count: pendingCount(toArray(data?.ledgerEntryRequests)) },
     { id: 'payments', label: 'Payments', count: pendingCount(toArray(data?.supplierPayments)) },
@@ -93,6 +95,7 @@ export default function ApprovalsPage() {
 
         {tab === 'all' ? <AllApprovals isAdmin={isAdmin} /> : null}
         {tab === 'orders' ? <OrderApprovals isAdmin={isAdmin} /> : null}
+        {tab === 'cancellations' ? <OrderCancellationApprovals /> : null}
         {tab === 'deposits' ? <SubmissionApprovals kind="deposits" isAdmin={isAdmin} /> : null}
         {tab === 'ledger' ? <LedgerEntryApprovals /> : null}
         {tab === 'payments' ? <SubmissionApprovals kind="supplierPayments" isAdmin={isAdmin} /> : null}

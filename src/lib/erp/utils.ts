@@ -294,7 +294,8 @@ export function notificationVisibleTo(notification: Pick<NotificationRecord, 'ro
 }
 
 export function buildDashboardSnapshot(data: ERPData | null, user?: UserRecord | null) {
-  const orders = sortByCreatedAtDesc(toArray(data?.orders))
+  // Cancelled orders are no sale; they still show in the status breakdown.
+  const orders = sortByCreatedAtDesc(countedOrders(data))
   const purchases = sortByCreatedAtDesc(toArray(data?.purchases))
   const products = toArray(data?.products)
   const tasks = toArray(data?.tasks)
@@ -336,7 +337,7 @@ export function buildDashboardSnapshot(data: ERPData | null, user?: UserRecord |
     .sort((left, right) => right.sold - left.sold)
     .slice(0, 5)
 
-  const orderStatusCounts = orders.reduce<Record<string, number>>((result, order) => {
+  const orderStatusCounts = toArray(data?.orders).reduce<Record<string, number>>((result, order) => {
     result[order.status] = (result[order.status] ?? 0) + 1
     return result
   }, {})
@@ -411,7 +412,7 @@ export function revenueRangeStartDate(range: RevenueRange) {
 }
 
 export function buildCategoryRevenue(data: ERPData | null, range: RevenueRange) {
-  const orders = toArray(data?.orders)
+  const orders = countedOrders(data)
   const products = toArray(data?.products)
   const categoryByProductId = new Map(products.map((product) => [product.id, product.category || 'Uncategorized']))
   const start = revenueRangeStartDate(range)
@@ -433,7 +434,7 @@ export function buildCategoryRevenue(data: ERPData | null, range: RevenueRange) 
 }
 
 export function buildPaymentStatusCounts(data: ERPData | null) {
-  const orders = toArray(data?.orders)
+  const orders = countedOrders(data)
 
   return orders.reduce<Record<string, number>>((result, order) => {
     result[order.paymentStatus] = (result[order.paymentStatus] ?? 0) + 1
@@ -442,7 +443,7 @@ export function buildPaymentStatusCounts(data: ERPData | null) {
 }
 
 export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
-  const orders = toArray(data?.orders)
+  const orders = countedOrders(data)
   const purchases = toArray(data?.purchases)
 
   if (range === '7d' || range === '30d') {
@@ -493,7 +494,7 @@ export function buildRevenueSeries(data: ERPData | null, range: RevenueRange) {
 
 export function buildUserReport(data: ERPData | null) {
   const users = toArray(data?.users)
-  const orders = toArray(data?.orders)
+  const orders = countedOrders(data)
 
   return users.map((user) => {
     const userOrders = orders.filter((order) => order.salesPersonId === user.id)
@@ -531,7 +532,7 @@ function escapeCsv(value: string) {
 }
 
 export function computeCustomerTotals(data: ERPData | null) {
-  const orders = toArray(data?.orders)
+  const orders = countedOrders(data)
 
   return orders.reduce<Record<string, number>>((totals, order) => {
     totals[order.customerId] = (totals[order.customerId] ?? 0) + order.total
@@ -677,6 +678,16 @@ export function getOrderStatus(settings: Pick<SettingsRecord, 'orderStatuses'> |
       isDelivered: false,
     }
   )
+}
+
+/** The order is on a status that cancels it. */
+export function isOrderCancelled(settings: Pick<SettingsRecord, 'orderStatuses'> | null | undefined, order: Pick<OrderRecord, 'status'>) {
+  return Boolean(getOrderStatus(settings, order.status).isCancelled)
+}
+
+/** The orders that count as sales: every order except cancelled ones. */
+export function countedOrders(data: Pick<ERPData, 'orders' | 'settings'> | null | undefined) {
+  return toArray(data?.orders).filter((order) => !isOrderCancelled(data?.settings, order))
 }
 
 export function orderStatusBadgeClass(color: OrderStatusColor) {

@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
 import { formatReportValue, reportExportValue, REPORT_SOURCES } from '@/lib/erp/reportSources'
-import { buildUserReport, exportPdf, exportXlsx, formatDate, formatDealerBalance, getReadableOrderState, toArray } from '@/lib/erp/utils'
+import { buildUserReport, countedOrders, exportPdf, exportXlsx, formatDate, formatDealerBalance, getReadableOrderState, toArray } from '@/lib/erp/utils'
 
 function escapeHtml(value: string) {
   return value
@@ -235,7 +235,7 @@ export function ReportScreen() {
       'All Operations',
       ['Section', 'SN', 'Name / Bill', 'Contact', 'Value', 'Status'],
       [
-        ...toArray(data?.orders).map((order, index) => [
+        ...countedOrders(data).map((order, index) => [
           'Sales',
           String(index + 1),
           `${order.billNumber} - ${order.customerName}`,

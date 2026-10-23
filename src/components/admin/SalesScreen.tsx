@@ -54,6 +54,7 @@ import {
   getOrderStatus,
   getOrderStatuses,
   getReadableOrderState,
+  isOrderCancelled,
   toArray,
   userRoleIds,
 } from '@/lib/erp/utils'
@@ -177,6 +178,8 @@ export function SalesScreen() {
   const [detailsOrderId, setDetailsOrderId] = useState<string | null>(null)
   // Errors from the dialog's buttons; the page message box sits behind the open dialog.
   const [detailsError, setDetailsError] = useState<string | null>(null)
+  // A cancellation sent for approval from the dialog.
+  const [detailsNotice, setDetailsNotice] = useState<string | null>(null)
   const detailsOrder = useMemo(() => orders.find((order) => order.id === detailsOrderId) ?? null, [orders, detailsOrderId])
   const detailsCustomer = useMemo(
     () => (detailsOrder ? customers.find((customer) => customer.id === detailsOrder.customerId) : undefined),
@@ -271,12 +274,19 @@ export function SalesScreen() {
     }
   }
 
-  const openOrders = orders.filter((order) => !getOrderStatus(data?.settings, order.status).isFinal).length
+  const isCancelled = (order: OrderRecord) => isOrderCancelled(data?.settings, order)
+  // Cancelled orders are no sale: they count in no card or total.
+  const liveOrders = orders.filter((order) => !isCancelled(order))
+  const pendingCancellations = useMemo(
+    () => new Set(toArray(data?.orderCancellationRequests).filter((request) => request.status === 'pending').map((request) => request.orderId)),
+    [data?.orderCancellationRequests]
+  )
+  const openOrders = liveOrders.filter((order) => !getOrderStatus(data?.settings, order.status).isFinal).length
   const readyStatus = orderStatuses.find((status) => status.id === 'ready')
-  const readyOrders = orders.filter((order) => order.status === 'ready').length
-  const receivableTotal = orders.reduce((sum, order) => sum + order.due, 0)
+  const readyOrders = liveOrders.filter((order) => order.status === 'ready').length
+  const receivableTotal = liveOrders.reduce((sum, order) => sum + order.due, 0)
   const supplierPayableEstimate = toArray(data?.purchases).reduce((sum, purchase) => sum + purchase.total, 0)
-  const overdueOrders = orders.filter((order) => {
+  const overdueOrders = liveOrders.filter((order) => {
     if (order.due <= 0) {
       return false
     }
@@ -312,7 +322,8 @@ export function SalesScreen() {
       const matchesZone = zoneFilter === 'all' || zone?.zoneId === zoneFilter
       const matchesSubZone =
         subZoneFilter === 'all' || (zone?.subZoneKey ?? '') === (subZoneFilter === NO_SUB_ZONE_FILTER ? '' : subZoneFilter)
-      const matchesStatus = statusFilter === 'all' || order.status === statusFilter
+      // Cancelled orders show only when their status is picked.
+      const matchesStatus = statusFilter === 'all' ? !isOrderCancelled(data?.settings, order) : order.status === statusFilter
       const matchesPayment = paymentFilter === 'all' || paymentStatusOf(order) === paymentFilter
       const matchesSaleType = saleTypeFilter === 'all' || saleTypeOf(order) === saleTypeFilter
       const matchesSalesPerson = salesPersonFilter === 'all' || order.salesPersonId === salesPersonFilter
@@ -334,7 +345,7 @@ export function SalesScreen() {
         matchesTo
       )
     })
-  }, [orders, orderZones, query, zoneFilter, subZoneFilter, statusFilter, paymentFilter, saleTypeFilter, salesPersonFilter, dueOnly, fromDate, toDate])
+  }, [orders, orderZones, query, zoneFilter, subZoneFilter, statusFilter, paymentFilter, saleTypeFilter, salesPersonFilter, dueOnly, fromDate, toDate, data?.settings])
 
   // Sub-zones that have orders in the chosen zone (or in any zone the user sees).
   const subZoneOptions = useMemo(() => {
@@ -358,18 +369,35 @@ export function SalesScreen() {
         ? 'No sub-zone'
         : subZoneOptions.options.find(([key]) => key === subZoneFilter)?.[1] ?? ''
 
-  const dueReminderRows = orders
+  const dueReminderRows = liveOrders
     .filter((order) => order.due > 0)
     .sort((left, right) => left.deliveryDate.localeCompare(right.deliveryDate))
     .slice(0, 5)
 
   function openInvoiceDetails(orderId: string) {
     setDetailsError(null)
+    setDetailsNotice(null)
     setDetailsOrderId(orderId)
   }
 
   function documentContext(document: SalesDocument) {
-    return { customer: customers.find((entry) => entry.id === document.customerId), settings: data?.settings, zones: toArray(data?.zones) }
+    const order = data?.orders[document.id]
+    const cancelled = Boolean(order && isCancelled(order))
+    // The day its cancellation got final approval; orders cancelled before that needed approval have none.
+    const cancelledOn = cancelled
+      ? toArray(data?.orderCancellationRequests)
+          .filter((request) => request.orderId === document.id && request.action === 'cancel' && request.status === 'approved')
+          .map((request) => request.reviewedAt ?? '')
+          .sort()
+          .at(-1)
+      : undefined
+    return {
+      customer: customers.find((entry) => entry.id === document.customerId),
+      settings: data?.settings,
+      zones: toArray(data?.zones),
+      cancelled,
+      cancelledOn,
+    }
   }
 
   function printInvoice(document: SalesDocument, reportError: (message: string) => void = setFeedback) {
@@ -439,11 +467,14 @@ export function SalesScreen() {
   function buildSalesReportHtml() {
     const currency = data?.settings.currency
     const money = (value: number) => formatCurrency(value, currency)
-    const totals = filteredOrders.reduce(
+    // Cancelled orders are listed when their status is picked, but count in no total.
+    const counted = filteredOrders.filter((order) => !isCancelled(order))
+    const totals = counted.reduce(
       (sum, order) => ({ total: sum.total + order.total, paid: sum.paid + order.paid, due: sum.due + order.due }),
       { total: 0, paid: 0, due: 0 }
     )
-    const units = filteredOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)
+    const units = counted.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)
+    const cancelledCount = filteredOrders.length - counted.length
     const salesPersonName = salesPeople.find((person) => person.id === salesPersonFilter)?.name
     const filters = [
       query.trim() ? `Search: "${query.trim()}"` : '',
@@ -489,7 +520,7 @@ export function SalesScreen() {
 
     const rows = filteredOrders
       .map((order, index) => `
-          <tr>
+          <tr${isCancelled(order) ? ' style="color:#9ca3af;text-decoration:line-through"' : ''}>
             <td class="numeric">${index + 1}</td>
             ${visibleColumns.map((column) => cell(order, column.key)).join('')}
           </tr>
@@ -507,7 +538,7 @@ export function SalesScreen() {
             <td class="label">Filters</td><td>${escapeHtml(filters.join(' · ') || 'None')}</td>
           </tr>
           <tr>
-            <td class="label">Orders</td><td>${filteredOrders.length} (${units} units)</td>
+            <td class="label">Orders</td><td>${counted.length} (${units} units)${cancelledCount ? ` · ${cancelledCount} cancelled, not counted` : ''}</td>
             <td class="label">Address</td><td>92, Wise Market, Nawabpur Road, Dhaka-1100 · +88 01897914480-83</td>
           </tr>
         </table>
@@ -573,7 +604,7 @@ export function SalesScreen() {
             <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Open</p>
               <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{openOrders}</p>
-              <Progress value={orders.length ? (openOrders / orders.length) * 100 : 0} className="mt-4" />
+              <Progress value={liveOrders.length ? (openOrders / liveOrders.length) * 100 : 0} className="mt-4" />
             </CardContent>
           </Card>
           {readyStatus ? (
@@ -581,14 +612,14 @@ export function SalesScreen() {
               <CardContent className="p-4 sm:p-5">
                 <p className="text-sm text-muted-foreground">{readyStatus.label}</p>
                 <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{readyOrders}</p>
-                <Progress value={orders.length ? (readyOrders / orders.length) * 100 : 0} className="mt-4" />
+                <Progress value={liveOrders.length ? (readyOrders / liveOrders.length) * 100 : 0} className="mt-4" />
               </CardContent>
             </Card>
           ) : null}
           <Card className="border-border/70 shadow-sm">
             <CardContent className="p-4 sm:p-5">
               <p className="text-sm text-muted-foreground">Customer receivable</p>
-              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl">{formatCurrency(receivableTotal, data?.settings.currency)}</p>
+              <p className="mt-1.5 break-words text-lg font-semibold tracking-tight sm:mt-2 sm:text-2xl" data-testid="sales-receivable">{formatCurrency(receivableTotal, data?.settings.currency)}</p>
               <p className="mt-2 text-xs text-muted-foreground">{overdueOrders.length} overdue reminders</p>
             </CardContent>
           </Card>
@@ -818,14 +849,15 @@ export function SalesScreen() {
                         }}
                         className={cn(
                           'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                          order.due > 0 ? 'bg-rose-500/5 dark:bg-rose-500/10' : ''
+                          isCancelled(order) ? 'text-muted-foreground' : order.due > 0 ? 'bg-rose-500/5 dark:bg-rose-500/10' : ''
                         )}
+                        data-cancelled={isCancelled(order) ? 'true' : undefined}
                       >
                         {isVisible('bill') ? <TableCell className="hidden font-medium md:table-cell">{order.billNumber}</TableCell> : null}
                         {isVisible('customer') ? (
                           <TableCell
                             sticky
-                            className={cn(order.due > 0 && '[--sticky-tint:rgb(244_63_94/0.05)] dark:[--sticky-tint:rgb(244_63_94/0.1)]')}
+                            className={cn(order.due > 0 && !isCancelled(order) && '[--sticky-tint:rgb(244_63_94/0.05)] dark:[--sticky-tint:rgb(244_63_94/0.1)]')}
                           >
                             <div className="flex items-start gap-1">
                               {expandButton(order)}
@@ -852,7 +884,9 @@ export function SalesScreen() {
                         {isVisible('salesPerson') ? <TableCell className="text-sm text-muted-foreground">{order.salesPersonName}</TableCell> : null}
                         {isVisible('zone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).zoneName}</TableCell> : null}
                         {isVisible('subZone') ? <TableCell className="whitespace-nowrap text-sm">{zoneOf(order).subZoneName || '-'}</TableCell> : null}
-                        {isVisible('total') ? <TableCell>{formatCurrency(order.total, data?.settings.currency)}</TableCell> : null}
+                        {isVisible('total') ? (
+                          <TableCell className={cn(isCancelled(order) && 'line-through')}>{formatCurrency(order.total, data?.settings.currency)}</TableCell>
+                        ) : null}
                         {isVisible('paid') ? <TableCell>{formatCurrency(order.paid, data?.settings.currency)}</TableCell> : null}
                         {isVisible('due') ? (
                           <TableCell className={cn(totalDueOf(order) > 0 ? 'font-semibold text-rose-600 dark:text-rose-400' : '')}>
@@ -870,6 +904,15 @@ export function SalesScreen() {
                             <div className="flex flex-col items-start gap-1">
                               <OrderStatusBadge status={order.status} />
                               <OrderProgressChip order={order} />
+                              {pendingCancellations.has(order.id) ? (
+                                <Badge
+                                  variant="outline"
+                                  className="whitespace-nowrap rounded-full border-dashed border-rose-400/60 px-1.5 py-0 text-[10px] font-medium text-rose-700 dark:text-rose-300"
+                                  data-testid="cancellation-pending"
+                                >
+                                  {isCancelled(order) ? 'Reopening waits for approval' : 'Cancellation waits for approval'}
+                                </Badge>
+                              ) : null}
                             </div>
                           </TableCell>
                         ) : null}
@@ -977,6 +1020,23 @@ export function SalesScreen() {
                 </DialogDescription>
               </DialogHeader>
 
+              {isCancelled(detailsOrder) ? (
+                <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-700 dark:text-rose-300" data-testid="order-cancelled-banner">
+                  Cancelled. This bill counts in no sales total and is off the dealer&apos;s due
+                  {detailsOrder.paid > 0 ? `; the ${formatCurrency(detailsOrder.paid, data?.settings.currency)} paid stays as their advance` : ''}.
+                </p>
+              ) : null}
+              {pendingCancellations.has(detailsOrder.id) && !detailsNotice ? (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
+                  {isCancelled(detailsOrder) ? 'Bringing this order back' : 'Cancelling this order'} is waiting for approval on the Approvals page.
+                </p>
+              ) : null}
+              {detailsNotice ? (
+                <p role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+                  {detailsNotice}
+                </p>
+              ) : null}
+
               <div className="grid gap-3 text-sm sm:grid-cols-2">
                 <div className="space-y-1 rounded-xl border border-border/70 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Customer</p>
@@ -1005,9 +1065,16 @@ export function SalesScreen() {
                         value={detailsOrder.status}
                         onValueChange={(value) => {
                           setDetailsError(null)
-                          updateOrderStatus(detailsOrder.id, value).catch((reason: unknown) =>
-                            setDetailsError(reason instanceof Error ? reason.message : 'Unable to change the status.')
-                          )
+                          setDetailsNotice(null)
+                          const bill = detailsOrder.billNumber || detailsOrder.id
+                          const reopening = isCancelled(detailsOrder)
+                          updateOrderStatus(detailsOrder.id, value)
+                            .then((result) => {
+                              if (result === 'requested') {
+                                setDetailsNotice(`${reopening ? 'Bringing back' : 'Cancelling'} ${bill} was sent for approval. The order stays as it is until the Chairman's final approval.`)
+                              }
+                            })
+                            .catch((reason: unknown) => setDetailsError(reason instanceof Error ? reason.message : 'Unable to change the status.'))
                         }}
                       >
                         <SelectTrigger className="h-8 w-40" aria-label="Order status">

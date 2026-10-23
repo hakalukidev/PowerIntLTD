@@ -14,7 +14,7 @@ import { cashPriceOf, isQuantityPrice, priceTiersOf, SALE_TYPE_LABELS, saleTypeO
 import { useERP } from '@/lib/erp/provider'
 import type { OrderRequestRecord } from '@/lib/erp/types'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { approvalStage, formatCurrency, formatDate, formatDealerBalance, partyCode, receivableOf, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
+import { approvalStage, countedOrders, formatCurrency, formatDate, formatDealerBalance, partyCode, receivableOf, shortRecordId, sortByCreatedAtDesc, toArray } from '@/lib/erp/utils'
 import { customerZoneName } from '@/lib/erp/zones'
 import { DUE_REFERENCE_OPTIONS } from '@/components/admin/sales/salesDocument'
 
@@ -159,7 +159,8 @@ export function OrderRequestCard({
   const { stage, canReview } = useApprovalAccess(request)
 
   const history = useMemo(() => {
-    const orders = toArray(data?.orders).filter((order) => order.customerId === request.customerId)
+    // Cancelled orders are no purchase.
+    const orders = countedOrders(data).filter((order) => order.customerId === request.customerId)
     const lastOrder = sortByCreatedAtDesc(orders)[0]
     const pendingDeposits = toArray(data?.deposits)
       .filter((deposit) => deposit.customerId === request.customerId && deposit.status === 'pending')
@@ -172,7 +173,7 @@ export function OrderRequestCard({
       lastOrderAt: lastOrder?.createdAt ?? '',
       pendingDeposits,
     }
-  }, [data?.orders, data?.deposits, request.customerId])
+  }, [data, request.customerId])
 
   // The dealer's balance (negative is an advance); the credit limit only counts what they owe.
   const currentDue = customer?.due ?? 0

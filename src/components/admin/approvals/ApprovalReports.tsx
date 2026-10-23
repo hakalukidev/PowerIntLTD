@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { useERP } from '@/lib/erp/provider'
 import { formatWarehouseSplit, warehouseStock } from '@/lib/erp/stock'
 import type { CourierStatus, ProductRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, getOrderStatus, getOrderStatuses, toArray } from '@/lib/erp/utils'
+import { countedOrders, formatCurrency, formatDate, getOrderStatus, getOrderStatuses, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 import { EmptyState, SummaryRow, localDay } from './shared'
@@ -301,7 +301,8 @@ export function DailyClosingReport({ day }: { day: string }) {
   const { data } = useERP()
 
   const report = useMemo(() => {
-    const orders = toArray(data?.orders).filter((order) => localDay(order.createdAt) === day)
+    // Cancelled orders are no sale.
+    const orders = countedOrders(data).filter((order) => localDay(order.createdAt) === day)
     // Approved records count on the date entered on their form, not the day they were approved.
     const deposits = toArray(data?.deposits).filter((deposit) => deposit.status === 'approved' && localDay(deposit.date) === day)
     const payments = toArray(data?.supplierPayments).filter((payment) => payment.status === 'approved' && localDay(payment.date) === day)
@@ -316,6 +317,7 @@ export function DailyClosingReport({ day }: { day: string }) {
       data?.stockTransfers,
       data?.stockAdjustments,
       data?.ledgerEntryRequests,
+      data?.orderCancellationRequests,
       data?.changeRequests,
     ]
     const pending = sections.reduce((sum, section) => sum + Object.values(section ?? {}).filter((item) => item.status === 'pending').length, 0)

@@ -215,17 +215,37 @@ It does not depend on steps 8–9 and can run any time after the code deploy.
 
 **If skipped:** older delivered orders show no delivered date, so they are missing from anything that sorts or filters by it.
 
+## 10b. Take already-cancelled orders off the dealers' dues — after the code deploy (and step 6)
+
+```sh
+node scripts/reverse-cancelled-orders.mjs                                         # dry run
+node scripts/reverse-cancelled-orders.mjs --apply --backup ~/powerint-backups
+```
+
+Since this deploy, cancelling an approved order (or bringing a cancelled one back) waits for the Authorizer and the Chairman. The final approval writes a "Cancelled <bill>" line on the dealer's ledger (a debit of the bill after discount), so the dealer's due no longer includes it. Orders cancelled before this deploy still have their whole bill on the due.
+
+The dry run lists every order on a cancelling status that has no such line. Expect none if no admin added a status with "Cancels the order" ticked. With `--apply` it writes the line for each one, the same as the app does, and saves the dealer's due from their ledger. Paid amounts stay on the sheet as the dealer's advance. Stock is not touched, because the app already gave it back.
+
+Orders already posted for delivery are only listed. Check each one, then name the ones whose bill should come off with `--only <orderId,...>`.
+
+`--apply` saves orders, ledger lines and dealers to the backup folder first, and records itself at `migrations/cancelledOrderReversals`. After that, a second `--apply` needs `--only`.
+
+**If done before the code deploy:** the old code can still cancel orders without a line, and those are missed. A second `--apply` then needs `--only`.
+
+**If skipped:** dealers with an order cancelled before this deploy keep that bill in their due, while the sales totals already leave the order out.
+
 ## 11. Other optional steps — after the code deploy
 
 - `node scripts/recompute-dealer-dues.mjs` (dry run) should report no differences.
-- A **Cancelled** status: Sales → Manage statuses → Add status, tick "Cancels the order". An approved order moved there before its delivery is posted gives its stock back.
+- A **Cancelled** status: Sales → Manage statuses → Add status, tick "Cancels the order". Moving an approved order there, before its delivery is posted, sends the cancellation for approval. The Chairman's final approval gives the stock back and takes the bill off the dealer's due.
 
-## 12. Verify the scripts — after steps 8–10
+## 12. Verify the scripts — after steps 8–10b
 
 ```sh
 node scripts/migrate-stock-by-warehouse.mjs        # expect "Nothing to write" and "0 of them not adding up"
 node scripts/stock-history-starting-balance.mjs    # expect "Already applied" and the same rows
 node scripts/backfill-delivered-at.mjs             # if step 10 ran: expect "Nothing to write" or only orders delivered since
+node scripts/reverse-cancelled-orders.mjs          # expect "Nothing to write" (posted orders may still be listed)
 ```
 
 ## 13. Smoke test on live — last

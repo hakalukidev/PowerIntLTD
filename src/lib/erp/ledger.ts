@@ -85,21 +85,34 @@ export function buildCustomerLedger(customerId: string, orders: OrderRecord[], e
   for (const entry of entries.filter((item) => item.customerId === customerId)) {
     rows.push({
       id: entry.id,
-      billNumber: '',
+      billNumber: entry.billNumber ?? '',
       date: entry.date,
       particulars: entry.particulars,
       qty: entry.qty || null,
       unitPrice: entry.unitPrice || null,
       debit: entry.debit,
       credit: entry.credit,
-      // The opening due follows the customer form, so it is changed there, not deleted here.
-      removable: entry.kind !== 'opening',
+      // The opening due follows the customer form, and a cancelled order's line its approval, so neither is deleted here.
+      removable: !entry.kind,
     })
   }
 
   // The opening due comes before everything else on the sheet, even a line dated the same day.
   const openingId = openingDueEntryId(customerId)
   return rows.sort((left, right) => Number(right.id === openingId) - Number(left.id === openingId) || left.date.localeCompare(right.date))
+}
+
+/**
+ * Orders whose bill is taken off the dealer's sheet right now: more "Cancelled" lines than
+ * "Reinstated" ones were written for them.
+ */
+export function reversedOrderIds(entries: CreditLedgerEntryRecord[]) {
+  const net = new Map<string, number>()
+  for (const entry of entries) {
+    if (!entry.orderId || (entry.kind !== 'order_cancelled' && entry.kind !== 'order_reinstated')) continue
+    net.set(entry.orderId, (net.get(entry.orderId) ?? 0) + (entry.kind === 'order_cancelled' ? 1 : -1))
+  }
+  return new Set([...net].filter(([, count]) => count > 0).map(([orderId]) => orderId))
 }
 
 /** The ledger line holding a dealer's opening due; one per dealer, so its id is fixed. */

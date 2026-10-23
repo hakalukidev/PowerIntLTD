@@ -22,6 +22,9 @@ export type SalesDocumentContext = {
   customer?: CustomerRecord | null
   settings?: SettingsRecord
   zones: ZoneRecord[]
+  /** The order is cancelled: a CANCELLED stamp and status line, with `cancelledOn` when known. */
+  cancelled?: boolean
+  cancelledOn?: string
 }
 
 export function escapeHtml(value: string) {
@@ -40,7 +43,7 @@ export function buildSalesDocumentHtml(
   context: SalesDocumentContext,
   autoPrint = true
 ) {
-  const { customer, settings, zones } = context
+  const { customer, settings, zones, cancelled, cancelledOn } = context
   const issueDate = formatDate(document.createdAt)
   const deliveryDate = formatDate(document.deliveryDate)
   const currency = settings?.currency
@@ -76,7 +79,7 @@ export function buildSalesDocumentHtml(
         <style>
           * { box-sizing: border-box; }
           @page { size: A4; margin: 0; }
-          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; }
+          body { color: #111827; font-family: Arial, sans-serif; margin: 0; padding: 14mm 12mm 18mm; position: relative; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           .zone-label { color: #111827; font-size: 13px; margin: 0 0 10px; }
           .header { align-items: center; border-bottom: 2px solid #111827; display: flex; justify-content: space-between; padding-bottom: 16px; }
@@ -99,11 +102,14 @@ export function buildSalesDocumentHtml(
           .totals div { display: flex; justify-content: space-between; padding: 7px 0; }
           .totals .grand { border-top: 2px solid #111827; font-size: 18px; font-weight: 700; }
           .print-date { bottom: 8mm; color: #4b5563; font-size: 11px; position: fixed; right: 12mm; }
+          .cancelled-stamp { border: 6px solid rgba(220, 38, 38, .55); border-radius: 12px; color: rgba(220, 38, 38, .55); font-size: 84px; font-weight: 800; left: 50%; letter-spacing: .12em; padding: 6px 28px; pointer-events: none; position: absolute; top: 330px; transform: translateX(-50%) rotate(-18deg); white-space: nowrap; z-index: 10; }
+          .cancelled-line { color: #b91c1c !important; font-weight: 700; }
           @media screen { body { padding: 32px; } .print-date { bottom: 20px; right: 32px; } }
           @media print { button { display: none; } }
         </style>
       </head>
       <body>
+        ${cancelled ? '<div class="cancelled-stamp" data-cancelled-stamp>CANCELLED</div>' : ''}
         <p class="zone-label">${escapeHtml(zoneLabel)}</p>
         <div class="header">
           <div class="brand">
@@ -118,6 +124,7 @@ export function buildSalesDocumentHtml(
             <p><strong>No:</strong> ${invoiceNumber}</p>
             <p><strong>Issue:</strong> ${issueDate}</p>
             <p><strong>Planned delivery:</strong> ${deliveryDate}</p>
+            ${cancelled ? `<p class="cancelled-line">Status: CANCELLED${cancelledOn ? ` on ${formatDate(cancelledOn)}` : ''}</p>` : ''}
           </div>
         </div>
 
@@ -133,7 +140,7 @@ export function buildSalesDocumentHtml(
             <h2>Prepared By</h2>
             <p><strong>${escapeHtml(document.salesPersonName)}</strong></p>
             <p class="sale-type">Sale type: <strong>${SALE_TYPE_LABELS[saleTypeOf(document)]}</strong></p>
-            <p>Payment status: ${document.due > 0 ? 'Due' : 'Paid'}</p>
+            <p>Payment status: ${cancelled ? (document.paid > 0 ? 'Cancelled, paid amount held as advance' : 'Cancelled, nothing due') : document.due > 0 ? 'Due' : 'Paid'}</p>
           </div>
         </div>
 
@@ -155,9 +162,10 @@ export function buildSalesDocumentHtml(
           <div><span>Discount</span><strong>${formatCurrency(document.discount ?? 0, currency)}</strong></div>
           <div><span>Payable amount</span><strong>${formatCurrency(document.total, currency)}</strong></div>
           <div><span>Paid</span><strong>${formatCurrency(document.paid, currency)}</strong></div>
-          <div class="grand"><span>Due amount</span><strong>${formatCurrency(document.due, currency)}</strong></div>
+          <div class="grand"><span>Due amount</span><strong>${cancelled ? 'Cancelled' : formatCurrency(document.due, currency)}</strong></div>
           ${
-            document.totalDueAfter !== undefined
+            // The dealer's due at approval no longer holds once the bill is off their sheet.
+            document.totalDueAfter !== undefined && !cancelled
               ? `<div><span>Previous due</span><strong>${formatDealerBalance(document.previousDue ?? 0, currency)}</strong></div>
           <div class="grand"><span>Total due</span><strong>${formatDealerBalance(document.totalDueAfter, currency)}</strong></div>`
               : ''

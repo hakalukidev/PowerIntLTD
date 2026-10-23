@@ -245,7 +245,7 @@ test.describe('Stock per warehouse', () => {
   test.afterAll(async () => {
     if (!db) return
     const ours = Object.values(ids)
-    for (const section of ['warehouses', 'suppliers', 'products', 'customers', 'orders', 'orderRequests', 'purchaseRequests', 'purchases', 'stockTransfers', 'stockAdjustments', 'creditLedgerEntries']) {
+    for (const section of ['warehouses', 'suppliers', 'products', 'customers', 'orders', 'orderRequests', 'orderCancellationRequests', 'purchaseRequests', 'purchases', 'stockTransfers', 'stockAdjustments', 'creditLedgerEntries']) {
       const records = (await db.read<Stored>(`erp/${section}`)) ?? {}
       for (const [id, record] of Object.entries(records)) {
         const text = JSON.stringify(record)
@@ -480,15 +480,30 @@ test.describe('Stock per warehouse', () => {
     await expect(page.getByText(`Post ${approvalBill} for delivery first`)).toBeVisible({ timeout: 20_000 })
     expect(await stock()).toEqual({ dhaka: 7, ctg: 3, available: 8, held: 2 })
 
+    // Cancelling waits for both approvals (it changes the dealer's due); the final approval gives the stock back.
     await pickOption(page, status, names.cancelStatus)
+    await expect(details.getByRole('status')).toContainText('was sent for approval')
+    expect(await stock()).toEqual({ dhaka: 7, ctg: 3, available: 8, held: 2 })
+    await approveThroughBothStages(browser, `Cancel ${approvalBill}`, page)
     await expect.poll(stock).toEqual({ dhaka: 7, ctg: 3, available: 10, held: 0 })
     expect((await db.read<{ stockState: string }>(`erp/orders/${order!.id}`))?.stockState).toBe('released')
 
-    await pickOption(page, status, 'Pending')
+    // Bringing it back is the same request; its final approval holds the stock again.
+    // The invoice may still be open (unless the dev server reloaded the tab during the approvals).
+    if (await details.isVisible()) await page.keyboard.press('Escape')
+    await expect(details).toBeHidden()
+    await navigate(page, '/admin/sales')
+    await page.getByRole('combobox', { name: 'Status filter' }).click()
+    await page.getByRole('option', { name: names.cancelStatus, exact: true }).click()
+    await page.getByPlaceholder('Search bill, customer, product, sales person').fill(approvalBill)
+    await page.getByRole('row', { name: `View invoice ${approvalBill}` }).click()
+    await pickOption(page, details.getByRole('combobox', { name: 'Order status' }), 'Pending')
+    await expect(details.getByRole('status')).toContainText('was sent for approval')
+    await approveThroughBothStages(browser, `Bring back ${approvalBill}`, page)
     await expect.poll(stock).toEqual({ dhaka: 7, ctg: 3, available: 8, held: 2 })
     expect((await db.read<{ stockState: string }>(`erp/orders/${order!.id}`))?.stockState).toBe('reserved')
     expect(await history((row) => row.refLabel === approvalBill), 'holding and giving back change no warehouse: no history').toEqual([])
-    note(testInfo, 'Approved order of 2: available 10 → 8 (held 2); Cancelled → 10 (held 0); back to Pending → 8 (held 2). Completed refused before posting.')
+    note(testInfo, 'Approved order of 2: available 10 → 8 (held 2); Cancelled (after both approvals) → 10 (held 0); back to Pending (after both approvals) → 8 (held 2). Completed refused before posting.')
   })
 
   test('TC-25.5 opening stock rows, Transfer stock and Stock adjustment fit a 360px phone in dark mode', async ({ page }, testInfo) => {

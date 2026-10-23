@@ -55,6 +55,7 @@ import {
   ORDER_STATUS_COLORS,
   REVENUE_RANGE_OPTIONS,
   RevenueRange,
+  countedOrders,
   toArray,
 } from '@/lib/erp/utils'
 
@@ -67,7 +68,7 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
 export function DashboardScreen() {
   const { data, loading, error, currentUser, saveInvestor } = useERP()
   const snapshot = buildDashboardSnapshot(data, currentUser)
-  const overduePayments = toArray(data?.orders).filter(
+  const overduePayments = countedOrders(data).filter(
     (order) => order.due > 0 && new Date(order.paymentDueDate).getTime() < Date.now()
   ).length
 
@@ -89,7 +90,7 @@ export function DashboardScreen() {
     if (salesRange === 'year') start.setFullYear(start.getFullYear() - 1)
     const query = productQuery.trim().toLowerCase()
 
-    return toArray(data?.orders).flatMap((order) => {
+    return countedOrders(data).flatMap((order) => {
       if (new Date(order.createdAt) < start) return []
       return order.items
         .filter((item) => !query || item.productName.toLowerCase().includes(query))
@@ -103,7 +104,7 @@ export function DashboardScreen() {
           billNumber: order.billNumber,
         }))
     }).sort((a, b) => b.date.localeCompare(a.date))
-  }, [data?.orders, productQuery, salesRange])
+  }, [data, productQuery, salesRange])
   const productSalesQuantity = productSales.reduce((sum, row) => sum + row.quantity, 0)
   const productSalesAmount = productSales.reduce((sum, row) => sum + row.amount, 0)
 
@@ -184,6 +185,7 @@ export function DashboardScreen() {
             return (
               <Card
                 key={item.key}
+                data-testid={`kpi-${item.key}`}
                 className="overflow-hidden border-border/70 shadow-sm transition-transform hover:-translate-y-0.5"
                 style={{
                   borderTopWidth: 3,

@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ExpenseInput, OrderRecord } from '@/lib/erp/types'
 import { useERP } from '@/lib/erp/provider'
 import { useZoneAccess } from '@/lib/erp/useZoneAccess'
-import { formatCurrency, formatDate, formatTableAmount, getExpenseCategories, isApprovedExpense, receivableOf, toArray } from '@/lib/erp/utils'
+import { countedOrders, formatCurrency, formatDate, formatTableAmount, getExpenseCategories, isApprovedExpense, receivableOf, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function dateInputValue(date = new Date()) {
@@ -90,9 +90,10 @@ export default function FinancePage() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [expenseForm, setExpenseForm] = useState(emptyExpenseForm)
 
+  // Cancelled orders are no sale.
   const orders = useMemo(
-    () => toArray(data?.orders).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [data?.orders]
+    () => countedOrders(data).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    [data]
   )
   const purchases = useMemo(
     () => toArray(data?.purchases).sort((left, right) => right.createdAt.localeCompare(left.createdAt)),

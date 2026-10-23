@@ -37,6 +37,7 @@ import {
   formatTableAmount,
   getReadableOrderState,
   isCommitmentApproved,
+  isOrderCancelled,
   isZoneInCharge,
   partyCode,
   receivableOf,
@@ -269,7 +270,9 @@ export default function CustomersPage() {
   const customerRows = useMemo(() => {
     return customers
       .map((customer) => {
-        const customerOrders = orders.filter((order) => order.customerId === customer.id)
+        const allOrders = orders.filter((order) => order.customerId === customer.id)
+        // Cancelled orders are no purchase; the dealer still has orders on record.
+        const customerOrders = allOrders.filter((order) => !isOrderCancelled(data?.settings, order))
         const purchaseTotal = customerOrders.reduce((sum, order) => sum + order.total, 0)
         const lastOrder = [...customerOrders].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
 
@@ -279,11 +282,11 @@ export default function CustomersPage() {
           purchaseTotal,
           dueTotal: customerOrders.reduce((sum, order) => sum + order.due, 0),
           lastPurchaseDate: lastOrder?.createdAt ?? customer.updatedAt,
-          hasOrders: customerOrders.length > 0,
+          hasOrders: allOrders.length > 0,
         }
       })
       .sort((left, right) => right.purchaseTotal - left.purchaseTotal)
-  }, [customers, orders])
+  }, [customers, orders, data?.settings])
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -815,8 +818,9 @@ export default function CustomersPage() {
     const customerOrders = orders
       .filter((order) => order.customerId === customer.id)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    const purchaseTotal = customerOrders.reduce((sum, order) => sum + order.total, 0)
-    const paidTotal = customerOrders.reduce((sum, order) => sum + order.paid, 0)
+    const countedCustomerOrders = customerOrders.filter((order) => !isOrderCancelled(data?.settings, order))
+    const purchaseTotal = countedCustomerOrders.reduce((sum, order) => sum + order.total, 0)
+    const paidTotal = countedCustomerOrders.reduce((sum, order) => sum + order.paid, 0)
     const photo = customer.dealerPhotoUrl || customer.passportPhotoUrl
     const address = [customer.location, customer.thana, customer.district]
       .filter(Boolean)

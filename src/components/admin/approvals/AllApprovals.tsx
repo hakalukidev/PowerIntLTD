@@ -7,6 +7,7 @@ import type {
   ChangeRequestRecord,
   EditableSubmissionKind,
   LedgerEntryRequestRecord,
+  OrderCancellationRequestRecord,
   OrderRequestRecord,
   PurchaseRequestRecord,
   StockAdjustmentRecord,
@@ -18,6 +19,7 @@ import { cn } from '@/lib/utils'
 import { ChangeRequestCard, useChangeReview } from './ChangeApprovals'
 import { LedgerEntryCard, useLedgerEntryReview } from './LedgerEntryApprovals'
 import { EditOrderDialog, OrderRequestCard, useOrderReview } from './OrderApprovals'
+import { OrderCancellationCard, useOrderCancellationReview } from './OrderCancellationApprovals'
 import { PurchaseRequestCard, usePurchaseReview } from './PurchaseApprovals'
 import { StockAdjustmentCard, StockTransferCard, useStockAdjustmentReview, useStockTransferReview } from './StockApprovals'
 import { EditSubmissionDialog, SubmissionCard, buildSubmissionRows, useSubmissionReview, type SubmissionRow } from './SubmissionApprovals'
@@ -27,6 +29,7 @@ type Item =
   | { type: 'order'; id: string; at: string; request: OrderRequestRecord }
   | { type: EditableSubmissionKind; id: string; at: string; row: SubmissionRow }
   | { type: 'ledger'; id: string; at: string; request: LedgerEntryRequestRecord }
+  | { type: 'cancellation'; id: string; at: string; request: OrderCancellationRequestRecord }
   | { type: 'change'; id: string; at: string; request: ChangeRequestRecord }
   | { type: 'purchase'; id: string; at: string; request: PurchaseRequestRecord }
   | { type: 'transfer'; id: string; at: string; transfer: StockTransferRecord }
@@ -36,6 +39,7 @@ const TYPE_BADGES: Record<Item['type'], { label: string; className: string }> = 
   order: { label: 'Order', className: 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300' },
   deposits: { label: 'Deposit', className: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' },
   ledger: { label: 'Ledger entry', className: 'bg-sky-500/15 text-sky-700 dark:text-sky-300' },
+  cancellation: { label: 'Order cancellation', className: 'bg-rose-500/15 text-rose-700 dark:text-rose-300' },
   supplierPayments: { label: 'Payment', className: 'bg-violet-500/15 text-violet-700 dark:text-violet-300' },
   expenses: { label: 'Expense', className: 'bg-orange-500/15 text-orange-700 dark:text-orange-300' },
   change: { label: 'Record change', className: 'bg-slate-500/15 text-slate-700 dark:text-slate-300' },
@@ -52,13 +56,14 @@ function TypeBadge({ type }: { type: Item['type'] }) {
   )
 }
 
-/** Every pending order, deposit, ledger entry, payment, expense, purchase, stock transfer and adjustment, and record change in one list, newest first. */
+/** Every pending order, order cancellation, deposit, ledger entry, payment, expense, purchase, stock transfer and adjustment, and record change in one list, newest first. */
 export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
   const { data } = useERP()
   const [feedback, setFeedback] = useState<Feedback>(null)
   const orders = useOrderReview(setFeedback)
   const submissions = useSubmissionReview(setFeedback)
   const ledger = useLedgerEntryReview(setFeedback)
+  const cancellations = useOrderCancellationReview(setFeedback)
   const changes = useChangeReview(setFeedback)
   const purchases = usePurchaseReview(setFeedback)
   const transfers = useStockTransferReview(setFeedback)
@@ -74,6 +79,7 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
     )
     return [
       ...pending(toArray(data.orderRequests)).map((request): Item => ({ type: 'order', id: request.id, at: request.createdAt, request })),
+      ...pending(toArray(data.orderCancellationRequests)).map((request): Item => ({ type: 'cancellation', id: request.id, at: request.createdAt, request })),
       ...submissionItems,
       ...pending(toArray(data.ledgerEntryRequests)).map((request): Item => ({ type: 'ledger', id: request.id, at: request.createdAt, request })),
       ...pending(toArray(data.changeRequests)).map((request): Item => ({ type: 'change', id: request.id, at: request.createdAt, request })),
@@ -99,6 +105,17 @@ export function AllApprovals({ isAdmin }: { isAdmin: boolean }) {
               busy={orders.busyId === item.id}
               onReview={(decision) => void orders.review(item.request, decision)}
               onEdit={() => setEditingOrder(item.request)}
+            />
+          )
+        }
+        if (item.type === 'cancellation') {
+          return (
+            <OrderCancellationCard
+              key={`cancellation-${item.id}`}
+              request={item.request}
+              badge={badge}
+              busy={cancellations.busyId === item.id}
+              onReview={(decision) => void cancellations.review(item.request, decision)}
             />
           )
         }

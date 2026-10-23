@@ -1,5 +1,5 @@
 import type { ERPData } from '@/lib/erp/types'
-import { formatCurrency, formatDate, formatDealerBalance, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
+import { countedOrders, formatCurrency, formatDate, formatDealerBalance, getReadableOrderState, isApprovedExpense, toArray, userRoleNames } from '@/lib/erp/utils'
 import { formatWarehouseSplit } from './stock'
 
 export type ReportFieldType = 'string' | 'number' | 'currency' | 'date' | 'boolean'
@@ -36,7 +36,8 @@ export const REPORT_SOURCES: ReportSource[] = [
     description: 'Every bill raised across all customers with payment and delivery status.',
     rows: (data) => {
       const customers = toArray(data.customers)
-      return toArray(data.orders).map((order) => {
+      // Cancelled orders are no sale, so they are not in the report.
+      return countedOrders(data).map((order) => {
         const customer = customers.find((entry) => entry.id === order.customerId)
         return {
           billNumber: order.billNumber,
@@ -321,7 +322,7 @@ export const REPORT_SOURCES: ReportSource[] = [
     label: 'User Performance',
     description: 'Orders, revenue, and due amounts attributed to each sales user.',
     rows: (data) => {
-      const orders = toArray(data.orders)
+      const orders = countedOrders(data)
       return toArray(data.users).map((user) => {
         const userOrders = orders.filter((order) => order.salesPersonId === user.id)
         return {

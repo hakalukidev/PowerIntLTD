@@ -1,5 +1,7 @@
 # Deploying 27 (stock history)
 
+> **Replaced by [DEPLOY.md](DEPLOY.md).** Kept for reference only; deploy with the single checklist in DEPLOY.md, which merges this file with the others in the right order.
+
 Deploy off-hours, when nobody is receiving, transferring, adjusting or delivering stock. Do this
 after 25 (stock per warehouse) is deployed and its migration applied. All commands run from the
 repository root with the live service account in `.env` / `.env.local`. Scripts are dry runs

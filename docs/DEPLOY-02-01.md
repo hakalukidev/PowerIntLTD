@@ -1,5 +1,7 @@
 # Deploying 02 (two-stage approval) and 01 (role permission matrix) together
 
+> **Replaced by [DEPLOY.md](DEPLOY.md).** Kept for reference only; deploy with the single checklist in DEPLOY.md, which merges this file with the others in the right order.
+
 Deploy off-hours. **From step 3 until step 5 is live, nobody edits roles** in Role Management. The
 old role editor drops permission ids it does not know (`approvals.*`, `<module>.create`), so a role
 saved there in that window loses them. Step 6 shows how to repair a role if that happens anyway.

@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { Check, Edit, Eye, Landmark, MapPin, Package, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
+import { Check, Edit, Landmark, MapPin, Package, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import {
@@ -12,6 +12,7 @@ import {
   supplierTypeLabels,
   typeToneClass,
 } from '@/components/admin/suppliers/SupplierDialogs'
+import { PendingReplaceBadge } from '@/components/admin/suppliers/SupplierReturns'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,7 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, formatTableAmount, getProductStatus, toArray } from '@/lib/erp/utils'
+import { computeSupplierReturns, formatCurrency, formatDate, formatTableAmount, getProductStatus, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 function getLandedCost(supplier: SupplierRecord) {
@@ -53,6 +54,9 @@ function productStatusClass(status: ReturnType<typeof getProductStatus>) {
 
 const MAX_PRODUCT_MATCHES = 6
 
+/** The client does not need the LC status column for now. Set to `true` to show it in the table again. */
+const SHOW_LC_STATUS_COLUMN = false
+
 export default function SuppliersPage() {
   const { data, saveSupplier, deleteSupplier, changesNeedApproval, hasPermission } = useERP()
   const canCreate = hasPermission('suppliers.create')
@@ -62,6 +66,7 @@ export default function SuppliersPage() {
   const purchases = useMemo(() => toArray(data?.purchases), [data?.purchases])
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const currency = data?.settings.currency
+  const returnSummary = useMemo(() => computeSupplierReturns(data), [data])
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<SupplierRecord['supplierType'] | 'all'>('all')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -396,7 +401,7 @@ export default function SuppliersPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Supplier and import data table</CardTitle>
-              <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location.</CardDescription>
+              <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location. Click a row for full details.</CardDescription>
             </div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(220px,1fr)_190px_auto]">
               <div className="relative col-span-2 sm:col-span-1">
@@ -434,16 +439,23 @@ export default function SuppliersPage() {
                   <TableRow className="bg-muted/40 hover:bg-muted/40">
                     <TableHead>Supplier</TableHead>
                     <TableHead>Contact</TableHead>
-                    <TableHead>LC status</TableHead>
-                    <TableHead>Import costs</TableHead>
-                    <TableHead>Landed cost</TableHead>
+                    {SHOW_LC_STATUS_COLUMN ? <TableHead>LC status</TableHead> : null}
                     <TableHead>Purchase history</TableHead>
+                    <TableHead>Replace view</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ supplier, productNames, purchaseCount, purchaseTotal, assignedProducts, lastPurchaseDate, landedCost, hasHistory }) => (
-                    <TableRow key={supplier.id}>
+                  {filteredRows.map(({ supplier, productNames, purchaseCount, purchaseTotal, assignedProducts, lastPurchaseDate, hasHistory }) => (
+                    <TableRow
+                      key={supplier.id}
+                      className="cursor-pointer"
+                      tabIndex={0}
+                      onClick={() => setViewingSupplierId(supplier.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && event.target === event.currentTarget) setViewingSupplierId(supplier.id)
+                      }}
+                    >
                       <TableCell className="min-w-40">
                         <div>
                           <p className="font-semibold">{supplier.name}</p>
@@ -484,7 +496,8 @@ export default function SuppliersPage() {
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-36">
+                      {SHOW_LC_STATUS_COLUMN ? (
+                      <TableCell className="min-w-36" onClick={(event) => event.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild disabled={!canEdit}>
                             <Button
@@ -506,18 +519,7 @@ export default function SuppliersPage() {
                         </DropdownMenu>
                         <p className="mt-2 text-xs text-muted-foreground">{supplier.lcNumber || 'No LC number'}</p>
                       </TableCell>
-                      <TableCell className="min-w-40">
-                        <div className="space-y-1 text-xs text-muted-foreground">
-                          <p>Product: {formatTableAmount(supplier.productCost, supplier.currency)}</p>
-                          <p>Shipping: {formatTableAmount(supplier.shippingCost, supplier.currency)}</p>
-                          <p>Customs: {formatTableAmount(supplier.customsDuty, supplier.currency)}</p>
-                          <p>Other: {formatTableAmount(supplier.otherCost, supplier.currency)}</p>
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-32">
-                        <p className="font-semibold">{formatTableAmount(landedCost, supplier.currency)}</p>
-                        <p className="text-xs text-muted-foreground">Total until warehouse</p>
-                      </TableCell>
+                      ) : null}
                       <TableCell className="min-w-36">
                         <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                         <p className="text-xs text-muted-foreground">
@@ -525,17 +527,14 @@ export default function SuppliersPage() {
                         </p>
                         <p className="text-xs text-muted-foreground">Last {formatDate(lastPurchaseDate)}</p>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="min-w-32">
+                        <PendingReplaceBadge pending={returnSummary[supplier.id]?.pending ?? 0} />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {(returnSummary[supplier.id]?.sent ?? 0).toLocaleString('en-BD')} returned, {(returnSummary[supplier.id]?.received ?? 0).toLocaleString('en-BD')} received
+                        </p>
+                      </TableCell>
+                      <TableCell onClick={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-9 w-9"
-                            onClick={() => setViewingSupplierId(supplier.id)}
-                            aria-label={`View ${supplier.name}`}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
                           {canEdit ? (
                             <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(supplier)} aria-label={`Edit ${supplier.name}`}>
                               <Edit className="h-4 w-4" />
@@ -559,7 +558,7 @@ export default function SuppliersPage() {
                   ))}
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={SHOW_LC_STATUS_COLUMN ? 6 : 5} className="h-28 text-center text-muted-foreground">
                         No suppliers found.
                       </TableCell>
                     </TableRow>

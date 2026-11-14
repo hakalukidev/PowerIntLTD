@@ -13,9 +13,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { SupplierReturnSection } from '@/components/admin/suppliers/SupplierReturns'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
@@ -979,6 +981,21 @@ export function SupplierDetailsDialog({
   const companyName = data?.settings.companyName ?? 'Power International BD'
   const currency = data?.settings.currency
   const payables = useMemo(() => computeSupplierPayables(data), [data])
+  const supplierId = supplier?.id
+  const supplierPurchases = useMemo(
+    () =>
+      toArray(data?.purchases)
+        .filter((purchase) => purchase.supplierId === supplierId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    [data?.purchases, supplierId]
+  )
+  const supplierPayments = useMemo(
+    () =>
+      toArray(data?.supplierPayments)
+        .filter((payment) => payment.supplierId === supplierId && payment.status !== 'rejected')
+        .sort((left, right) => right.date.localeCompare(left.date)),
+    [data?.supplierPayments, supplierId]
+  )
   const [detailsExportError, setDetailsExportError] = useState<string | null>(null)
   const [isExportingImage, setIsExportingImage] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
@@ -1038,7 +1055,7 @@ export function SupplierDetailsDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto sm:max-h-[calc(100dvh-3rem)]">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto sm:max-h-[calc(100dvh-3rem)]">
     <div className="space-y-5">
       <DialogHeader>
         <div className="flex items-center gap-4">
@@ -1063,23 +1080,84 @@ export function SupplierDetailsDialog({
 
       {payable ? (
         <div className="space-y-3 rounded-2xl border border-border/70 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payable</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Purchase &amp; payment account</p>
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            {field(['Total purchase', formatCurrency(payable.purchaseTotal, currency)])}
             {field(['Opening due', formatCurrency(payable.openingDue, currency)])}
-            {field(['Purchases', formatCurrency(payable.purchaseTotal, currency)])}
-            {field(['Paid (approved)', formatCurrency(payable.paid, currency)])}
+            {field(['Paid amount', formatCurrency(payable.paid, currency)])}
             <div>
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">{payable.payable < 0 ? 'Advance' : 'Due'}</p>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">{payable.payable < 0 ? 'Paid in advance' : 'Outstanding due'}</p>
               <p className={cn('mt-0.5 font-semibold', payable.payable > 0 && 'text-rose-600 dark:text-rose-400')}>
                 {formatCurrency(Math.abs(payable.payable), currency)}
               </p>
             </div>
           </div>
-          {payable.pendingPayment > 0 ? (
-            <p className="text-xs text-muted-foreground">{formatCurrency(payable.pendingPayment, currency)} in payments awaiting approval.</p>
-          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Outstanding due = opening due + total purchase − paid amount.
+            {payable.pendingPayment > 0 ? ` ${formatCurrency(payable.pendingPayment, currency)} in payments is awaiting approval and not counted as paid yet.` : ''}
+          </p>
+
+          <p className="pt-1 text-xs font-medium text-muted-foreground">Purchases ({supplierPurchases.length})</p>
+          {supplierPurchases.length ? (
+            <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Qty</TableHead>
+                    <TableHead className="text-right">Unit cost</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {supplierPurchases.map((purchase) => (
+                    <TableRow key={purchase.id}>
+                      <TableCell className="whitespace-nowrap">{formatDate(purchase.createdAt)}</TableCell>
+                      <TableCell>{purchase.productName}</TableCell>
+                      <TableCell className="text-right">{purchase.quantity.toLocaleString('en-BD')}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right">{formatCurrency(purchase.unitCost, purchase.currency)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right font-medium">{formatCurrency(purchase.total, currency)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No purchases recorded yet.</p>
+          )}
+
+          <p className="pt-1 text-xs font-medium text-muted-foreground">Payments ({supplierPayments.length})</p>
+          {supplierPayments.length ? (
+            <div className="max-h-64 overflow-auto rounded-xl border border-border/70">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Method</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {supplierPayments.map((payment) => (
+                    <TableRow key={payment.id}>
+                      <TableCell className="whitespace-nowrap">{formatDate(payment.date)}</TableCell>
+                      <TableCell className="capitalize">{payment.method}</TableCell>
+                      <TableCell className="capitalize">{payment.status === 'approved' ? 'Paid' : 'Awaiting approval'}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right font-medium">{formatCurrency(payment.amount, currency)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No payments recorded yet.</p>
+          )}
         </div>
       ) : null}
+
+      <SupplierReturnSection supplierId={supplier.id} />
 
       <div className="space-y-3 rounded-2xl border border-border/70 p-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Bank details</p>

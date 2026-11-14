@@ -1200,6 +1200,37 @@ export type ReplacementReturnInput = {
   courierName?: string
 }
 
+/** `sent`: faulty products handed back to the supplier. `received`: replacements the supplier gave back for them. */
+export type SupplierReturnDirection = 'sent' | 'received'
+
+/** One line of a supplier's product return sheet. What was sent minus what was received is still due as replacement. */
+export type SupplierReturnRecord = {
+  id: string
+  supplierId: string
+  supplierName: string
+  direction: SupplierReturnDirection
+  /** Empty when the product was typed in and is not in the product list. */
+  productId: string
+  productName: string
+  quantity: number
+  date: string
+  note: string
+  createdById: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SupplierReturnInput = {
+  supplierId: string
+  direction: SupplierReturnDirection
+  productId?: string
+  productName: string
+  quantity: number
+  date: string
+  note?: string
+}
+
 /** `sender`: a company account payments go out from. `receiver`: an account payments go to (often a supplier's). */
 export type BankAccountSide = 'sender' | 'receiver'
 
@@ -1369,6 +1400,7 @@ export type ERPData = {
   complaints: Record<string, ComplaintRecord>
   replacements: Record<string, ReplacementRecord>
   replacementReturns: Record<string, ReplacementReturnRecord>
+  supplierReturns: Record<string, SupplierReturnRecord>
   bankAccounts: Record<string, BankAccountRecord>
   supplierPayments: Record<string, SupplierPaymentRecord>
   orderRequests: Record<string, OrderRequestRecord>

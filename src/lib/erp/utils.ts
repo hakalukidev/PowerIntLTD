@@ -576,6 +576,20 @@ export function computeSupplierPayables(data: ERPData | null) {
   return payables
 }
 
+export type SupplierReturnSummary = { sent: number; received: number; pending: number }
+
+/** Per supplier: products sent back, replacements received, and how many are still due from the supplier. */
+export function computeSupplierReturns(data: ERPData | null) {
+  const summary: Record<string, SupplierReturnSummary> = {}
+  toArray(data?.supplierReturns).forEach((item) => {
+    const row = (summary[item.supplierId] ??= { sent: 0, received: 0, pending: 0 })
+    row[item.direction] += item.quantity
+    row.pending = Math.max(row.sent - row.received, 0)
+  })
+
+  return summary
+}
+
 export async function exportXlsx(filename: string, sheetName: string, headers: string[], rows: (string | number)[][]) {
   const XLSX = await import('xlsx')
   const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows])

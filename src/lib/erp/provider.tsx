@@ -75,6 +75,7 @@ import type {
   SettingsRecord,
   SupplierInput,
   SupplierPaymentInput,
+  SupplierReturnInput,
   SupplierRecord,
   TaskInput,
   TaskRecord,
@@ -291,6 +292,8 @@ type ERPContextValue = {
   reviewReplacementReturn: (returnId: string, decision: 'approve' | 'reject') => Promise<void>
   submitExpense: (input: ExpenseInput) => Promise<void>
   reviewExpense: (expenseId: string, decision: 'approve' | 'reject') => Promise<void>
+  saveSupplierReturn: (input: SupplierReturnInput) => Promise<void>
+  deleteSupplierReturn: (returnId: string) => Promise<void>
   saveBankAccount: (input: BankAccountInput, accountId?: string) => Promise<void>
   deleteBankAccount: (accountId: string) => Promise<void>
   submitSupplierPayment: (input: SupplierPaymentInput) => Promise<void>
@@ -586,6 +589,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     complaints: source.complaints ?? {},
     replacements: source.replacements ?? {},
     replacementReturns: source.replacementReturns ?? {},
+    supplierReturns: source.supplierReturns ?? {},
     bankAccounts: source.bankAccounts ?? {},
     supplierPayments: source.supplierPayments ?? {},
     orderRequests: source.orderRequests ?? {},
@@ -4323,6 +4327,79 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     )
   }
 
+  /** Adds a line to a supplier's product return sheet: products sent back, or replacements received. */
+  async function saveSupplierReturn(input: SupplierReturnInput) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.edit') && !hasPermissionCheck(data, currentUser, 'suppliers.create')) {
+      throw new Error('You do not have permission to update the supplier return sheet.')
+    }
+
+    const supplier = data.suppliers[input.supplierId]
+    if (!supplier) {
+      throw new Error('Select a supplier.')
+    }
+    const product = input.productId ? data.products[input.productId] : null
+    const productName = (product?.name ?? input.productName).trim()
+    if (!productName) {
+      throw new Error('Enter the product.')
+    }
+    const quantity = Math.floor(Number(input.quantity))
+    if (!(quantity >= 1)) {
+      throw new Error('Quantity must be at least 1.')
+    }
+    if (!input.date) {
+      throw new Error('Enter the date.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('supplier_return')
+    const now = new Date().toISOString()
+    await update(ref(db, 'erp/supplierReturns'), {
+      [id]: {
+        id,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        direction: input.direction,
+        productId: product?.id ?? '',
+        productName,
+        quantity,
+        date: input.date,
+        note: input.note?.trim() ?? '',
+        createdById: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+    await writeActivity(
+      input.direction === 'sent' ? 'supplier_return_sent' : 'supplier_return_received',
+      'suppliers',
+      input.direction === 'sent'
+        ? `Returned ${quantity} x ${productName} to ${supplier.name}.`
+        : `Received ${quantity} x ${productName} as replacement from ${supplier.name}.`
+    )
+  }
+
+  async function deleteSupplierReturn(returnId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.delete')) {
+      throw new Error('You do not have permission to delete supplier return entries.')
+    }
+
+    const item = data.supplierReturns[returnId]
+    if (!item) {
+      throw new Error('Return entry not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/supplierReturns'), { [returnId]: null })
+    await writeActivity('supplier_return_deleted', 'suppliers', `Removed a return entry of ${item.quantity} x ${item.productName} (${item.supplierName}).`)
+  }
+
   function bankAccountLabel(accountId: string) {
     const account = data?.bankAccounts[accountId]
     return account ? `${account.bankName} — ${account.accountName} (${account.accountNumber})` : ''
@@ -6609,6 +6686,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       reviewReplacementReturn: viewOnlyForZone(reviewReplacementReturn),
       submitExpense,
       reviewExpense,
+      saveSupplierReturn,
+      deleteSupplierReturn,
       saveBankAccount,
       deleteBankAccount,
       submitSupplierPayment,

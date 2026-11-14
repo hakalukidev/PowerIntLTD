@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { Edit, Eye, Landmark, MapPin, Phone, Plus, Search, Trash2 } from 'lucide-react'
+import { Edit, Landmark, MapPin, Phone, Plus, Search, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import {
@@ -10,6 +10,7 @@ import {
   supplierTypeLabels,
   typeToneClass,
 } from '@/components/admin/suppliers/SupplierDialogs'
+import { SupplierReturnSheet } from '@/components/admin/suppliers/SupplierReturns'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -181,7 +182,7 @@ export default function SupplierCrmPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Supplier data table</CardTitle>
-              <CardDescription>Search by name, phone, company, NID, trade license, or location.</CardDescription>
+              <CardDescription>Search by name, phone, company, NID, trade license, or location. Click a row for the purchase, paid, and due account.</CardDescription>
             </div>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-[minmax(220px,1fr)_auto]">
               <div className={cn('relative col-span-2 xl:col-span-1', !canCreate && 'xl:col-span-2')}>
@@ -251,7 +252,15 @@ export default function SupplierCrmPage() {
                     const documentCount = attachedDocuments(supplier)
 
                     return (
-                      <TableRow key={supplier.id}>
+                      <TableRow
+                        key={supplier.id}
+                        className="cursor-pointer"
+                        tabIndex={0}
+                        onClick={() => setViewingSupplierId(supplier.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && event.target === event.currentTarget) setViewingSupplierId(supplier.id)
+                        }}
+                      >
                         <TableCell sticky className="md:min-w-56">
                           <div className="flex items-center gap-3">
                             {/* Hidden on phones to leave room for more columns. */}
@@ -326,11 +335,8 @@ export default function SupplierCrmPage() {
                             {pendingPayment > 0 ? ` · ${formatTableAmount(pendingPayment, currency)} pending` : ''}
                           </p>
                         </TableCell>
-                        <TableCell>
+                        <TableCell onClick={(event) => event.stopPropagation()}>
                           <div className="flex justify-end gap-2">
-                            <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => setViewingSupplierId(supplier.id)} aria-label={`View ${supplier.name}`}>
-                              <Eye className="h-4 w-4" />
-                            </Button>
                             {canEdit ? (
                               <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => openEditDialog(supplier)} aria-label={`Edit ${supplier.name}`}>
                                 <Edit className="h-4 w-4" />
@@ -365,6 +371,8 @@ export default function SupplierCrmPage() {
             </div>
           </CardContent>
         </Card>
+
+        <SupplierReturnSheet onOpenSupplier={setViewingSupplierId} />
       </div>
 
       <SupplierFormDialog key={formKey} open={dialogOpen} onOpenChange={setDialogOpen} supplier={editingSupplier} onSaved={setFeedback} />

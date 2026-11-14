@@ -1,6 +1,44 @@
+"use client"
+
 import * as React from "react"
+import { ZoomIn, ZoomOut } from "lucide-react"
 
 import { cn } from "@/lib/utils/index"
+
+const ZOOM_STEPS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.15, 1.3, 1.5]
+const ZOOM_STORAGE_KEY = "table-zoom"
+const ZOOM_EVENT = "table-zoom-change"
+
+/** The phone table zoom level, shared by every table and remembered on the device. */
+function useTableZoom() {
+  const [zoom, setZoom] = React.useState(1)
+
+  React.useEffect(() => {
+    const read = () => {
+      try {
+        const saved = Number(window.localStorage.getItem(ZOOM_STORAGE_KEY))
+        setZoom(ZOOM_STEPS.includes(saved) ? saved : 1)
+      } catch {
+        setZoom(1)
+      }
+    }
+    read()
+    window.addEventListener(ZOOM_EVENT, read)
+    return () => window.removeEventListener(ZOOM_EVENT, read)
+  }, [])
+
+  const change = React.useCallback((next: number) => {
+    setZoom(next)
+    try {
+      window.localStorage.setItem(ZOOM_STORAGE_KEY, String(next))
+    } catch {
+      // Private mode: the zoom still applies to this table.
+    }
+    window.dispatchEvent(new Event(ZOOM_EVENT))
+  }, [])
+
+  return [zoom, change] as const
+}
 
 const TEXT_SIZE = /^text-(xs|sm|base|lg|xl|\d|\[)/
 const PADDING_X = /^(p|px|pl|pr)-/
@@ -19,15 +57,46 @@ function phoneSizes(className: string | undefined, sizes: Array<[string, RegExp]
 const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-x-auto overscroll-x-contain">
-    <table
-      ref={ref}
-      className={cn("w-full caption-bottom text-sm", phoneSizes(className, [["max-md:text-xs", TEXT_SIZE]]), className)}
-      {...props}
-    />
-  </div>
-))
+>(({ className, style, ...props }, ref) => {
+  const [zoom, setZoom] = useTableZoom()
+  const step = ZOOM_STEPS.indexOf(zoom)
+  const zoomButton = "flex h-7 w-7 items-center justify-center rounded-md border border-border/70 bg-background text-foreground disabled:opacity-40"
+
+  return (
+    <div className="relative w-full">
+      {/* Phones only: make the table smaller to fit more columns, or bigger to read it. */}
+      <div className="flex items-center justify-end gap-1.5 border-b border-border/70 px-2 py-1 text-xs text-muted-foreground md:hidden print:hidden">
+        <button type="button" className={zoomButton} onClick={() => setZoom(ZOOM_STEPS[step - 1])} disabled={step <= 0} aria-label="Zoom out table">
+          <ZoomOut className="h-4 w-4" />
+        </button>
+        <button type="button" className="min-w-10 text-center tabular-nums" onClick={() => setZoom(1)} aria-label="Reset table zoom">
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          type="button"
+          className={zoomButton}
+          onClick={() => setZoom(ZOOM_STEPS[step + 1])}
+          disabled={step >= ZOOM_STEPS.length - 1}
+          aria-label="Zoom in table"
+        >
+          <ZoomIn className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="w-full overflow-x-auto overscroll-x-contain">
+        <table
+          ref={ref}
+          className={cn(
+            "w-full caption-bottom text-sm max-md:[zoom:var(--table-zoom)] print:[zoom:1]",
+            phoneSizes(className, [["max-md:text-xs", TEXT_SIZE]]),
+            className
+          )}
+          style={{ ...style, "--table-zoom": zoom } as React.CSSProperties}
+          {...props}
+        />
+      </div>
+    </div>
+  )
+})
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef<

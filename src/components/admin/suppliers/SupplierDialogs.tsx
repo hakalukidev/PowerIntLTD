@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SupplierReturnSection } from '@/components/admin/suppliers/SupplierReturns'
+import { DateInput } from '@/components/ui/date-input'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad'
@@ -102,6 +103,7 @@ type SupplierFormState = {
   passportPhotoPublicId: string
   signatureUrl: string
   signaturePublicId: string
+  supplyStartDate: string
 }
 
 const emptySupplierForm: SupplierFormState = {
@@ -146,6 +148,7 @@ const emptySupplierForm: SupplierFormState = {
   passportPhotoPublicId: '',
   signatureUrl: '',
   signaturePublicId: '',
+  supplyStartDate: '',
 }
 
 export const supplierTypeLabels: Record<SupplierRecord['supplierType'], string> = {
@@ -236,6 +239,7 @@ function formFromSupplier(supplier: SupplierRecord): SupplierFormState {
     passportPhotoPublicId: supplier.passportPhotoPublicId,
     signatureUrl: supplier.signatureUrl,
     signaturePublicId: supplier.signaturePublicId,
+    supplyStartDate: supplier.supplyStartDate,
   }
 }
 
@@ -345,6 +349,9 @@ function buildSupplierFormHtml(
 
         <div class="section">
           <h2>Attached documents</h2>
+          <div class="grid three">
+            ${field('Supply started on', form.supplyStartDate ? formatDate(form.supplyStartDate) : '')}
+          </div>
           <div class="documents">
             ${documentRow('Bank cheque / document', 'bankDocument')}
             ${documentRow('NID copy', 'nidCopy')}
@@ -569,6 +576,7 @@ export function SupplierFormDialog({
         passportPhotoPublicId: finalForm.passportPhotoPublicId,
         signatureUrl: finalForm.signatureUrl,
         signaturePublicId: finalForm.signaturePublicId,
+        supplyStartDate: finalForm.supplyStartDate,
       }
 
       await saveSupplier(input, editingSupplier?.id)
@@ -767,6 +775,13 @@ export function SupplierFormDialog({
                   </p>
                   <Input value={supplierForm.chequeNumber} onChange={(event) => setSupplierForm((current) => ({ ...current, chequeNumber: event.target.value }))} placeholder="e.g. 0123456" />
                 </div>
+              </div>
+              <div className="space-y-2 sm:max-w-xs">
+                <p className="text-sm font-medium text-foreground">
+                  Supply started on <span className="font-normal text-muted-foreground">(optional)</span>
+                </p>
+                <DateInput value={supplierForm.supplyStartDate} onChange={(value) => setSupplierForm((current) => ({ ...current, supplyStartDate: value }))} />
+                <p className="text-xs text-muted-foreground">The day we started taking supply from this supplier.</p>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {renderDocumentUpload('supplierPhoto')}
@@ -1166,6 +1181,7 @@ export function SupplierDetailsDialog({
 
       <div className="space-y-3 rounded-2xl border border-border/70 p-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Documents</p>
+        <div className="text-sm">{field(['Supply started on', supplier.supplyStartDate ? formatDate(supplier.supplyStartDate) : 'Not recorded'])}</div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {documents.map(([label, url]) => (
             <div key={label} className="space-y-1.5">

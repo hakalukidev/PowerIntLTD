@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableZoomBar, ZoomTable } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useERP } from '@/lib/erp/provider'
 import type { PermissionDefinition, RoleDataScope, RoleRecord, UserRecord } from '@/lib/erp/types'
@@ -220,8 +220,10 @@ function PermissionMatrix({
         </div>
       </div>
 
-      <div className="max-h-[420px] overflow-auto rounded-2xl border border-border/70" data-testid="permission-matrix">
-        <table className="w-full min-w-[520px] border-separate border-spacing-0 text-sm">
+      <div className="overflow-hidden rounded-2xl border border-border/70">
+      <TableZoomBar />
+      <div className="max-h-[420px] overflow-auto" data-testid="permission-matrix">
+        <ZoomTable className="w-full min-w-[520px] border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
               <th className="sticky left-0 top-0 z-30 border-b border-border/70 bg-muted px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -334,7 +336,8 @@ function PermissionMatrix({
               ))
             )}
           </tbody>
-        </table>
+        </ZoomTable>
+      </div>
       </div>
     </div>
   )

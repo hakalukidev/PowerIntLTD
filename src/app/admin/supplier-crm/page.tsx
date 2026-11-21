@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierRecord } from '@/lib/erp/types'
-import { computeSupplierPayables, formatCurrency, formatDate, formatTableAmount, partyCode, toArray } from '@/lib/erp/utils'
+import { computeSupplierPayables, formatCurrency, formatTableAmount, partyCode, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const DOCUMENT_FIELDS = [
@@ -107,8 +107,9 @@ export default function SupplierCrmPage() {
           .includes(normalizedQuery)
       const matchesType = typeFilter === 'all' || supplier.supplierType === typeFilter
       const matchesProfile = profileFilter === 'all' || (profileFilter === 'complete') === complete
-      const joined = supplier.createdAt.slice(0, 10)
-      const matchesDate = (!dateFrom || joined >= dateFrom) && (!dateTo || joined <= dateTo)
+      // Suppliers without a recorded supply start date fall back to the day they were added.
+      const since = supplier.supplyStartDate || supplier.createdAt.slice(0, 10)
+      const matchesDate = (!dateFrom || since >= dateFrom) && (!dateTo || since <= dateTo)
 
       return matchesSearch && matchesType && matchesProfile && matchesDate
     })
@@ -223,11 +224,11 @@ export default function SupplierCrmPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">From date</p>
+                <p className="text-xs font-medium text-muted-foreground">Supply from</p>
                 <DateInput value={dateFrom} onChange={(value) => setDateFrom(value)} />
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs font-medium text-muted-foreground">To date</p>
+                <p className="text-xs font-medium text-muted-foreground">Supply to</p>
                 <DateInput value={dateTo} onChange={(value) => setDateTo(value)} />
               </div>
             </div>
@@ -240,7 +241,6 @@ export default function SupplierCrmPage() {
                     <TableHead>Contact</TableHead>
                     <TableHead>Bank</TableHead>
                     <TableHead>Documents</TableHead>
-                    <TableHead>Joined</TableHead>
                     <TableHead>Purchase</TableHead>
                     <TableHead>Payable</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -321,7 +321,6 @@ export default function SupplierCrmPage() {
                             {documentCount} / {DOCUMENT_FIELDS.length} attached
                           </Badge>
                         </TableCell>
-                        <TableCell className="md:min-w-28 md:text-sm">{formatDate(supplier.createdAt)}</TableCell>
                         <TableCell className="md:min-w-32">
                           <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
                           <p className="text-xs text-muted-foreground">{purchaseCount} purchases</p>
@@ -361,7 +360,7 @@ export default function SupplierCrmPage() {
                   })}
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
                         No suppliers found.
                       </TableCell>
                     </TableRow>

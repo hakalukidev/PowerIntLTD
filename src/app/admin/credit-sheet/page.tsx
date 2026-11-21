@@ -29,7 +29,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { DateInput } from '@/components/ui/date-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow, ZoomTable } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { CreditLedgerEntryInput, CustomerRecord } from '@/lib/erp/types'
 import { buildCustomerLedger, customerBalanceSide, ledgerTotalsOf, reversedOrderIds, withRunningBalance } from '@/lib/erp/ledger'
@@ -714,7 +714,7 @@ export default function CreditSheetPage() {
               />
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[560px] border-collapse text-sm">
+                <ZoomTable className="w-full min-w-[560px] border-collapse text-sm">
                   <tbody>
                     <tr>
                       <td className={infoLabel}>Account of</td>
@@ -741,7 +741,7 @@ export default function CreditSheetPage() {
                       <td className={cn(infoValue, 'text-center')}>{partyCode(selectedCustomer)}</td>
                     </tr>
                   </tbody>
-                </table>
+                </ZoomTable>
               </div>
 
               <div className="grid gap-4 rounded-2xl border border-border/70 p-4 text-sm sm:grid-cols-3">

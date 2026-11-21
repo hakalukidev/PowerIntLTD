@@ -132,6 +132,8 @@ export type SupplierRecord = {
   passportPhotoPublicId: string
   signatureUrl: string
   signaturePublicId: string
+  /** `YYYY-MM-DD`: the day we started taking supply from this supplier, or `''` if not recorded. */
+  supplyStartDate: string
   createdAt: string
   updatedAt: string
 }
@@ -1551,6 +1553,8 @@ export type SupplierInput = {
   passportPhotoPublicId?: string
   signatureUrl?: string
   signaturePublicId?: string
+  /** `YYYY-MM-DD`; left out keeps the stored date. */
+  supplyStartDate?: string
 }
 
 export type PurchaseInput = {

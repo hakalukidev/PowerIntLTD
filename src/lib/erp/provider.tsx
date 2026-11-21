@@ -458,6 +458,7 @@ function normalizeSupplierRecord(supplier: SupplierRecord): SupplierRecord {
     bankAccountNumber: supplier.bankAccountNumber || '',
     bankName: supplier.bankName || '',
     bankBranch: supplier.bankBranch || '',
+    supplyStartDate: supplier.supplyStartDate || '',
     bankRoutingNumber: supplier.bankRoutingNumber || '',
     bankSwiftCode: supplier.bankSwiftCode || '',
     mobileBankingNumber: supplier.mobileBankingNumber || '',
@@ -760,6 +761,7 @@ function normalizeSupplierInput(input: SupplierInput, existing?: SupplierRecord 
     passportPhotoPublicId: bankField(input.passportPhotoPublicId, existing?.passportPhotoPublicId),
     signatureUrl: bankField(input.signatureUrl, existing?.signatureUrl),
     signaturePublicId: bankField(input.signaturePublicId, existing?.signaturePublicId),
+    supplyStartDate: bankField(input.supplyStartDate, existing?.supplyStartDate),
   }
 }
 

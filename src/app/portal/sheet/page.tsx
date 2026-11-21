@@ -9,7 +9,7 @@ import { usePortal } from '@/components/portal/PortalShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow, ZoomTable } from '@/components/ui/table'
 import { balanceSide, customerBalanceSide } from '@/lib/erp/ledger'
 import { formatAmount, formatDate } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
@@ -95,7 +95,7 @@ export default function PortalSheetPage() {
       <Card className="border-border/70 shadow-sm">
         <CardContent className="space-y-5 p-4 sm:p-6">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] border-collapse text-sm">
+            <ZoomTable className="w-full min-w-[560px] border-collapse text-sm">
               <tbody>
                 <tr>
                   <td className={infoLabel}>Account of</td>
@@ -130,7 +130,7 @@ export default function PortalSheetPage() {
                   <td className={cn(infoValue, 'text-center')}>{party.code || 'N/A'}</td>
                 </tr>
               </tbody>
-            </table>
+            </ZoomTable>
           </div>
 
           <div className="overflow-x-auto rounded-2xl border border-border/70">

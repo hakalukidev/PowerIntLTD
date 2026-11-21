@@ -54,43 +54,68 @@ function phoneSizes(className: string | undefined, sizes: Array<[string, RegExp]
   return sizes.filter(([, setByPage]) => !own.some((token) => setByPage.test(token))).map(([classes]) => classes)
 }
 
-const Table = React.forwardRef<
-  HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, style, ...props }, ref) => {
+/** Phones only: zoom buttons shared by every table. Also used by hand-built `<table>`s. */
+function TableZoomBar({ className }: { className?: string }) {
   const [zoom, setZoom] = useTableZoom()
   const step = ZOOM_STEPS.indexOf(zoom)
   const zoomButton = "flex h-7 w-7 items-center justify-center rounded-md border border-border/70 bg-background text-foreground disabled:opacity-40"
 
   return (
+    <div className={cn("flex items-center justify-end gap-1.5 border-b border-border/70 px-2 py-1 text-xs text-muted-foreground md:hidden print:hidden", className)}>
+      <button type="button" className={zoomButton} onClick={() => setZoom(ZOOM_STEPS[step - 1])} disabled={step <= 0} aria-label="Zoom out table">
+        <ZoomOut className="h-4 w-4" />
+      </button>
+      <button type="button" className="min-w-10 text-center tabular-nums" onClick={() => setZoom(1)} aria-label="Reset table zoom">
+        {Math.round(zoom * 100)}%
+      </button>
+      <button
+        type="button"
+        className={zoomButton}
+        onClick={() => setZoom(ZOOM_STEPS[step + 1])}
+        disabled={step >= ZOOM_STEPS.length - 1}
+        aria-label="Zoom in table"
+      >
+        <ZoomIn className="h-4 w-4" />
+      </button>
+    </div>
+  )
+}
+
+/** Class and style that apply the shared phone zoom to a hand-built `<table>`. */
+const tableZoomClass = "max-md:[zoom:var(--table-zoom)] print:[zoom:1]"
+function useTableZoomStyle(style?: React.CSSProperties) {
+  const [zoom] = useTableZoom()
+  return { ...style, "--table-zoom": zoom } as React.CSSProperties
+}
+
+/** A plain `<table>` (no styling, no zoom bar) that follows the shared phone zoom. */
+const ZoomTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(
+  ({ className, style, ...props }, ref) => (
+    <table ref={ref} className={cn(tableZoomClass, className)} style={useTableZoomStyle(style)} {...props} />
+  )
+)
+ZoomTable.displayName = "ZoomTable"
+
+const Table = React.forwardRef<
+  HTMLTableElement,
+  React.HTMLAttributes<HTMLTableElement>
+>(({ className, style, ...props }, ref) => {
+  const zoomStyle = useTableZoomStyle(style)
+
+  return (
     <div className="relative w-full">
       {/* Phones only: make the table smaller to fit more columns, or bigger to read it. */}
-      <div className="flex items-center justify-end gap-1.5 border-b border-border/70 px-2 py-1 text-xs text-muted-foreground md:hidden print:hidden">
-        <button type="button" className={zoomButton} onClick={() => setZoom(ZOOM_STEPS[step - 1])} disabled={step <= 0} aria-label="Zoom out table">
-          <ZoomOut className="h-4 w-4" />
-        </button>
-        <button type="button" className="min-w-10 text-center tabular-nums" onClick={() => setZoom(1)} aria-label="Reset table zoom">
-          {Math.round(zoom * 100)}%
-        </button>
-        <button
-          type="button"
-          className={zoomButton}
-          onClick={() => setZoom(ZOOM_STEPS[step + 1])}
-          disabled={step >= ZOOM_STEPS.length - 1}
-          aria-label="Zoom in table"
-        >
-          <ZoomIn className="h-4 w-4" />
-        </button>
-      </div>
+      <TableZoomBar />
       <div className="w-full overflow-x-auto overscroll-x-contain">
         <table
           ref={ref}
           className={cn(
-            "w-full caption-bottom text-sm max-md:[zoom:var(--table-zoom)] print:[zoom:1]",
+            "w-full caption-bottom text-sm",
+            tableZoomClass,
             phoneSizes(className, [["max-md:text-xs", TEXT_SIZE]]),
             className
           )}
-          style={{ ...style, "--table-zoom": zoom } as React.CSSProperties}
+          style={zoomStyle}
           {...props}
         />
       </div>
@@ -218,4 +243,6 @@ export {
   TableRow,
   TableCell,
   TableCaption,
+  TableZoomBar,
+  ZoomTable,
 }

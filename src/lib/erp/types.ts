@@ -1233,6 +1233,38 @@ export type SupplierReturnInput = {
   note?: string
 }
 
+export type SupplierDocumentCategory = 'agreement' | 'lc' | 'invoice' | 'shipping' | 'customs' | 'license' | 'other'
+
+/** A file kept in a supplier's document library (agreement, LC copy, invoice, ...): a photo or a PDF. */
+export type SupplierDocumentRecord = {
+  id: string
+  supplierId: string
+  supplierName: string
+  title: string
+  category: SupplierDocumentCategory
+  url: string
+  publicId: string
+  fileName: string
+  /** `YYYY-MM-DD`: the date on the document (issue date), or `''`. */
+  documentDate: string
+  note: string
+  createdById: string
+  createdByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SupplierDocumentInput = {
+  supplierId: string
+  title: string
+  category: SupplierDocumentCategory
+  url: string
+  publicId: string
+  fileName: string
+  documentDate?: string
+  note?: string
+}
+
 /** `sender`: a company account payments go out from. `receiver`: an account payments go to (often a supplier's). */
 export type BankAccountSide = 'sender' | 'receiver'
 
@@ -1403,6 +1435,7 @@ export type ERPData = {
   replacements: Record<string, ReplacementRecord>
   replacementReturns: Record<string, ReplacementReturnRecord>
   supplierReturns: Record<string, SupplierReturnRecord>
+  supplierDocuments: Record<string, SupplierDocumentRecord>
   bankAccounts: Record<string, BankAccountRecord>
   supplierPayments: Record<string, SupplierPaymentRecord>
   orderRequests: Record<string, OrderRequestRecord>

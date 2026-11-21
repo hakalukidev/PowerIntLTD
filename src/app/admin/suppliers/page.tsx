@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from 'react'
-import { Check, Edit, Landmark, MapPin, Package, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
+import { Check, Edit, FileText, Landmark, MapPin, Package, Phone, Plus, Search, Ship, Trash2 } from 'lucide-react'
 
 import { AdminShell } from '@/components/admin/AdminShell'
 import {
@@ -12,6 +12,7 @@ import {
   supplierTypeLabels,
   typeToneClass,
 } from '@/components/admin/suppliers/SupplierDialogs'
+import { computeSupplierDocumentCounts } from '@/components/admin/suppliers/SupplierDocuments'
 import { PendingReplaceBadge } from '@/components/admin/suppliers/SupplierReturns'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,6 +68,7 @@ export default function SuppliersPage() {
   const products = useMemo(() => toArray(data?.products), [data?.products])
   const currency = data?.settings.currency
   const returnSummary = useMemo(() => computeSupplierReturns(data), [data])
+  const documentCounts = useMemo(() => computeSupplierDocumentCounts(data), [data])
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState<SupplierRecord['supplierType'] | 'all'>('all')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -401,7 +403,7 @@ export default function SuppliersPage() {
           <CardHeader className="gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle>Supplier and import data table</CardTitle>
-              <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location. Click a row for full details.</CardDescription>
+              <CardDescription>Search by supplier, product, importer, phone, country, LC number, or location. Click a row for full details and the supplier's documents.</CardDescription>
             </div>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(220px,1fr)_190px_auto]">
               <div className="relative col-span-2 sm:col-span-1">
@@ -442,6 +444,7 @@ export default function SuppliersPage() {
                     {SHOW_LC_STATUS_COLUMN ? <TableHead>LC status</TableHead> : null}
                     <TableHead>Purchase history</TableHead>
                     <TableHead>Replace view</TableHead>
+                    <TableHead>Documents</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -533,6 +536,16 @@ export default function SuppliersPage() {
                           {(returnSummary[supplier.id]?.sent ?? 0).toLocaleString('en-BD')} returned, {(returnSummary[supplier.id]?.received ?? 0).toLocaleString('en-BD')} received
                         </p>
                       </TableCell>
+                      <TableCell className="min-w-28">
+                        <div className="flex items-center gap-1.5 text-sm">
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-medium">{(documentCounts[supplier.id] ?? 0).toLocaleString('en-BD')}</span>
+                          <span className="text-xs text-muted-foreground">files</span>
+                        </div>
+                        {supplier.supplyStartDate ? (
+                          <p className="mt-1 text-xs text-muted-foreground">Supply since {formatDate(supplier.supplyStartDate)}</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell onClick={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-2">
                           {canEdit ? (
@@ -558,7 +571,7 @@ export default function SuppliersPage() {
                   ))}
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={SHOW_LC_STATUS_COLUMN ? 6 : 5} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={SHOW_LC_STATUS_COLUMN ? 7 : 6} className="h-28 text-center text-muted-foreground">
                         No suppliers found.
                       </TableCell>
                     </TableRow>

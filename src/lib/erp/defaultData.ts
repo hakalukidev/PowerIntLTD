@@ -1233,6 +1233,7 @@ export function createDefaultERPData(): ERPData {
     replacements: {},
     replacementReturns: {},
     supplierReturns: {},
+    supplierDocuments: {},
     bankAccounts: {},
     supplierPayments: {},
     orderRequests: {},

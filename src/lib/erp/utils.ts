@@ -547,6 +547,12 @@ export type SupplierPayable = {
   pendingPayment: number
   /** Opening due + purchases - approved payments. Negative means we paid in advance. */
   payable: number
+  /** Pieces bought from the supplier (all received purchases). */
+  purchaseQuantity: number
+  /** Pieces whose cost the approved payments cover: payments clear the opening due first, then purchases oldest first. */
+  paidQuantity: number
+  /** Pieces not paid for yet: `purchaseQuantity - paidQuantity`. */
+  unpaidQuantity: number
 }
 
 /** What the company owes each supplier, keyed by supplier id. Only approved payments reduce it. */
@@ -559,11 +565,17 @@ export function computeSupplierPayables(data: ERPData | null) {
       paid: 0,
       pendingPayment: 0,
       payable: 0,
+      purchaseQuantity: 0,
+      paidQuantity: 0,
+      unpaidQuantity: 0,
     })
 
   toArray(data?.suppliers).forEach((supplier) => entry(supplier.id))
-  toArray(data?.purchases).forEach((purchase) => {
-    entry(purchase.supplierId).purchaseTotal += purchase.total
+  const purchases = toArray(data?.purchases).sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  purchases.forEach((purchase) => {
+    const row = entry(purchase.supplierId)
+    row.purchaseTotal += purchase.total
+    row.purchaseQuantity += purchase.quantity
   })
   toArray(data?.supplierPayments).forEach((payment) => {
     if (payment.status === 'approved') entry(payment.supplierId).paid += payment.amount
@@ -571,6 +583,27 @@ export function computeSupplierPayables(data: ERPData | null) {
   })
   Object.values(payables).forEach((row) => {
     row.payable = row.openingDue + row.purchaseTotal - row.paid
+  })
+
+  // What the payments cover in pieces, purchase by purchase, oldest first.
+  const coverLeft: Record<string, number> = {}
+  Object.entries(payables).forEach(([supplierId, row]) => {
+    coverLeft[supplierId] = Math.max(row.paid - row.openingDue, 0)
+  })
+  purchases.forEach((purchase) => {
+    const row = payables[purchase.supplierId]
+    const left = coverLeft[purchase.supplierId]
+    if (purchase.total <= 0 || left >= purchase.total) {
+      row.paidQuantity += purchase.quantity
+      coverLeft[purchase.supplierId] = left - Math.max(purchase.total, 0)
+    } else if (left > 0) {
+      // Part-paid: only whole pieces count as paid.
+      row.paidQuantity += Math.floor((purchase.quantity * left) / purchase.total)
+      coverLeft[purchase.supplierId] = 0
+    }
+  })
+  Object.values(payables).forEach((row) => {
+    row.unpaidQuantity = row.purchaseQuantity - row.paidQuantity
   })
 
   return payables

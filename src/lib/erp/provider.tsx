@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { increment, onValue, ref, runTransaction, set, update } from 'firebase/database'
 
+import { deleteCloudinaryImage } from '@/lib/cloudinary'
 import { createDefaultERPData } from '@/lib/erp/defaultData'
 import type {
   AdvanceRequestInput,
@@ -76,6 +77,7 @@ import type {
   SupplierInput,
   SupplierPaymentInput,
   SupplierReturnInput,
+  SupplierDocumentInput,
   SupplierRecord,
   TaskInput,
   TaskRecord,
@@ -294,6 +296,9 @@ type ERPContextValue = {
   reviewExpense: (expenseId: string, decision: 'approve' | 'reject') => Promise<void>
   saveSupplierReturn: (input: SupplierReturnInput) => Promise<void>
   deleteSupplierReturn: (returnId: string) => Promise<void>
+  saveSupplierDocument: (input: SupplierDocumentInput) => Promise<void>
+  /** Removes the document record and its file from storage. */
+  deleteSupplierDocument: (documentId: string) => Promise<void>
   saveBankAccount: (input: BankAccountInput, accountId?: string) => Promise<void>
   deleteBankAccount: (accountId: string) => Promise<void>
   submitSupplierPayment: (input: SupplierPaymentInput) => Promise<void>
@@ -591,6 +596,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     replacements: source.replacements ?? {},
     replacementReturns: source.replacementReturns ?? {},
     supplierReturns: source.supplierReturns ?? {},
+    supplierDocuments: source.supplierDocuments ?? {},
     bankAccounts: source.bankAccounts ?? {},
     supplierPayments: source.supplierPayments ?? {},
     orderRequests: source.orderRequests ?? {},
@@ -4402,6 +4408,71 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('supplier_return_deleted', 'suppliers', `Removed a return entry of ${item.quantity} x ${item.productName} (${item.supplierName}).`)
   }
 
+  /** Files an uploaded document in a supplier's document library. */
+  async function saveSupplierDocument(input: SupplierDocumentInput) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.edit') && !hasPermissionCheck(data, currentUser, 'suppliers.create')) {
+      throw new Error('You do not have permission to add supplier documents.')
+    }
+
+    const supplier = data.suppliers[input.supplierId]
+    if (!supplier) {
+      throw new Error('Select a supplier.')
+    }
+    const title = input.title.trim()
+    if (!title) {
+      throw new Error('Enter the document name.')
+    }
+    if (!input.url || !input.publicId) {
+      throw new Error('Upload the document file.')
+    }
+
+    const db = getDatabaseOrThrow()
+    const id = createId('supplier_document')
+    const now = new Date().toISOString()
+    await update(ref(db, 'erp/supplierDocuments'), {
+      [id]: {
+        id,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        title,
+        category: input.category,
+        url: input.url,
+        publicId: input.publicId,
+        fileName: input.fileName,
+        documentDate: input.documentDate ?? '',
+        note: input.note?.trim() ?? '',
+        createdById: currentUser.id,
+        createdByName: currentUser.name,
+        createdAt: now,
+        updatedAt: now,
+      },
+    })
+    await writeActivity('supplier_document_added', 'suppliers', `Added document "${title}" for ${supplier.name}.`)
+  }
+
+  async function deleteSupplierDocument(documentId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.delete')) {
+      throw new Error('You do not have permission to delete supplier documents.')
+    }
+
+    const item = data.supplierDocuments[documentId]
+    if (!item) {
+      throw new Error('Document not found.')
+    }
+
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/supplierDocuments'), { [documentId]: null })
+    // The record is gone either way; a file left in storage is only clutter.
+    await deleteCloudinaryImage(item.publicId).catch(() => undefined)
+    await writeActivity('supplier_document_deleted', 'suppliers', `Removed document "${item.title}" (${item.supplierName}).`)
+  }
+
   function bankAccountLabel(accountId: string) {
     const account = data?.bankAccounts[accountId]
     return account ? `${account.bankName} — ${account.accountName} (${account.accountNumber})` : ''
@@ -6690,6 +6761,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       reviewExpense,
       saveSupplierReturn,
       deleteSupplierReturn,
+      saveSupplierDocument,
+      deleteSupplierDocument,
       saveBankAccount,
       deleteBankAccount,
       submitSupplierPayment,

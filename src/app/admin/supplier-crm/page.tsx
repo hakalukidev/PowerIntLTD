@@ -46,6 +46,10 @@ function attachedDocuments(supplier: SupplierRecord) {
   return DOCUMENT_FIELDS.filter((field) => supplier[field]).length
 }
 
+function pcs(quantity: number) {
+  return `${quantity.toLocaleString('en-BD')} pcs`
+}
+
 function hasBankDetails(supplier: SupplierRecord) {
   return Boolean(supplier.bankName && supplier.bankAccountNumber)
 }
@@ -86,6 +90,10 @@ export default function SupplierCrmPage() {
           supplier,
           purchaseCount: supplierPurchases.length,
           purchaseTotal: supplierPurchases.reduce((sum, purchase) => sum + purchase.total, 0),
+          purchaseQuantity: payables[supplier.id]?.purchaseQuantity ?? 0,
+          paid: payables[supplier.id]?.paid ?? 0,
+          paidQuantity: payables[supplier.id]?.paidQuantity ?? 0,
+          unpaidQuantity: payables[supplier.id]?.unpaidQuantity ?? 0,
           payable: payables[supplier.id]?.payable ?? supplier.openingDue,
           pendingPayment: payables[supplier.id]?.pendingPayment ?? 0,
           hasHistory,
@@ -119,6 +127,10 @@ export default function SupplierCrmPage() {
     () => ({
       total: suppliers.length,
       purchaseTotal: rows.reduce((sum, row) => sum + row.purchaseTotal, 0),
+      purchaseQuantity: rows.reduce((sum, row) => sum + row.purchaseQuantity, 0),
+      paid: rows.reduce((sum, row) => sum + row.paid, 0),
+      paidQuantity: rows.reduce((sum, row) => sum + row.paidQuantity, 0),
+      unpaidQuantity: rows.reduce((sum, row) => sum + row.unpaidQuantity, 0),
       payable: rows.reduce((sum, row) => sum + Math.max(row.payable, 0), 0),
       complete: rows.filter((row) => row.complete).length,
     }),
@@ -158,9 +170,13 @@ export default function SupplierCrmPage() {
       <div className="space-y-6">
         <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[
+            ['Product value taken', formatCurrency(metrics.purchaseTotal, currency), 'Total of all purchases'],
+            ['Pieces taken', pcs(metrics.purchaseQuantity), 'Products received from suppliers'],
+            ['Pieces paid off', pcs(metrics.paidQuantity), 'Covered by approved payments'],
+            ['Total paid', formatCurrency(metrics.paid, currency), 'Approved supplier payments'],
+            ['Current due', formatCurrency(metrics.payable, currency), 'Opening due + purchases - approved payments'],
+            ['Pieces still unpaid', pcs(metrics.unpaidQuantity), 'Pieces taken - pieces paid off'],
             ['Suppliers', metrics.total.toLocaleString('en-BD'), 'Supplier profiles'],
-            ['Total purchase', formatCurrency(metrics.purchaseTotal, currency), 'From purchase history'],
-            ['Total payable', formatCurrency(metrics.payable, currency), 'Opening due + purchases - approved payments'],
             ['Complete profiles', `${metrics.complete} / ${metrics.total}`, 'Bank details and all documents'],
           ].map(([label, value, note]) => (
             <Card key={label} className="border-border/70 shadow-sm">
@@ -242,12 +258,13 @@ export default function SupplierCrmPage() {
                     <TableHead>Bank</TableHead>
                     <TableHead>Documents</TableHead>
                     <TableHead>Purchase</TableHead>
+                    <TableHead>Paid</TableHead>
                     <TableHead>Payable</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ supplier, purchaseCount, purchaseTotal, payable, pendingPayment, hasHistory, complete }) => {
+                  {filteredRows.map(({ supplier, purchaseCount, purchaseTotal, purchaseQuantity, paid, paidQuantity, unpaidQuantity, payable, pendingPayment, hasHistory, complete }) => {
                     const photo = supplier.supplierPhotoUrl || supplier.passportPhotoUrl
                     const documentCount = attachedDocuments(supplier)
 
@@ -323,7 +340,13 @@ export default function SupplierCrmPage() {
                         </TableCell>
                         <TableCell className="md:min-w-32">
                           <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
-                          <p className="text-xs text-muted-foreground">{purchaseCount} purchases</p>
+                          <p className="text-xs text-muted-foreground">
+                            {pcs(purchaseQuantity)} · {purchaseCount} purchases
+                          </p>
+                        </TableCell>
+                        <TableCell className="md:min-w-32">
+                          <p className="font-medium">{formatTableAmount(paid, currency)}</p>
+                          <p className="text-xs text-muted-foreground">{pcs(paidQuantity)} paid off</p>
                         </TableCell>
                         <TableCell className="md:min-w-32">
                           <p className={cn('font-medium', payable > 0 && 'text-rose-600 dark:text-rose-400')}>
@@ -331,6 +354,7 @@ export default function SupplierCrmPage() {
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {payable < 0 ? 'Paid in advance' : payable === 0 ? 'Settled' : 'Due'}
+                            {unpaidQuantity > 0 ? ` · ${pcs(unpaidQuantity)} unpaid` : ''}
                             {pendingPayment > 0 ? ` · ${formatTableAmount(pendingPayment, currency)} pending` : ''}
                           </p>
                         </TableCell>
@@ -360,7 +384,7 @@ export default function SupplierCrmPage() {
                   })}
                   {filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="h-28 text-center text-muted-foreground">
+                      <TableCell colSpan={8} className="h-28 text-center text-muted-foreground">
                         No suppliers found.
                       </TableCell>
                     </TableRow>

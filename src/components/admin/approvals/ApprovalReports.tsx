@@ -339,7 +339,7 @@ export function DailyClosingReport({ day }: { day: string }) {
       moneyIn: orderPaid + depositTotal,
       moneyOut: paymentTotal + expenseTotal,
       depositsByMethod: sumBy(deposits, (deposit) => deposit.method, (deposit) => deposit.amount),
-      paymentsByMethod: sumBy(payments, (payment) => (payment.method === 'bank' ? 'Bank' : 'Cash'), (payment) => payment.amount),
+      paymentsByMethod: sumBy(payments, (payment) => (payment.method === 'bank' ? 'Bank' : payment.method === 'goods' ? 'Goods / products' : 'Cash'), (payment) => payment.amount),
       expensesByCategory: sumBy(expenses, (expense) => expense.category, (expense) => expense.amount),
     }
   }, [data, day])

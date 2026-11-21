@@ -33,6 +33,8 @@ export type StockMoveKind =
   | 'delivery_reversed'
   /** An order called off before delivery: what it held can be sold again. */
   | 'release'
+  /** Products given to a supplier as payment: leave their warehouse on the payment's final approval. */
+  | 'goods_payment'
 
 export const STOCK_ADJUSTMENT_REASONS: Record<StockAdjustmentReason, string> = {
   opening: 'Opening stock',
@@ -42,7 +44,7 @@ export const STOCK_ADJUSTMENT_REASONS: Record<StockAdjustmentReason, string> = {
   other: 'Other',
 }
 
-export type StockMoveRef = { kind: 'purchase' | 'order' | 'transfer' | 'adjustment'; id: string; label: string }
+export type StockMoveRef = { kind: 'purchase' | 'order' | 'transfer' | 'adjustment' | 'supplier_payment'; id: string; label: string }
 
 export type StockMove = {
   kind: StockMoveKind
@@ -80,6 +82,7 @@ export function stockMove(
     delivery: { onHand: -quantity, reserved: -quantity },
     reserve: { onHand: 0, reserved: quantity },
     release: { onHand: 0, reserved: -quantity },
+    goods_payment: { onHand: -quantity, reserved: 0 },
   }
   const warehouseId = options.warehouseId ?? ''
   if (effect[kind].onHand && !warehouseId) {

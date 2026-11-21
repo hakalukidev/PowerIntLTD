@@ -117,12 +117,24 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
               ['Purpose', payment.purpose],
               ['Note', payment.note],
             ]
-          : [
-              ['Method', 'Cash'],
-              ['Received by', payment.cashReceiver],
-              ['Purpose', payment.purpose],
-              ['Note', payment.note],
-            ],
+          : payment.method === 'goods'
+            ? [
+                ['Method', 'Goods / products'],
+                ['Product', payment.goodsProductName ?? ''],
+                ['Quantity', (payment.goodsQuantity ?? 0).toLocaleString('en-BD')],
+                ['Unit price', formatCurrency(payment.goodsUnitPrice ?? 0)],
+                ['Stock', payment.goodsWarehouseName ? `Leaves ${payment.goodsWarehouseName} on final approval` : 'Not a stock product — no stock change'],
+                ['Delivery address', payment.deliveryAddress ?? ''],
+                ['Receiver phone', payment.receiverPhone ?? ''],
+                ['Purpose', payment.purpose],
+                ['Note', payment.note],
+              ]
+            : [
+                ['Method', 'Cash'],
+                ['Received by', payment.cashReceiver],
+                ['Purpose', payment.purpose],
+                ['Note', payment.note],
+              ],
       submittedById: payment.submittedById,
       submittedByName: payment.submittedByName,
       submittedByRole: roleOf(payment.submittedById),
@@ -137,7 +149,7 @@ export function buildSubmissionRows(kind: EditableSubmissionKind, data: ERPData)
       authorizedByName: payment.authorizedByName,
       notify: {
         phone: data.suppliers[payment.supplierId]?.phone ?? '',
-        message: `Dear ${payment.supplierName}, ${company} has sent you ${payment.amount.toLocaleString()} BDT (${payment.method === 'bank' ? 'bank' : 'cash'}) on ${formatDate(payment.date)} for ${payment.purpose}.`,
+        message: `Dear ${payment.supplierName}, ${company} has sent you ${payment.method === 'goods' ? `goods (${payment.goodsProductName} × ${payment.goodsQuantity}) worth ` : ''}${payment.amount.toLocaleString()} BDT (${payment.method}) on ${formatDate(payment.date)} for ${payment.purpose}.`,
       },
     }))
   }

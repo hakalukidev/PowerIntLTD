@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useERP } from '@/lib/erp/provider'
 import type { ERPData, OrderDelivery, OrderRecord } from '@/lib/erp/types'
-import { formatCurrency, formatDate, formatDateTime, toArray } from '@/lib/erp/utils'
+import { formatCurrency, formatDate, formatDateTime, supplierPaymentMethodLabel, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 type Tab = 'reports' | 'days' | 'delivery'
@@ -135,7 +135,7 @@ function approvedReports(data: ERPData | null | undefined): ReportRow[] {
         id: `payment-${payment.id}`,
         kind: 'supplier_payment',
         party: payment.supplierName,
-        details: [payment.method === 'bank' ? 'Bank' : 'Cash', payment.purpose, payment.note].filter(Boolean).join(' · '),
+        details: [supplierPaymentMethodLabel(payment), payment.purpose, payment.note].filter(Boolean).join(' · '),
         amount: payment.amount,
         submittedByName: payment.submittedByName,
         reviewedByName: payment.reviewedByName ?? '',

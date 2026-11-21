@@ -78,6 +78,7 @@ import type {
   SupplierPaymentInput,
   SupplierReturnInput,
   SupplierDocumentInput,
+  SupplierProductTermInput,
   SupplierRecord,
   TaskInput,
   TaskRecord,
@@ -143,6 +144,7 @@ import {
   toArray,
   userRoleIds,
   userRoleNames,
+  supplierPaymentMethodLabel,
 } from '@/lib/erp/utils'
 import {
   inMemoryPersistence,
@@ -297,6 +299,8 @@ type ERPContextValue = {
   saveSupplierReturn: (input: SupplierReturnInput) => Promise<void>
   deleteSupplierReturn: (returnId: string) => Promise<void>
   saveSupplierDocument: (input: SupplierDocumentInput) => Promise<void>
+  saveSupplierProductTerm: (input: SupplierProductTermInput) => Promise<void>
+  deleteSupplierProductTerm: (termId: string) => Promise<void>
   /** Removes the document record and its file from storage. */
   deleteSupplierDocument: (documentId: string) => Promise<void>
   saveBankAccount: (input: BankAccountInput, accountId?: string) => Promise<void>
@@ -597,6 +601,7 @@ function normalizeERPData(data: ERPData | null): ERPData {
     replacementReturns: source.replacementReturns ?? {},
     supplierReturns: source.supplierReturns ?? {},
     supplierDocuments: source.supplierDocuments ?? {},
+    supplierProductTerms: source.supplierProductTerms ?? {},
     bankAccounts: source.bankAccounts ?? {},
     supplierPayments: source.supplierPayments ?? {},
     orderRequests: source.orderRequests ?? {},
@@ -4408,6 +4413,67 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     await writeActivity('supplier_return_deleted', 'suppliers', `Removed a return entry of ${item.quantity} x ${item.productName} (${item.supplierName}).`)
   }
 
+  /** Saves the supply terms (start date, promised supply value, notes) for one product of a supplier. */
+  async function saveSupplierProductTerm(input: SupplierProductTermInput) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.edit') && !hasPermissionCheck(data, currentUser, 'suppliers.create')) {
+      throw new Error('You do not have permission to update supplier products.')
+    }
+
+    const supplier = data.suppliers[input.supplierId]
+    if (!supplier) {
+      throw new Error('Select a supplier.')
+    }
+    const product = input.productId ? data.products[input.productId] : null
+    const productName = (product?.name ?? input.productName).trim()
+    if (!productName) {
+      throw new Error('Enter the product.')
+    }
+    const supplyValue = Number(input.supplyValue ?? 0)
+    if (!Number.isFinite(supplyValue) || supplyValue < 0) {
+      throw new Error('Supply value cannot be negative.')
+    }
+
+    const existing = input.id ? data.supplierProductTerms[input.id] : null
+    const db = getDatabaseOrThrow()
+    const id = existing?.id ?? createId('supplier_term')
+    const now = new Date().toISOString()
+    await update(ref(db, 'erp/supplierProductTerms'), {
+      [id]: {
+        id,
+        supplierId: supplier.id,
+        productId: product?.id ?? '',
+        productName,
+        startDate: input.startDate ?? '',
+        supplyValue,
+        notes: input.notes?.trim() ?? '',
+        updatedById: currentUser.id,
+        updatedByName: currentUser.name,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    })
+    await writeActivity('supplier_terms_saved', 'suppliers', `Updated supply terms for ${productName} (${supplier.name}).`)
+  }
+
+  async function deleteSupplierProductTerm(termId: string) {
+    if (!data || !currentUser) {
+      return
+    }
+    if (!hasPermissionCheck(data, currentUser, 'suppliers.delete')) {
+      throw new Error('You do not have permission to delete supplier products.')
+    }
+    const item = data.supplierProductTerms[termId]
+    if (!item) {
+      throw new Error('Supplier product not found.')
+    }
+    const db = getDatabaseOrThrow()
+    await update(ref(db, 'erp/supplierProductTerms'), { [termId]: null })
+    await writeActivity('supplier_terms_deleted', 'suppliers', `Removed supply terms for ${item.productName}.`)
+  }
+
   /** Files an uploaded document in a supplier's document library. */
   async function saveSupplierDocument(input: SupplierDocumentInput) {
     if (!data || !currentUser) {
@@ -4552,7 +4618,30 @@ export function ERPProvider({ children }: { children: ReactNode }) {
     if (!(input.amount > 0)) {
       throw new Error('Amount must be greater than zero.')
     }
-    if (!input.purpose.trim()) {
+    const isGoods = input.method === 'goods'
+    const goodsProduct = isGoods && input.goodsProductId ? data.products[input.goodsProductId] : null
+    const goodsProductName = isGoods ? (goodsProduct?.name ?? input.goodsProductName ?? '').trim() : ''
+    const goodsQuantity = isGoods ? Number(input.goodsQuantity ?? 0) : 0
+    const goodsUnitPrice = isGoods ? Number(input.goodsUnitPrice ?? 0) : 0
+    if (isGoods) {
+      if (!goodsProductName) throw new Error('Enter the product given.')
+      if (!(goodsQuantity > 0)) throw new Error('Quantity must be greater than zero.')
+      if (!(goodsUnitPrice > 0)) throw new Error('Unit price must be greater than zero.')
+      if (!input.deliveryAddress?.trim()) throw new Error('Enter the delivery address.')
+      if (!input.receiverPhone?.trim()) throw new Error('Enter the receiver phone number.')
+    }
+    // Goods from the product list leave a warehouse when the payment gets final approval.
+    const goodsWarehouse = goodsProduct ? data.warehouses[input.goodsWarehouseId ?? ''] : null
+    if (goodsProduct) {
+      if (!goodsWarehouse) throw new Error('Select the warehouse the goods are sent from.')
+      if (!Number.isInteger(goodsQuantity)) throw new Error('Enter a whole quantity for a stock product.')
+      const onShelf = stockInWarehouse(goodsProduct, goodsWarehouse.id)
+      if (goodsQuantity > onShelf) throw new Error(`Only ${onShelf} of ${goodsProduct.name} in ${goodsWarehouse.name}.`)
+    }
+    // Goods: the amount is always quantity × unit price.
+    const amount = isGoods ? Math.round(goodsQuantity * goodsUnitPrice * 100) / 100 : input.amount
+    const purpose = input.purpose.trim() || (isGoods ? `Goods: ${goodsProductName} × ${goodsQuantity}` : '')
+    if (!purpose) {
       throw new Error('Enter the purpose of the payment.')
     }
 
@@ -4570,10 +4659,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       if (!input.sendingType?.trim()) {
         throw new Error('Select the sending type.')
       }
-    } else if (!input.cashReceiver?.trim()) {
+    } else if (!isGoods && !input.cashReceiver?.trim()) {
       throw new Error('Enter who received the cash.')
     }
-    if ((!isBank || isCashDeposit) && !input.proofUrl) {
+    if ((input.method === 'cash' || isCashDeposit) && !input.proofUrl) {
       throw new Error('Attach a deposit proof (voucher or slip).')
     }
 
@@ -4593,12 +4682,24 @@ export function ERPProvider({ children }: { children: ReactNode }) {
         toAccountId,
         toLabel: bankAccountLabel(toAccountId),
         sendingType: isBank ? input.sendingType?.trim() ?? '' : '',
-        cashReceiver: isBank ? '' : input.cashReceiver?.trim() ?? '',
+        cashReceiver: input.method === 'cash' ? input.cashReceiver?.trim() ?? '' : '',
         proofUrl: input.proofUrl ?? '',
         proofPublicId: input.proofPublicId ?? '',
-        amount: input.amount,
-        purpose: input.purpose.trim(),
+        amount,
+        purpose,
         note: input.note?.trim() ?? '',
+        ...(isGoods
+          ? {
+              goodsProductId: goodsProduct?.id ?? '',
+              goodsProductName,
+              goodsQuantity,
+              goodsUnitPrice,
+              goodsWarehouseId: goodsWarehouse?.id ?? '',
+              goodsWarehouseName: goodsWarehouse?.name ?? '',
+              deliveryAddress: input.deliveryAddress?.trim() ?? '',
+              receiverPhone: input.receiverPhone?.trim() ?? '',
+            }
+          : {}),
         status: 'pending',
         submittedById: currentUser.id,
         submittedByName: currentUser.name,
@@ -4607,10 +4708,10 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       },
     })
 
-    await writeActivity('supplier_payment_submitted', 'suppliers', `Submitted a ${input.amount.toLocaleString()} payment to ${supplier.name}.`)
+    await writeActivity('supplier_payment_submitted', 'suppliers', `Submitted a ${amount.toLocaleString()} payment to ${supplier.name}.`)
     await writeNotification(
       'Supplier payment awaiting the Authorizer',
-      `${currentUser.name} submitted a ${input.amount.toLocaleString()} ${isBank ? 'bank' : 'cash'} payment to ${supplier.name}.`,
+      `${currentUser.name} submitted a ${amount.toLocaleString()} ${input.method} payment to ${supplier.name}.`,
       'info',
       [...stageRoles('authorizer'), 'accountant']
     )
@@ -4634,6 +4735,29 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       noun: 'payment',
       what: `the ${payment.amount.toLocaleString()} payment to ${payment.supplierName}`,
       decision,
+      // Goods from the product list leave their warehouse in the same write as the approval.
+      post:
+        payment.method === 'goods' && payment.goodsProductId
+          ? async (approval) => {
+              const productId = payment.goodsProductId ?? ''
+              const warehouseId = payment.goodsWarehouseId ?? ''
+              if (!data.products[productId] || !data.warehouses[warehouseId]) {
+                throw new Error('The product or its warehouse no longer exists. Reject the payment instead.')
+              }
+              const { updates, movements } = planStockMoves(
+                data.products,
+                [
+                  stockMove('goods_payment', productId, payment.goodsQuantity ?? 0, {
+                    warehouseId,
+                    date: payment.date,
+                    ref: { kind: 'supplier_payment', id: paymentId, label: `Goods payment to ${payment.supplierName}` },
+                  }),
+                ],
+                { now: new Date().toISOString(), warehouses: data.warehouses, by: stockBy() }
+              )
+              await update(ref(getDatabaseOrThrow()), withStockHistory({ ...approval, ...updates }, movements))
+            }
+          : undefined,
     })
     if (outcome === 'authorized') return
 
@@ -4644,7 +4768,7 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       decision: outcome,
       party: payment.supplierName,
       summary: [
-        payment.method === 'bank' ? `Bank${payment.sendingType ? ` (${payment.sendingType})` : ''}` : 'Cash',
+        supplierPaymentMethodLabel(payment),
         payment.purpose,
         payment.authorizedByName && `Authorized by ${payment.authorizedByName}`,
       ]
@@ -6763,6 +6887,8 @@ export function ERPProvider({ children }: { children: ReactNode }) {
       deleteSupplierReturn,
       saveSupplierDocument,
       deleteSupplierDocument,
+      saveSupplierProductTerm,
+      deleteSupplierProductTerm,
       saveBankAccount,
       deleteBankAccount,
       submitSupplierPayment,

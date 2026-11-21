@@ -15,6 +15,8 @@ import type {
   SalaryRecord,
   SalesTargetRecord,
   SettingsRecord,
+  SupplierPaymentRecord,
+  SupplierProductTermRecord,
   UserRecord,
   ZoneRecord,
 } from '@/lib/erp/types'
@@ -540,6 +542,17 @@ export function computeCustomerTotals(data: ERPData | null) {
   }, {})
 }
 
+/** Short method label for a supplier payment: `Bank (RTGS)`, `Cash`, or `Goods: Battery × 10`. */
+export function supplierPaymentMethodLabel(
+  payment: Pick<SupplierPaymentRecord, 'method' | 'sendingType' | 'goodsProductName' | 'goodsQuantity'>
+) {
+  if (payment.method === 'goods') {
+    return `Goods${payment.goodsProductName ? `: ${payment.goodsProductName} × ${(payment.goodsQuantity ?? 0).toLocaleString('en-BD')}` : ''}`
+  }
+  if (payment.method === 'bank') return `Bank${payment.sendingType ? ` (${payment.sendingType})` : ''}`
+  return 'Cash'
+}
+
 export type SupplierPayable = {
   openingDue: number
   purchaseTotal: number
@@ -607,6 +620,90 @@ export function computeSupplierPayables(data: ERPData | null) {
   })
 
   return payables
+}
+
+export type SupplierProductAccountRow = {
+  /** The product id, or `name:<lowercase name>` for a product not in the product list. */
+  key: string
+  productId: string
+  productName: string
+  /** The supply terms saved for this product, if any. */
+  term: SupplierProductTermRecord | null
+  /** Date of the first purchase (`YYYY-MM-DD`), or `''`. */
+  firstPurchaseDate: string
+  quantity: number
+  purchaseTotal: number
+  /** Average price per piece: purchase total / quantity. */
+  unitPrice: number
+  /** Purchase value not covered by approved payments (payments clear the opening due first, then purchases oldest first). */
+  payable: number
+}
+
+/**
+ * One row per product of a supplier: products bought, products in the supplier profile, and products
+ * with saved supply terms. Also returns the part of the opening due not paid yet.
+ */
+export function computeSupplierProductAccount(data: ERPData | null, supplierId: string) {
+  const supplier = data?.suppliers[supplierId]
+  const productIdByName = new Map(toArray(data?.products).map((product) => [product.name.trim().toLowerCase(), product.id]))
+  const keyOf = (productId: string, name: string) => productId || productIdByName.get(name.trim().toLowerCase()) || `name:${name.trim().toLowerCase()}`
+  const rows = new Map<string, SupplierProductAccountRow>()
+  const row = (productId: string, name: string) => {
+    const key = keyOf(productId, name)
+    let current = rows.get(key)
+    if (!current) {
+      current = {
+        key,
+        productId: key.startsWith('name:') ? '' : key,
+        productName: (key.startsWith('name:') ? '' : data?.products[key]?.name) || name.trim(),
+        term: null,
+        firstPurchaseDate: '',
+        quantity: 0,
+        purchaseTotal: 0,
+        unitPrice: 0,
+        payable: 0,
+      }
+      rows.set(key, current)
+    }
+    return current
+  }
+
+  const purchases = toArray(data?.purchases)
+    .filter((purchase) => purchase.supplierId === supplierId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  const paid = toArray(data?.supplierPayments)
+    .filter((payment) => payment.supplierId === supplierId && payment.status === 'approved')
+    .reduce((sum, payment) => sum + payment.amount, 0)
+  const openingDue = supplier?.openingDue ?? 0
+  let coverLeft = Math.max(paid - openingDue, 0)
+
+  purchases.forEach((purchase) => {
+    const current = row(purchase.productId, purchase.productName)
+    if (!current.firstPurchaseDate) current.firstPurchaseDate = purchase.createdAt.slice(0, 10)
+    current.quantity += purchase.quantity
+    current.purchaseTotal += purchase.total
+    const covered = Math.min(coverLeft, Math.max(purchase.total, 0))
+    coverLeft -= covered
+    current.payable += Math.max(purchase.total, 0) - covered
+  })
+  ;(supplier?.suppliedProducts ?? []).forEach((name) => row('', name))
+  toArray(data?.supplierProductTerms)
+    .filter((term) => term.supplierId === supplierId)
+    .forEach((term) => {
+      row(term.productId, term.productName).term = term
+    })
+
+  const list = Array.from(rows.values()).map((current) => ({
+    ...current,
+    unitPrice: current.quantity ? current.purchaseTotal / current.quantity : 0,
+  }))
+  list.sort((left, right) => {
+    const leftDate = left.term?.startDate || left.firstPurchaseDate || '9999'
+    const rightDate = right.term?.startDate || right.firstPurchaseDate || '9999'
+    return leftDate.localeCompare(rightDate) || left.productName.localeCompare(right.productName)
+  })
+
+  return { rows: list, unpaidOpeningDue: Math.max(openingDue - paid, 0) }
 }
 
 export type SupplierReturnSummary = { sent: number; received: number; pending: number }

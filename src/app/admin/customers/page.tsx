@@ -267,6 +267,8 @@ export default function CustomersPage() {
     )
   }, [filterZone, zoneOptions])
 
+  const creditEntries = useMemo(() => Object.values(data?.creditLedgerEntries ?? {}), [data?.creditLedgerEntries])
+
   const customerRows = useMemo(() => {
     return customers
       .map((customer) => {
@@ -275,18 +277,24 @@ export default function CustomersPage() {
         const customerOrders = allOrders.filter((order) => !isOrderCancelled(data?.settings, order))
         const purchaseTotal = customerOrders.reduce((sum, order) => sum + order.total, 0)
         const lastOrder = [...customerOrders].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+        // Money the dealer has paid: payments on orders (a cancelled order's payment stays as an
+        // advance) plus hand-written payment lines on their ledger.
+        const paidTotal =
+          allOrders.reduce((sum, order) => sum + order.paid, 0) +
+          (creditEntries ?? []).reduce((sum, entry) => (entry.customerId === customer.id && !entry.kind ? sum + entry.debit : sum), 0)
 
         return {
           customer,
           orderCount: customerOrders.length,
           purchaseTotal,
+          paidTotal,
           dueTotal: customerOrders.reduce((sum, order) => sum + order.due, 0),
           lastPurchaseDate: lastOrder?.createdAt ?? customer.updatedAt,
           hasOrders: allOrders.length > 0,
         }
       })
       .sort((left, right) => right.purchaseTotal - left.purchaseTotal)
-  }, [customers, orders, data?.settings])
+  }, [customers, orders, creditEntries, data?.settings])
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -1443,14 +1451,14 @@ export default function CustomersPage() {
                     <TableHead sticky>Dealer</TableHead>
                     <TableHead>Contact</TableHead>
                     <TableHead>Location</TableHead>
-                    <TableHead>Joined</TableHead>
                     <TableHead>Purchase</TableHead>
+                    <TableHead>Total Paid</TableHead>
                     <TableHead>Due</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.map(({ customer, orderCount, purchaseTotal, lastPurchaseDate, hasOrders }) => (
+                  {filteredRows.map(({ customer, purchaseTotal, paidTotal, hasOrders }) => (
                     <TableRow key={customer.id}>
                       <TableCell sticky className="md:min-w-56">
                         <div className="flex items-center gap-3">
@@ -1515,12 +1523,11 @@ export default function CustomersPage() {
                           <span>{customer.location || 'N/A'}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="md:min-w-32">{formatDate(customer.createdAt)}</TableCell>
                       <TableCell className="md:min-w-44">
                         <p className="font-medium">{formatTableAmount(purchaseTotal, currency)}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {orderCount} orders, last {formatDate(lastPurchaseDate)}
-                        </p>
+                      </TableCell>
+                      <TableCell className="md:min-w-36">
+                        <p className="font-medium">{formatTableAmount(paidTotal, currency)}</p>
                       </TableCell>
                       <TableCell>{formatDealerBalance(customer.due, currency, formatTableAmount)}</TableCell>
                       <TableCell>

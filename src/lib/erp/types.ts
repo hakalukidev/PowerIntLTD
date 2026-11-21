@@ -638,6 +638,8 @@ export type StockMovementType =
   | 'return'
   | 'adjustment'
   | 'damage'
+  /** Products given to a supplier as payment (Payment Form, Goods / Products). */
+  | 'goods_payment'
 
 /**
  * One change to one warehouse's count of one product, at `stockMovements/{id}` (outside `erp`,
@@ -657,7 +659,7 @@ export type StockMovementRecord = {
   change: number
   /** The warehouse's count of the product after this change. */
   balance: number
-  refKind: 'purchase' | 'order' | 'transfer' | 'adjustment' | 'system'
+  refKind: 'purchase' | 'order' | 'transfer' | 'adjustment' | 'supplier_payment' | 'system'
   refId: string
   /** Purchase "product from supplier", order bill number, "Dhaka → Chattogram", adjustment reason. */
   refLabel: string
@@ -1233,6 +1235,35 @@ export type SupplierReturnInput = {
   note?: string
 }
 
+/** What we agreed with a supplier for one product: when supply started, the promised supply value, and notes. */
+export type SupplierProductTermRecord = {
+  id: string
+  supplierId: string
+  /** Empty when the product is typed in and is not in the product list. */
+  productId: string
+  productName: string
+  /** `YYYY-MM-DD`, or `''`: then the first purchase date is shown. */
+  startDate: string
+  /** Total value of the products the supplier has promised to supply. */
+  supplyValue: number
+  notes: string
+  updatedById: string
+  updatedByName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type SupplierProductTermInput = {
+  /** Set to update an existing record. */
+  id?: string
+  supplierId: string
+  productId?: string
+  productName: string
+  startDate?: string
+  supplyValue?: number
+  notes?: string
+}
+
 export type SupplierDocumentCategory = 'agreement' | 'lc' | 'invoice' | 'shipping' | 'customs' | 'license' | 'other'
 
 /** A file kept in a supplier's document library (agreement, LC copy, invoice, ...): a photo or a PDF. */
@@ -1293,7 +1324,8 @@ export type BankAccountInput = {
   supplierId?: string
 }
 
-export type SupplierPaymentMethod = 'bank' | 'cash'
+/** `goods`: we pay the supplier with products instead of money; it is approved like a bank or cash payment. */
+export type SupplierPaymentMethod = 'bank' | 'cash' | 'goods'
 
 /** A payment to a supplier entered by staff; it counts as paid only once an admin approves it. */
 export type SupplierPaymentRecord = {
@@ -1317,6 +1349,17 @@ export type SupplierPaymentRecord = {
   amount: number
   purpose: string
   note: string
+  /** Goods only: the product given, empty when typed in and not in the product list. */
+  goodsProductId?: string
+  goodsProductName?: string
+  goodsQuantity?: number
+  goodsUnitPrice?: number
+  /** Goods from the product list only: the warehouse they leave; stock drops there on final approval. */
+  goodsWarehouseId?: string
+  goodsWarehouseName?: string
+  /** Goods only: where the goods are sent and the receiver's phone. */
+  deliveryAddress?: string
+  receiverPhone?: string
   status: DepositStatus
   submittedById: string
   submittedByName: string
@@ -1345,6 +1388,13 @@ export type SupplierPaymentInput = {
   amount: number
   purpose: string
   note?: string
+  goodsProductId?: string
+  goodsProductName?: string
+  goodsQuantity?: number
+  goodsUnitPrice?: number
+  goodsWarehouseId?: string
+  deliveryAddress?: string
+  receiverPhone?: string
 }
 
 export type DamageProductStatus ='pending' | 'sent-to-office' | 'received' | 'resolved'
@@ -1436,6 +1486,7 @@ export type ERPData = {
   replacementReturns: Record<string, ReplacementReturnRecord>
   supplierReturns: Record<string, SupplierReturnRecord>
   supplierDocuments: Record<string, SupplierDocumentRecord>
+  supplierProductTerms: Record<string, SupplierProductTermRecord>
   bankAccounts: Record<string, BankAccountRecord>
   supplierPayments: Record<string, SupplierPaymentRecord>
   orderRequests: Record<string, OrderRequestRecord>

@@ -21,6 +21,7 @@ export const STOCK_MOVEMENT_TYPES: Record<StockMovementType, string> = {
   return: 'Return',
   adjustment: 'Adjustment',
   damage: 'Damage',
+  goods_payment: 'Goods payment',
 }
 
 /** Empty strings mean "any"; `from` and `to` are `YYYY-MM-DD`, both included. */

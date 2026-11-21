@@ -1,4 +1,4 @@
-import { computeMonthlyPay, currentMonthKey, formatMonthLabel, payrollSchedule } from './utils'
+import { computeMonthlyPay, currentMonthKey, formatMonthLabel, payrollSchedule, supplierPaymentMethodLabel } from './utils'
 import type {
   CreditLedgerEntryRecord,
   EmployeeRecord,
@@ -175,9 +175,10 @@ export function buildSupplierLedger(
       id: payment.id,
       billNumber: '',
       date: payment.date || payment.createdAt,
-      particulars: [`Payment (${payment.method === 'bank' ? payment.sendingType || 'Bank' : 'Cash'})`, payment.purpose].filter(Boolean).join(' — '),
-      qty: null,
-      unitPrice: null,
+      particulars: [`Payment (${supplierPaymentMethodLabel(payment)})`, payment.purpose].filter(Boolean).join(' — '),
+      // Goods given as payment show their quantity and unit price on the sheet.
+      qty: payment.method === 'goods' ? payment.goodsQuantity ?? null : null,
+      unitPrice: payment.method === 'goods' ? payment.goodsUnitPrice ?? null : null,
       debit: payment.amount,
       credit: 0,
       removable: false,

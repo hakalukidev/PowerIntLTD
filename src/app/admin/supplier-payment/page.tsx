@@ -16,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { BankAccountRecord, DepositStatus, SupplierPaymentMethod, SupplierPaymentRecord } from '@/lib/erp/types'
+import { stockInWarehouse } from '@/lib/erp/stock'
 import { formatCurrency, formatDate, partyCode, sortByCreatedAtDesc, toArray, userRoleIds } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
@@ -23,6 +24,7 @@ const PAYMENT_PROOF_FOLDER = 'supplier-payments'
 /** The "From" value for cash deposited straight into the receiving bank. */
 const CASH_DEPOSIT = 'cash'
 const SENDING_TYPES = ['RTGS', 'BEFTN', 'Transfer', 'Deposit']
+const METHOD_LABELS: Record<SupplierPaymentMethod, string> = { bank: 'Bank', cash: 'Cash', goods: 'Goods / Products' }
 
 const STATUS_STYLES: Record<DepositStatus, string> = {
   pending: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
@@ -57,6 +59,13 @@ export default function SupplierPaymentPage() {
   const [amount, setAmount] = useState('')
   const [purpose, setPurpose] = useState('')
   const [note, setNote] = useState('')
+  const [goodsProductId, setGoodsProductId] = useState('')
+  const [goodsProductName, setGoodsProductName] = useState('')
+  const [goodsQuantity, setGoodsQuantity] = useState('')
+  const [goodsUnitPrice, setGoodsUnitPrice] = useState('')
+  const [goodsWarehouseId, setGoodsWarehouseId] = useState('')
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [receiverPhone, setReceiverPhone] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; text: string } | null>(null)
   const [statusFilter, setStatusFilter] = useState<DepositStatus | 'all'>('pending')
@@ -98,7 +107,31 @@ export default function SupplierPaymentPage() {
     return [...own, ...shared].map(accountOption)
   }, [accounts, supplierId])
 
+  const productOptions = useMemo<ComboboxOption[]>(
+    () =>
+      toArray(data?.products)
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((product) => ({ value: product.id, label: product.name, sublabel: product.category || undefined })),
+    [data?.products]
+  )
+
+  // A product picked from the list (and not renamed) is a stock product: it leaves a warehouse on approval.
+  const goodsProduct = goodsProductId && data?.products[goodsProductId]?.name === goodsProductName ? data.products[goodsProductId] : null
+  const warehouseOptions = useMemo<ComboboxOption[]>(
+    () =>
+      goodsProduct
+        ? toArray(data?.warehouses)
+            .sort((left, right) => left.name.localeCompare(right.name))
+            .map((warehouse) => ({ value: warehouse.id, label: warehouse.name, sublabel: `${stockInWarehouse(goodsProduct, warehouse.id).toLocaleString('en-BD')} in stock` }))
+        : [],
+    [data?.warehouses, goodsProduct]
+  )
+  const goodsOnShelf = goodsProduct && goodsWarehouseId ? stockInWarehouse(goodsProduct, goodsWarehouseId) : null
+
   const supplier = supplierId ? data?.suppliers[supplierId] ?? null : null
+  const isGoods = method === 'goods'
+  // Goods: the amount is quantity × unit price and updates as either changes.
+  const goodsAmount = Math.round((Number(goodsQuantity) || 0) * (Number(goodsUnitPrice) || 0) * 100) / 100
   const toAccount = toAccountId ? data?.bankAccounts[toAccountId] ?? null : null
   const isCashDeposit = method === 'bank' && fromAccountId === CASH_DEPOSIT
   const proofRequired = method === 'cash' || isCashDeposit
@@ -126,6 +159,25 @@ export default function SupplierPaymentPage() {
     // Pick the supplier's own account when there is exactly one.
     const own = accounts.filter((account) => account.side === 'receiver' && account.supplierId === id)
     if (own.length === 1) setToAccountId(own[0].id)
+    // Goods go to the supplier unless another address or phone was typed.
+    const next = data?.suppliers[id]
+    if (next) {
+      setDeliveryAddress((current) => current || [next.location, next.country].filter(Boolean).join(', '))
+      setReceiverPhone((current) => current || next.phone)
+    }
+  }
+
+  function selectGoodsProduct(id: string) {
+    setGoodsProductId(id)
+    const product = data?.products[id]
+    if (!product) return
+    setGoodsProductName(product.name)
+    setGoodsUnitPrice((current) => current || (product.purchasePrice ? String(product.purchasePrice) : ''))
+    // Start from the warehouse holding the most of it.
+    const best = toArray(data?.warehouses)
+      .map((warehouse) => ({ id: warehouse.id, qty: stockInWarehouse(product, warehouse.id) }))
+      .sort((left, right) => right.qty - left.qty)[0]
+    setGoodsWarehouseId(best && best.qty > 0 ? best.id : '')
   }
 
   function selectFrom(id: string) {
@@ -145,24 +197,46 @@ export default function SupplierPaymentPage() {
     setAmount('')
     setPurpose('')
     setNote('')
+    setGoodsProductId('')
+    setGoodsProductName('')
+    setGoodsQuantity('')
+    setGoodsUnitPrice('')
+    setGoodsWarehouseId('')
+    setDeliveryAddress('')
+    setReceiverPhone('')
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFeedback(null)
 
-    const value = Number(amount)
+    const value = isGoods ? goodsAmount : Number(amount)
     if (!supplier) return setFeedback({ tone: 'error', text: 'Select a supplier.' })
-    if (method === 'bank') {
+    if (isGoods) {
+      if (!goodsProductName.trim()) return setFeedback({ tone: 'error', text: 'Select or type the product given.' })
+      if (!(Number(goodsQuantity) > 0)) return setFeedback({ tone: 'error', text: 'Enter a quantity greater than zero.' })
+      if (!(Number(goodsUnitPrice) > 0)) return setFeedback({ tone: 'error', text: 'Enter a unit price greater than zero.' })
+      if (goodsProduct) {
+        if (!goodsWarehouseId) return setFeedback({ tone: 'error', text: 'Select the warehouse the goods are sent from.' })
+        if (!Number.isInteger(Number(goodsQuantity))) return setFeedback({ tone: 'error', text: 'Enter a whole quantity for a stock product.' })
+        if (goodsOnShelf !== null && Number(goodsQuantity) > goodsOnShelf) {
+          return setFeedback({ tone: 'error', text: `Only ${goodsOnShelf} of ${goodsProduct.name} in that warehouse.` })
+        }
+      }
+      if (!deliveryAddress.trim()) return setFeedback({ tone: 'error', text: 'Enter the delivery address.' })
+      if (!receiverPhone.trim()) return setFeedback({ tone: 'error', text: 'Enter the receiver phone number.' })
+    } else if (method === 'bank') {
       if (!fromAccountId) return setFeedback({ tone: 'error', text: 'Select where the payment is sent from.' })
       if (!toAccountId) return setFeedback({ tone: 'error', text: 'Select the receiving bank.' })
       if (!sendingType) return setFeedback({ tone: 'error', text: 'Select the sending type.' })
     } else if (!cashReceiver.trim()) {
       return setFeedback({ tone: 'error', text: 'Enter who received the cash.' })
     }
-    if (proofRequired && !proofFile) return setFeedback({ tone: 'error', text: 'Attach the deposit proof (voucher or slip).' })
+    if (proofRequired && !proofFile) {
+      return setFeedback({ tone: 'error', text: isGoods ? 'Attach the voucher picture.' : 'Attach the deposit proof (voucher or slip).' })
+    }
     if (!(value > 0)) return setFeedback({ tone: 'error', text: 'Enter an amount greater than zero.' })
-    if (!purpose.trim()) return setFeedback({ tone: 'error', text: 'Enter the purpose.' })
+    if (!isGoods && !purpose.trim()) return setFeedback({ tone: 'error', text: 'Enter the purpose.' })
 
     setIsSaving(true)
     let uploaded: { imageUrl: string; imagePublicId: string } | null = null
@@ -179,10 +253,26 @@ export default function SupplierPaymentPage() {
         proofUrl: uploaded?.imageUrl,
         proofPublicId: uploaded?.imagePublicId,
         amount: value,
-        purpose,
+        purpose: isGoods ? '' : purpose,
         note,
+        ...(isGoods
+          ? {
+              goodsProductId: goodsProduct?.id ?? '',
+              goodsWarehouseId: goodsProduct ? goodsWarehouseId : '',
+              goodsProductName,
+              goodsQuantity: Number(goodsQuantity),
+              goodsUnitPrice: Number(goodsUnitPrice),
+              deliveryAddress,
+              receiverPhone,
+            }
+          : {}),
       })
-      setFeedback({ tone: 'success', text: `Payment of ${formatCurrency(value)} to ${supplier.name} sent for approval.` })
+      setFeedback({
+        tone: 'success',
+        text: isGoods
+          ? `Goods payment of ${formatCurrency(value)} (${goodsProductName} × ${goodsQuantity}) to ${supplier.name} sent for approval.`
+          : `Payment of ${formatCurrency(value)} to ${supplier.name} sent for approval.`,
+      })
       resetForm()
     } catch (error) {
       if (uploaded) void deleteCloudinaryImage(uploaded.imagePublicId).catch(() => undefined)
@@ -210,7 +300,7 @@ export default function SupplierPaymentPage() {
           <Card>
             <CardHeader>
               <CardTitle>Supplier payment</CardTitle>
-              <CardDescription>The payment counts once an admin approves it.</CardDescription>
+              <CardDescription>Pay by bank, cash, or goods / products. Every method goes through the same approval and counts once it is approved.</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
@@ -228,16 +318,16 @@ export default function SupplierPaymentPage() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Method<span className="ml-0.5 text-rose-500">*</span></p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(['bank', 'cash'] as const).map((item) => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['bank', 'cash', 'goods'] as const).map((item) => (
                       <Button
                         key={item}
                         type="button"
                         variant={method === item ? 'default' : 'outline'}
-                        className="capitalize"
+                        className="px-2 text-xs sm:text-sm"
                         onClick={() => setMethod(item)}
                       >
-                        {item}
+                        {METHOD_LABELS[item]}
                       </Button>
                     ))}
                   </div>
@@ -276,21 +366,97 @@ export default function SupplierPaymentPage() {
                       </Select>
                     </div>
                   </>
-                ) : (
+                ) : method === 'cash' ? (
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Cash received by<span className="ml-0.5 text-rose-500">*</span></p>
                     <Input value={cashReceiver} onChange={(event) => setCashReceiver(event.target.value)} placeholder="Name of the person who took the cash" />
                   </div>
+                ) : (
+                  <>
+                    <div className="space-y-2 sm:col-span-2">
+                      <p className="text-sm font-medium">Product name<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Combobox
+                        options={productOptions}
+                        value={goodsProductId}
+                        onChange={selectGoodsProduct}
+                        placeholder="Select product"
+                        searchPlaceholder="Search product..."
+                        emptyText="Not in the list — type the name below."
+                      />
+                      <Input
+                        value={goodsProductName}
+                        onChange={(event) => setGoodsProductName(event.target.value)}
+                        placeholder="Or type the product / goods name"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {goodsProduct
+                          ? 'Stock product: it leaves the warehouse below once the payment gets final approval.'
+                          : goodsProductName.trim()
+                            ? 'Not a stock product: no stock changes for typed-in goods.'
+                            : 'Pick a stock product to take it out of stock on approval, or type any other goods.'}
+                      </p>
+                    </div>
+                    {goodsProduct ? (
+                      <div className="space-y-2 sm:col-span-2">
+                        <p className="text-sm font-medium">Warehouse<span className="ml-0.5 text-rose-500">*</span></p>
+                        <Combobox
+                          options={warehouseOptions}
+                          value={goodsWarehouseId}
+                          onChange={setGoodsWarehouseId}
+                          placeholder="Select warehouse"
+                          searchPlaceholder="Search warehouse..."
+                          emptyText="No warehouses."
+                        />
+                        {goodsOnShelf !== null ? (
+                          <p className={cn('text-xs', Number(goodsQuantity) > goodsOnShelf ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground')}>
+                            {goodsOnShelf.toLocaleString('en-BD')} in stock here
+                            {Number(goodsQuantity) > goodsOnShelf ? ' — not enough for this quantity.' : '.'}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Quantity<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Input type="number" min={0} step="any" inputMode="decimal" value={goodsQuantity} onChange={(event) => setGoodsQuantity(event.target.value)} placeholder="e.g. 10" />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Unit price<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Input type="number" min={0} step="any" inputMode="decimal" value={goodsUnitPrice} onChange={(event) => setGoodsUnitPrice(event.target.value)} placeholder="Price per unit" />
+                    </div>
+                  </>
                 )}
 
-                <div className="space-y-2">
-                  <p className="text-sm font-medium">Amount<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input type="number" min={1} step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="e.g. 50000" required />
-                </div>
+                {isGoods ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Amount</p>
+                    <div className="flex h-10 items-center rounded-md border border-input bg-muted/40 px-3 text-sm font-semibold tabular-nums">
+                      {formatCurrency(goodsAmount)}
+                    </div>
+                    <p className="text-xs text-muted-foreground">Quantity × unit price, calculated automatically.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Amount<span className="ml-0.5 text-rose-500">*</span></p>
+                    <Input type="number" min={1} step="any" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="e.g. 50000" required />
+                  </div>
+                )}
+
+                {isGoods ? (
+                  <>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Phone number<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Input type="tel" value={receiverPhone} onChange={(event) => setReceiverPhone(event.target.value)} placeholder="Receiver's contact number" />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <p className="text-sm font-medium">Delivery address<span className="ml-0.5 text-rose-500">*</span></p>
+                      <Textarea value={deliveryAddress} onChange={(event) => setDeliveryAddress(event.target.value)} placeholder="Full address where the goods are sent" rows={2} />
+                    </div>
+                  </>
+                ) : null}
 
                 <div className="space-y-2 sm:col-span-2">
                   <p className="text-sm font-medium">
-                    Deposit proof
+                    {isGoods ? 'Voucher picture' : 'Deposit proof'}
                     {proofRequired ? <span className="ml-0.5 text-rose-500">*</span> : <span className="font-normal text-muted-foreground"> (optional)</span>}
                   </p>
                   {proofFile ? (
@@ -305,7 +471,7 @@ export default function SupplierPaymentPage() {
                   ) : (
                     <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground hover:bg-muted/40">
                       <ImagePlus className="h-4 w-4" />
-                      Add photo of the company voucher or bank slip
+                      {isGoods ? 'Add photo of the voucher or delivery document' : 'Add photo of the company voucher or bank slip'}
                       <input
                         type="file"
                         accept="image/*"
@@ -319,15 +485,22 @@ export default function SupplierPaymentPage() {
                   )}
                 </div>
 
-                <div className="space-y-2 sm:col-span-2">
-                  <p className="text-sm font-medium">Purpose<span className="ml-0.5 text-rose-500">*</span></p>
-                  <Input value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="e.g. Advance for LC shipment" required />
-                </div>
+                {isGoods ? null : (
+                  <div className="space-y-2 sm:col-span-2">
+                    <p className="text-sm font-medium">Purpose<span className="ml-0.5 text-rose-500">*</span></p>
+                    <Input value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="e.g. Advance for LC shipment" required />
+                  </div>
+                )}
                 <div className="space-y-2 sm:col-span-2">
                   <p className="text-sm font-medium">
                     Note <span className="font-normal text-muted-foreground">(optional)</span>
                   </p>
-                  <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Transaction ID, cheque no." rows={2} />
+                  <Textarea
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder={isGoods ? 'Why the goods are being sent, e.g. adjustment against due' : 'e.g. Transaction ID, cheque no.'}
+                    rows={2}
+                  />
                 </div>
 
                 {feedback ? (
@@ -472,6 +645,18 @@ export default function SupplierPaymentPage() {
                             <span className="block font-medium">Bank · {payment.sendingType}</span>
                             <span className="block text-muted-foreground">From {payment.fromLabel || '—'}</span>
                             <span className="block text-muted-foreground">To {payment.toLabel || '—'}</span>
+                          </>
+                        ) : payment.method === 'goods' ? (
+                          <>
+                            <span className="block font-medium">Goods / Products</span>
+                            <span className="block text-muted-foreground">
+                              {payment.goodsProductName} × {(payment.goodsQuantity ?? 0).toLocaleString('en-BD')} @ {formatCurrency(payment.goodsUnitPrice ?? 0)}
+                            </span>
+                            {payment.goodsWarehouseName ? <span className="block text-muted-foreground">From {payment.goodsWarehouseName}</span> : null}
+                            <span className="block text-muted-foreground">
+                              To {payment.deliveryAddress || '—'}
+                              {payment.receiverPhone ? ` · ${payment.receiverPhone}` : ''}
+                            </span>
                           </>
                         ) : (
                           <>

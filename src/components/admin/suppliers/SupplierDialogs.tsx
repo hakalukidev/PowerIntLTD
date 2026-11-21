@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SupplierDocumentLibrary } from '@/components/admin/suppliers/SupplierDocuments'
+import { SupplierProductAccount } from '@/components/admin/suppliers/SupplierProductAccount'
 import { SupplierReturnSection } from '@/components/admin/suppliers/SupplierReturns'
 import { DateInput } from '@/components/ui/date-input'
 import { Input } from '@/components/ui/input'
@@ -24,7 +25,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { deleteCloudinaryImage, uploadImageToCloudinary } from '@/lib/cloudinary'
 import { useERP } from '@/lib/erp/provider'
 import type { SupplierInput, SupplierRecord } from '@/lib/erp/types'
-import { computeSupplierPayables, escapeHtml, formatCurrency, formatDate, toArray } from '@/lib/erp/utils'
+import { computeSupplierPayables, escapeHtml, formatCurrency, formatDate, supplierPaymentMethodLabel, toArray } from '@/lib/erp/utils'
 import { cn } from '@/lib/utils'
 
 const SUPPLIER_DOCUMENT_FOLDER = 'suppliers'
@@ -1030,7 +1031,7 @@ export function SupplierDetailsDialog({
         key: payment.id,
         date: payment.date,
         order: 1,
-        details: `Payment (${payment.method})${payment.note ? ` · ${payment.note}` : ''}`,
+        details: `Payment (${supplierPaymentMethodLabel(payment)})${payment.note ? ` · ${payment.note}` : ''}`,
         purchase: 0,
         paid: payment.amount,
         pending: payment.status !== 'approved',
@@ -1148,6 +1149,8 @@ export function SupplierDetailsDialog({
             oldest first.
             {payable.pendingPayment > 0 ? ` ${formatCurrency(payable.pendingPayment, currency)} in payments is awaiting approval and not counted as paid yet.` : ''}
           </p>
+
+          <SupplierProductAccount supplierId={supplier.id} />
 
           <p className="pt-1 text-xs font-medium text-muted-foreground">
             Account statement ({supplierPurchases.length} purchases, {supplierPayments.length} payments)

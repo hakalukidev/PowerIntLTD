@@ -8,7 +8,7 @@ import type {
   PurchaseRecord,
   SupplierPaymentRecord,
 } from '@/lib/erp/types'
-import { formatCurrency } from '@/lib/erp/utils'
+import { formatCurrency, supplierPaymentMethodLabel } from '@/lib/erp/utils'
 import { companyInfo, deliverPortalMessage, loadParty, loadPartyLedger, PORTAL_ALERTED_PATH } from '@/lib/firebase/portal'
 import { transactionAlertText } from '@/lib/firebase/portalMessages'
 import { AuthorizationError, requireSignedIn } from '@/lib/firebase/requireAdmin'
@@ -64,7 +64,7 @@ function describe(kind: PortalTransactionKind, record: unknown, money: (amount: 
         partyId: payment.supplierId,
         date: payment.date || payment.createdAt,
         lines: [
-          `Payment sent (${payment.method === 'bank' ? payment.sendingType || 'Bank' : 'Cash'})`,
+          `Payment sent (${supplierPaymentMethodLabel(payment)})`,
           ...(payment.purpose ? [payment.purpose] : []),
           `Debit: ${money(payment.amount)}`,
         ],

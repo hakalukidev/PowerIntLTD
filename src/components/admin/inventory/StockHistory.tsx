@@ -32,7 +32,7 @@ function typeBadgeClass(type: StockMovementType) {
   if (type === 'transfer_in' || type === 'transfer_out') {
     return 'border-sky-200 bg-sky-500/10 text-sky-700 dark:border-sky-500/30 dark:text-sky-300'
   }
-  if (type === 'sale' || type === 'return') {
+  if (type === 'sale' || type === 'return' || type === 'goods_payment') {
     return 'border-violet-200 bg-violet-500/10 text-violet-700 dark:border-violet-500/30 dark:text-violet-300'
   }
   if (type === 'damage') {
